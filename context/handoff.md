@@ -84,3 +84,22 @@ python3 -m unittest -v tests.live.test_openrouter_live
 3. 若与 `jev-market-v1` 不一致：报告 `CONTRACT_MISMATCH` 及具体差异，由人类决定走 adapter 结构转换还是
    schema 升级；无论哪条路都不得修改 Prediction Runtime 上层契约。
 4. SC-1/2/5 通过后，把本提案置为「已完成」，并按 §5 把 `currentProposal` 置回 `null`（无切换授权）。
+
+## Git 历史（本次会话建立）
+
+| commit | 阶段 | 单独检出后的测试结果 |
+| --- | --- | --- |
+| `5d29574` | chore：协作骨架、执行规范与提案目录 | — |
+| `282ea61` | P0001.1 Market Event + L2 Book + BookHealth | 100 passed |
+| `ac3975b` | P0001.2 Event Store + Deterministic Replay | 205 passed |
+| `ce2bb41` | P0001.3 MarketState + Feature Engine | 344 passed |
+| `c247fff` | P0001.4 Jev Prediction Runtime | 495 passed |
+| `2d7d508` | P0001.4.1 OpenRouter transport（真实 Jev 接入） | 541 passed（4 skipped） |
+
+验证方式：`git worktree add --detach <sha>` 到临时目录后运行 `python3 -m unittest discover -s tests -t .`，
+每个 commit 都能独立通过测试（含其自身及之前阶段的测试）。
+
+注意：
+- `CLAUDE.md` 与 `.gitignore` 被使用者全局 gitignore（`~/.gitignore_global`）排除，未纳入版本控制。
+- 未执行 `push`（未获授权）。
+- 若需要把 P0001.2 – P0001.4.1 拆成更细的 commit（例如按文件再分），当前历史即为最细的**按阶段**边界。

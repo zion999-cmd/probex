@@ -55,6 +55,16 @@ SC-1 / SC-2 / SC-5 需要真实 `OPENROUTER_API_KEY`（本机环境未设置）�
 
 ## 版本
 
-Git 仓库已初始化。已提交：`5d29574`（协作骨架与提案目录）、`282ea61`（P0001.1）。
-P0001.2、P0001.3、P0001.4 的实现尚未提交（未获提交授权），三者改动在当前工作树中交织。
+Git 仓库已初始化，P0001.1 – P0001.4.1 均已提交（每个 commit 都能在其检出点独立通过测试）：
+
+| commit | 阶段 | 检出后测试 |
+| --- | --- | --- |
+| `5d29574` | 协作骨架与提案目录 | — |
+| `282ea61` | P0001.1 Market Event + L2 Book + BookHealth | 100 passed |
+| `ac3975b` | P0001.2 Event Store + Deterministic Replay | 205 passed |
+| `ce2bb41` | P0001.3 MarketState + Feature Engine | 344 passed |
+| `c247fff` | P0001.4 Jev Prediction Runtime | 495 passed |
+| `2d7d508` | P0001.4.1 OpenRouter transport | 541 passed（4 skipped） |
+
 `CLAUDE.md` 与 `.gitignore` 被使用者全局 gitignore（`~/.gitignore_global`）排除，未纳入版本控制。
+未执行 push（未获授权）。
