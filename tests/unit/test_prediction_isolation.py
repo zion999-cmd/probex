@@ -1,4 +1,11 @@
-"""SC-6 / SC-11：预测层的依赖与字段隔离。"""
+"""SC-6 / SC-11：预测层的依赖、字段与 wall-clock 隔离。
+
+规则（P0001.4 + P0001.4.1）：
+
+- `prediction/**` 中**只有** `prediction/providers/openrouter.py` 允许使用真实网络
+  （标准库 `urllib`）与 wall-clock（仅用于 latency telemetry）；其余模块一律禁止。
+- 不得依赖 Strategy / Execution / Portfolio / Risk / Accounting / storage / connectors。
+"""
 
 from __future__ import annotations
 
@@ -22,7 +29,13 @@ STDLIB_ROOTS = {
 }
 LAYER_ROOTS = {"market", "prediction"}
 
-#: 网络与 wall-clock：预测层不得直接依赖（P0001.4 阶段完全没有真实网络出口）。
+#: 唯一被授权进行真实网络调用的模块（P0001.4.1 确认契约）。
+TRANSPORT_MODULES = {"openrouter.py"}
+
+#: 该模块额外允许的依赖：环境变量、wall-clock（仅 latency）、真实网络出口。
+TRANSPORT_EXTRA_ROOTS = {"os", "time", "urllib"}
+
+#: 明确禁止的网络客户端（只用标准库 urllib，不新增依赖）。
 FORBIDDEN_NETWORK_ROOTS = {
     "aiohttp",
     "http",
@@ -33,12 +46,14 @@ FORBIDDEN_NETWORK_ROOTS = {
     "urllib",
     "websocket",
     "websockets",
-    "time",
 }
 
-#: 下游交易领域：预测层不得依赖（否则概率模型会慢慢变成 Policy）。
+WALL_CLOCK_ROOT = "time"
+
+#: 下游交易领域。
 FORBIDDEN_DOMAIN_ROOTS = {
     "accounting",
+    "connectors",
     "execution",
     "maker",
     "paper",
@@ -46,9 +61,8 @@ FORBIDDEN_DOMAIN_ROOTS = {
     "portfolio",
     "risk",
     "simulation",
-    "strategy",
-    "connectors",
     "storage",
+    "strategy",
 }
 
 
@@ -65,6 +79,58 @@ def _imported_roots(path: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             roots.add(node.module.split(".")[0])
     return roots
+
+
+class PredictionIsolationTest(unittest.TestCase):
+    def test_scan_covers_the_layer(self) -> None:
+        self.assertGreaterEqual(len(_layer_files()), 10)
+
+    def test_sc6_no_trading_domain_dependencies(self) -> None:
+        for path in _layer_files():
+            with self.subTest(module=path.name):
+                self.assertEqual(_imported_roots(path) & FORBIDDEN_DOMAIN_ROOTS, set())
+
+    def test_only_market_prediction_and_stdlib(self) -> None:
+        allowed = STDLIB_ROOTS | LAYER_ROOTS
+        for path in _layer_files():
+            if path.name in TRANSPORT_MODULES:
+                continue
+            with self.subTest(module=path.name):
+                self.assertEqual(_imported_roots(path) - allowed, set())
+
+    def test_only_transport_module_is_allowed_network_and_wall_clock(self) -> None:
+        for path in _layer_files():
+            if path.name in TRANSPORT_MODULES:
+                continue
+            roots = _imported_roots(path)
+            with self.subTest(module=path.name):
+                self.assertNotIn(WALL_CLOCK_ROOT, roots, "只有 OpenRouter transport 可以使用 wall-clock")
+                self.assertEqual(roots & FORBIDDEN_NETWORK_ROOTS, set(), "只有 OpenRouter transport 可以联网")
+
+    def test_transport_module_uses_only_authorized_extras(self) -> None:
+        transport = [path for path in _layer_files() if path.name in TRANSPORT_MODULES]
+        self.assertTrue(transport, "必须存在被授权的 transport 模块")
+
+        allowed = STDLIB_ROOTS | LAYER_ROOTS | TRANSPORT_EXTRA_ROOTS
+        for path in transport:
+            roots = _imported_roots(path)
+            with self.subTest(module=path.name):
+                self.assertEqual(roots - allowed, set())
+                self.assertLessEqual(roots & FORBIDDEN_NETWORK_ROOTS, {"urllib"})
+
+    def test_sc6_no_action_vocabulary_in_prediction_code(self) -> None:
+        for path in _layer_files():
+            with self.subTest(module=path.name):
+                self.assertEqual(_action_identifiers(path), [])
+
+    def test_sc11_no_network_in_replay_facing_layers(self) -> None:
+        # market/state 与 market/features 不得因为 P0001.4.1 而获得网络能力
+        for directory in (PROJECT_ROOT / "market" / "features", PROJECT_ROOT / "market" / "state"):
+            for path in sorted(directory.glob("*.py")):
+                roots = _imported_roots(path)
+                with self.subTest(module=f"{directory.name}/{path.name}"):
+                    self.assertEqual(roots & FORBIDDEN_NETWORK_ROOTS, set())
+                    self.assertNotIn(WALL_CLOCK_ROOT, roots)
 
 
 def _action_identifiers(path: Path) -> list[str]:
@@ -86,32 +152,6 @@ def _action_identifiers(path: Path) -> list[str]:
                 if isinstance(key, ast.Constant) and key.value in actions:
                     found.append(str(key.value))
     return found
-
-
-class PredictionIsolationTest(unittest.TestCase):
-    def test_scan_covers_the_layer(self) -> None:
-        self.assertGreaterEqual(len(_layer_files()), 10)
-
-    def test_sc11_no_network_or_wall_clock_dependencies(self) -> None:
-        for path in _layer_files():
-            with self.subTest(module=path.name):
-                self.assertEqual(_imported_roots(path) & FORBIDDEN_NETWORK_ROOTS, set())
-
-    def test_sc6_no_trading_domain_dependencies(self) -> None:
-        for path in _layer_files():
-            with self.subTest(module=path.name):
-                self.assertEqual(_imported_roots(path) & FORBIDDEN_DOMAIN_ROOTS, set())
-
-    def test_only_market_prediction_and_stdlib(self) -> None:
-        allowed = STDLIB_ROOTS | LAYER_ROOTS
-        for path in _layer_files():
-            with self.subTest(module=path.name):
-                self.assertEqual(_imported_roots(path) - allowed, set())
-
-    def test_sc6_no_action_vocabulary_in_prediction_code(self) -> None:
-        for path in _layer_files():
-            with self.subTest(module=path.name):
-                self.assertEqual(_action_identifiers(path), [])
 
 
 if __name__ == "__main__":

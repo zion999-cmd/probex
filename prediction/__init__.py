@@ -16,6 +16,13 @@ from prediction.errors import (
 from prediction.parsing.market_v1 import derived_confidence, parse_jev_prediction
 from prediction.providers.base import PredictionProvider, ProviderResponse
 from prediction.providers.jev import JevProvider, JevTransport
+from prediction.providers.openrouter import (
+    OPENROUTER_API_KEY_ENV,
+    OPENROUTER_ENDPOINT,
+    OPENROUTER_MODEL,
+    OpenRouterCall,
+    OpenRouterTransport,
+)
 from prediction.runtime import PredictionRuntime, outcome_for_error
 from prediction.scheduler import Eligibility, EligibilityReason, PredictionScheduler, check_eligibility
 from prediction.schema.market_v1 import (
@@ -47,6 +54,9 @@ from prediction.types import (
 __all__ = [
     "FUTURE_RETURN_CATEGORIES",
     "FUTURE_RETURN_HORIZONS_MS",
+    "OPENROUTER_API_KEY_ENV",
+    "OPENROUTER_ENDPOINT",
+    "OPENROUTER_MODEL",
     "PROBABILITY_QUESTIONS",
     "QUESTION_SCHEMA_VERSION",
     "QUESTION_SPECS",
@@ -57,6 +67,8 @@ __all__ = [
     "InMemoryPredictionArchive",
     "JevProvider",
     "JevTransport",
+    "OpenRouterCall",
+    "OpenRouterTransport",
     "Prediction",
     "PredictionArchive",
     "PredictionError",

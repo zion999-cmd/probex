@@ -124,3 +124,37 @@
 - `InMemoryPredictionArchive` 保留同一 `market_state_hash` 的全部记录，`find` 返回最早一条（该状态首次被预测时的原始证据）。
 - RECORDED 模式不跑资格闸门、不做 staleness 判定、不调用 provider；它只做查找复现。
 **影响**：持久化 archive（Parquet / 事务库）与 outcome/evaluation 属后续阶段。
+
+## D-014 OpenRouter transport 是预测层唯一的网络与 wall-clock 边界
+
+**日期**：2026-09-28
+**状态**：生效
+**背景**：P0001.4.1 确认真实 Jev 通过 OpenRouter 调用（`typesafe/jev-router`），需要真实 HTTP 与 latency 实测；而 P0001.4 曾把「预测层不 import 网络库 / 不使用 wall-clock」作为结构性约束。
+**决策**：把网络与 wall-clock 能力收敛到唯一模块 `prediction/providers/openrouter.py`：
+- 只使用标准库 `urllib.request`（零新增依赖）；
+- `time.monotonic` 仅用于 latency telemetry；
+- 结构性测试（`tests/unit/test_prediction_isolation.py`）断言「只有该模块允许 import `urllib` / `time`」，其它预测层模块与 `market/features`、`market/state` 一律禁止网络与 wall-clock。
+**影响**：任何新的网络出口或 wall-clock 使用都必须先修改该白名单，从而在评审中显式可见。
+
+## D-015 OpenRouter HTTP 状态与失败的映射表
+
+**日期**：2026-09-28
+**状态**：生效
+**决策**：
+- 4xx（400/401/403/404/405/406/409/410/413/415/422 及其它 4xx）→ `PredictionTransportError`（请求 / 凭证被拒，provider 未作答）；
+- 408 / 425 / 429 / 5xx → `PredictionProviderError`（服务端限流或故障，交由上层 backoff）；
+- 非 JSON 响应体、envelope 不符（缺 `choices` / `message` / `content` 为空）→ `PredictionInvalidResponseError`；
+- HTTP / socket timeout → `PredictionTimeoutError`；
+- 缺少 `OPENROUTER_API_KEY` → `PredictionTransportError`，且**不发起任何网络请求**。
+**影响**：全部映射到 P0001.4 既有 failure type，runtime 无需为新 provider 增加分支。
+
+## D-016 Jev transport 的请求/响应契约与证据语义
+
+**日期**：2026-09-28
+**状态**：生效
+**背景**：人类确认了 OpenRouter 契约（请求外层 = Chat Completions，content = canonical Jev payload；响应 = `choices[0].message.content`）。
+**决策**：
+- 请求体固定为 `{"model": "typesafe/jev-router", "messages": [{"role": "user", "content": <canonical payload>}]}`；不额外设置 temperature 等未确认参数。
+- `OpenRouterTransport(request) -> str` 返回 `choices[0].message.content`，即 strict parser 的输入。
+- `PredictionRecord.raw_response` 记录 **Jev content**（不是 OpenRouter 外层）；OpenRouter 外层与 HTTP 证据保存在 transport 的 telemetry（`OpenRouterCall`），二者不混淆。
+- 旧 `fmz_v3(1).js` 的 `market_*` / `toxicity_*` / `fill_*` 只作领域参考；真实响应与 `jev-market-v1` 不一致时报告 `CONTRACT_MISMATCH`，不静默 normalize、不模糊兼容。
