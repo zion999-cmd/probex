@@ -2,22 +2,27 @@
 
 ## 当前 Proposal
 
-P0001.1 — Market Event + L2 Book + BookHealth：**已完成**。
+P0001.2 — Event Store + Deterministic Replay：**已完成**。
 
 `context/status.json` 中 `currentProposal` 为 `null`（无切换授权，等待人类指定下一 Proposal）。
 
 ## 本次新增
 
-- `market/events/{__init__,errors,payloads,types}.py` — 统一 MarketEvent 边界
-- `market/book/{__init__,errors,order_book,market_book}.py` — L2 盘口与同步状态机
-- `market/health/{__init__,state}.py` — BookHealth 四态状态机
-- `connectors/binance/market_data/{__init__,errors,parsing,depth}.py` — Binance 深度归一化
-- `tests/{__init__,support,scenarios}.py`、`tests/unit/*`、`tests/integration/test_book_resync.py`、`tests/fault/test_sequence_faults.py`、`tests/replay/test_determinism.py`
+- `storage/{__init__.py,events/{__init__,codec,errors,reader,writer}.py}`
+  - `codec`：`SCHEMA_VERSION=1`、`EventRecord`、canonical JSON、内容寻址 `event_id`、严格解码
+  - `reader`：`EventReader` + `JsonlEventReader`（严格递增 ordinal 校验、带行号 fail closed）
+  - `writer`：`EventWriter` + `JsonlEventWriter`（append-only、ordinal 续接、逐条 flush）
+- `market/replay/{__init__,clock,source}.py`：`ReplayClock`（now / advance_to / reset）与 `ReplaySource`（`FULL` / `STEP`）
+- 测试：`tests/unit/{test_event_codec,test_event_store,test_replay_clock}.py`、
+  `tests/integration/test_event_store_replay.py`、`tests/replay/{test_replay_determinism,test_replay_isolation}.py`、
+  `tests/fault/test_corrupt_event_store.py`
+- `tests/support.py`：`record_for` / `record_line` / `record_raw` / `write_store` / `TempDirTestCase`
 
 ## 本次修改
 
-- `proposals/P0001.1-market-event-l2-book-bookhealth.md`：补齐编号说明与 P0001.1 实现契约（Included / NOT Included / SC-1..SC-6 / Acceptance Matrix），状态改为已批准；原 P0001 总架构文本作为第 2 节保留。
-- `context/status.json`、`context/current_state.md`、`context/roadmap.md`、`context/decisions.md`
+- `proposals/P0001.2-event-store-deterministic-replay.md`：补齐实现契约（Included / NOT Included / 排序与时间契约 /
+  SC-1..SC-10 / Acceptance Matrix），状态 已提议 → 已完成；原文保留为第 2 节
+- `context/{status,current_state,handoff,roadmap,decisions}`
 
 ## 本次删除
 
@@ -27,30 +32,32 @@ P0001.1 — Market Event + L2 Book + BookHealth：**已完成**。
 
 | SC | 结果 | 证据 |
 | --- | --- | --- |
-| SC-1 | PASS | `python3 -m unittest -v tests.unit.test_binance_depth` → 22 passed；其中 18 类非法报文全部抛 `MarketDataFormatError` |
-| SC-2 | PASS | `python3 -m unittest -v tests.unit.test_order_book` → 15 passed（含增 / 改 / 删档、best bid/ask、top-N） |
-| SC-3 | PASS | `tests.fault...SequenceFaultAcceptanceTest.test_sc3_gap_enters_stale_and_closes_gate` → PASS（`GAP` / `STALE` / `is_tradeable=False` / `resync_required=True`） |
-| SC-4 | PASS | `tests.integration...BookResyncAcceptanceTest.test_sc4_resync_recovers_healthy` → PASS（恢复 `HEALTHY`，最终盘口与参考路径逐档一致） |
-| SC-5 | PASS | `python3 -m unittest tests.fault.test_sequence_faults` → 7 passed |
-| SC-6 | PASS | `python3 -m unittest tests.replay.test_determinism` → 3 passed（两次重放的 `BookUpdate` 序列与 final view 逐字段相等） |
+| SC-1 | PASS | `tests.unit.test_event_codec` + `tests.unit.test_event_store`：写回读回逐字段相等 |
+| SC-2 | PASS | `EventStoreAppendOnlyTest`：重新打开写入端后 ordinal 续接、历史字节不变 |
+| SC-3 | PASS | `tests.replay.test_replay_determinism`：两次 Replay 的 `BookUpdate` / `HealthTransition` / final `BookView` 全等 |
+| SC-4 | PASS | `test_sc4_replay_gap_enters_stale`：Replay 期间 gap → `STALE`、`is_tradeable=False` |
+| SC-5 | PASS | `test_sc5_resync_replay_matches_reference`：恢复后盘口与无故障参考路径逐档相等 |
+| SC-6 | PASS | `tests.fault.test_corrupt_event_store`：18 类损坏输入 fail closed，且 Replay 不静默跳过 |
+| SC-7 | PASS | `test_sc7_step_advances_exactly_one_event`：每次 `next_event()` 只推进一条 |
+| SC-8 | PASS | `ReplayNoSleepTest`：`time.sleep` 被替换为抛错仍通过；逻辑时间跨 3 小时 |
+| SC-9 | PASS | `tests.replay.test_replay_isolation`：import 白名单 + 禁止领域 |
+| SC-10 | PASS | 整套测试 205 passed |
 
 ## 测试结果
 
-- Unit: 86 passed / 0 failed
-- Integration: 4 passed / 0 failed
-- Fault: 7 passed / 0 failed
-- Replay: 3 passed / 0 failed
-- 命令：`python3 -m unittest discover -s tests -t . -v` → Ran 100 tests, OK
-- 运行环境：Python 3.14.4（仓库无 pyproject.toml，测试从仓库根目录直接运行）
-- 依赖：仅标准库，无第三方依赖
+- Unit: 149 passed / 0 failed
+- Integration: 13 passed / 0 failed
+- Fault: 27 passed / 0 failed
+- Replay: 16 passed / 0 failed
+- 合计：205 passed（Python 3.14.4；仅标准库）
 
 ## 风险 / 已知问题
 
-- 未实现 Live 传输层：`parse_depth_*` 只做归一化；实际 WS / REST 连接与重订阅动作需在后续阶段实现并在 `BookUpdate.resync_required` 为真时调用 `MarketBook.request_resync()`。
-- `OrderBook` 的档位排序采用「变更即失效、按需排序缓存」，每次增量后首次查询 best bid/ask 为 O(n log n)；深层盘口高频更新下需评估（P0001.3 之后）。
-- `size == 0` 之外的负数量、超出交易所精度的价格等未做量级校验，仅做符号与有限性校验。
-- `MarketEvent.sequence` 目前只对 book 事件强制（等于 `payload.last_update_id`），非 book 事件的语义待后续阶段定义。
-- 使用标准库 `unittest` 而非 pytest，原因是 CLAUDE.md §16 未授权新增第三方依赖；后续若引入 pytest 需人类授权。
+- `JsonlEventWriter` 打开已有 store 时全量扫描续接 ordinal（O(n)）；大文件需索引或分段 store。
+- 刻意保留的 ordinal 空洞被允许（便于文件切片），因此不判为损坏。
+- 无损坏修复工具，统一 fail closed。
+- 未实现 `LiveClock`、fsync、文件轮转、压缩、Parquet、数据库。
+- 使用标准库 `unittest`（§16 未授权第三方依赖）。
 
 ## 阻塞
 
@@ -58,4 +65,4 @@ P0001.1 — Market Event + L2 Book + BookHealth：**已完成**。
 
 ## 下一步
 
-等待人类指定下一个 Proposal。若要继续路线，下一阶段为 P0001.2（Event Store + Deterministic Replay），需先由设计 Agent 落盘独立提案。
+等待人类指定下一个 Proposal。路线下一阶段为 P0001.3（Feature / MarketState），需先落盘独立提案。
