@@ -208,3 +208,41 @@ def feed_engine(engine: FeatureEngine, events: Iterable[MarketEvent]) -> tuple[M
             engine.request_resync()
     return tuple(states)
 
+
+def warm_market_states(count: int = 3, *, engine: FeatureEngine | None = None) -> tuple[MarketState, ...]:
+    """产生 `count` 个彼此不同且已 warm up（tradeable）的 MarketState。
+
+    事件时间跨度先跨过 300s 的最长 return 窗口，之后再逐个事件推进，
+    因此每个返回的状态都能通过 P0001.4 的 eligibility gate。
+    """
+    if count <= 0:
+        raise ValueError("count must be > 0")
+    engine = engine if engine is not None else feature_engine()
+    engine.on_market_event(
+        depth_snapshot_event(
+            100,
+            bids=[(100.0, 5.0)],
+            asks=[(101.0, 2.0)],
+            exchange_ts=BASE_TS,
+            receive_ts=BASE_TS,
+            process_ts=BASE_TS,
+        )
+    )
+
+    states: list[MarketState] = []
+    for index in range(count):
+        update_id = 101 + index
+        timestamp = BASE_TS + 300_000 + index
+        states.append(
+            engine.on_market_event(
+                depth_diff_event(
+                    update_id,
+                    update_id,
+                    bids=[(100.0, 5.0 + (index + 1) * 0.1)],
+                    exchange_ts=timestamp,
+                    receive_ts=timestamp,
+                    process_ts=timestamp,
+                )
+            )
+        )
+    return tuple(states)

@@ -2,27 +2,25 @@
 
 ## 当前 Proposal
 
-P0001.3 — MarketState + Microstructure Feature Engine：**已完成**。
+P0001.4 — Jev Prediction Runtime：**已完成**。
 
 `context/status.json` 中 `currentProposal` 为 `null`（无切换授权，等待人类指定下一 Proposal）。
 
 ## 本次新增
 
-- `market/state/{__init__,types,quality,builder}.py`：`FEATURE_SCHEMA_VERSION = "market-state-v1"`、
-  `MarketState` 与分段类型、`DataQuality` + `build_data_quality`、`build_market_state` + `compute_completeness`
-- `market/features/{__init__,windows,price,depth,flow,returns,volatility,engine}.py`：
-  窗口基础设施、纯函数公式层、`FlowFeaturesCalculator`、`FeatureEngine`（拥有 `MarketBook`，含 `request_resync()`）
-- 测试：`tests/unit/{test_market_state,test_price_features,test_depth_features,test_ofi,test_windows,test_returns,test_volatility,test_data_quality,test_feature_layering}.py`、
-  `tests/replay/test_feature_determinism.py`、`tests/fault/test_feature_health_gate.py`、`tests/integration/test_feature_engine.py`
-- `tests/support.py`：`book_view` / `feature_engine` / `feed_engine`
+- `prediction/{__init__,errors,types,runtime,scheduler}.py`：核心类型、调度层、async runtime
+- `prediction/schema/market_v1.py`：`QUESTION_SCHEMA_VERSION = "jev-market-v1"`、问题定义、canonical payload、`market_state_hash`、请求构造
+- `prediction/parsing/market_v1.py`：strict parser + `derived_confidence`
+- `prediction/providers/{__init__,base,jev}.py`：provider 契约与 `JevProvider`（传输注入）
+- `tests/fakes.py`：`FakeClock` / `FakeProvider` / 响应构造
+- 测试：`tests/unit/{test_prediction_types,test_question_schema,test_jev_payload,test_prediction_parser,test_prediction_ttl,test_prediction_scheduler,test_prediction_isolation}.py`、
+  `tests/integration/test_prediction_runtime.py`、`tests/fault/test_prediction_{timeout,invalid_response,out_of_order}.py`、
+  `tests/replay/test_prediction_state_identity.py`
+- `tests/support.py`：`warm_market_states`
 
 ## 本次修改
 
-- `market/book/order_book.py`：新增 `BookMutation`、`DeltaApplication`、`apply_delta_with_mutations()`；
-  `apply_delta()` 保持原契约；best bid/ask 改为 `_best_level`（max/min）
-- `market/book/market_book.py`：`BookUpdate` 新增 `mutations` 字段（默认空元组）
-- `market/book/__init__.py`：导出新类型
-- `proposals/P0001.3-marketState-microstructure-feature-engine.md`：补齐实现契约与 Acceptance Matrix；状态 → 已完成
+- `proposals/P0001.4-jev-prediction-runtime.md`：补齐实现契约与 Acceptance Matrix；状态 → 已完成
 - `context/{status,current_state,handoff,roadmap,decisions}`
 
 ## 本次删除
@@ -33,34 +31,33 @@ P0001.3 — MarketState + Microstructure Feature Engine：**已完成**。
 
 | SC | 结果 | 证据 |
 | --- | --- | --- |
-| SC-1 | PASS | `tests.replay.test_feature_determinism`：两次 Replay 的 MarketState 序列全等 |
-| SC-2 | PASS | `tests.fault.test_feature_health_gate`：gap 后 price/depth/returns/volatility 全 None，恢复后不复活旧值 |
-| SC-3 | PASS | `tests.unit.test_price_features`：对称 / 极端 / 空侧 / 零数量 |
-| SC-4 | PASS | `tests.unit.test_depth_features`：公式一致、范围 [-1,1]、分母 0 → None |
-| SC-5 | PASS | `tests.unit.test_ofi...test_sc5_quantity_cycle_is_visible_as_two_events`：`[+2,-2]`、`ofi_1s == 0.0` |
-| SC-6 | PASS | `tests.unit.test_windows`：人工时间戳与 ReplayClock 驱动一致；不 import time |
-| SC-7 | PASS | `tests.unit.test_returns`：边界包含 / 边界之后不使用 / 无历史 → None |
-| SC-8 | PASS | `tests.unit.test_volatility`：1s 与 0.5s 网格结果相等 |
-| SC-9 | PASS | `tests.unit.test_data_quality`：阈值边界、warm-up 全 None、观测到的 0 仍为 0 |
-| SC-10 | PASS | `tests.unit.test_market_state`：schema 版本、三段冻结 |
-| SC-11 | PASS | `tests.unit.test_feature_layering`：import 白名单 + 禁止领域 |
-| SC-12 | PASS | 整套测试 344 passed（既有 205 条未修改） |
+| SC-1 | PASS | 同一 MarketState 两次构造 payload / hash 字节级相同 |
+| SC-2 | PASS | provider 被 gate 挡住期间 FeatureEngine 继续推进 |
+| SC-3 | PASS | `tests.fault.test_prediction_out_of_order`：B 先返回 ACCEPTED、A 后返回 STALE_RESPONSE |
+| SC-4 | PASS | timeout / invalid response 测试：全部 `record is None`、archive 为空 |
+| SC-5 | PASS | `tests.unit.test_prediction_ttl`：expired 边界明确 |
+| SC-6 | PASS | payload 字段白名单 + 无交易域依赖 |
+| SC-7 | PASS | `tests.unit.test_prediction_parser`：缺分类 / NaN / Infinity / 越界全部 fail closed |
+| SC-8 | PASS | `provider_confidence` 与 `derived_confidence` 来源可区分 |
+| SC-9 | PASS | 记录含 hash / feature schema / question schema / provider / model / raw response |
+| SC-10 | PASS | 全部测试使用 FakeProvider，无网络、无 Key |
+| SC-11 | PASS | 结构性测试：预测层不 import 网络库与 wall-clock |
+| SC-12 | PASS | 整套测试 495 passed（既有 344 条未修改） |
 
 ## 测试结果
 
-- Unit: 269 passed / 0 failed
-- Integration: 18 passed / 0 failed
-- Fault: 36 passed / 0 failed
-- Replay: 21 passed / 0 failed
-- 合计：344 passed（Python 3.14.4；仅标准库）
+- Unit: 374 passed / 0 failed
+- Integration: 29 passed / 0 failed
+- Fault: 66 passed / 0 failed
+- Replay: 26 passed / 0 failed
+- 合计：495 passed（Python 3.14.4；仅标准库）
 
 ## 风险 / 已知问题
 
-- `normalized_ofi` / `VAMP_5` / 波动率量纲 / `completeness` 口径由实现固定（`decisions.md` D-006），变更必须升级 schema。
-- `max_book_age_ms` 默认 `None`：本阶段没有年龄硬闸门。
-- `EventWindow` 已实现并测试但无 feature 消费（D-009）。
-- `best_bid` / `best_ask` 改为 O(n) 求极值；深层盘口成本为 O(n × mutations)。
-- `completeness` 分母固定 45，新增 feature 字段需要升级 schema。
+- `JevProvider` 只有传输注入点，没有真实 HTTP 客户端（`decisions.md` D-011）。
+- `derived_confidence` 公式由实现固定（D-010）；`timeout_ms` / `ttl_ms` 无默认值（D-012）。
+- `InMemoryPredictionArchive` 为内存实现；持久化与 outcome / evaluation 属后续阶段。
+- provider 抛出的裸异常归为 `PROVIDER_ERROR`。
 
 ## 阻塞
 
@@ -68,4 +65,4 @@ P0001.3 — MarketState + Microstructure Feature Engine：**已完成**。
 
 ## 下一步
 
-等待人类指定下一个 Proposal。路线下一阶段为 P0001.4（Jev Prediction Runtime），需先落盘独立提案。
+等待人类指定下一个 Proposal。路线下一阶段为 P0001.5（Accounting + Risk），需先落盘独立提案。

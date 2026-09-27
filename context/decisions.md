@@ -84,3 +84,43 @@
 **背景**：提案设计 §6 明确「需要至少两种窗口：TimeWindow / EventWindow」，但列出的 feature 全部是时间窗。
 **决策**：实现且有单元测试，本阶段没有 feature 直接消费；所有已定义 feature 使用 `TimeWindow` / `TimeSeries`。
 **影响**：若设计 Agent 认为事件窗不需要，可在后续提案中移除；不建议在无消费方的情况下继续扩展它。
+
+## D-010 `derived_confidence` 的固定定义
+
+**日期**：2026-09-28
+**状态**：生效
+**背景**：P0001.4 §11 要求保留 V3 的「provider confidence 或 entropy-derived fallback」，但必须区分两者来源；提案未给出 fallback 公式。
+**决策**：`provider_confidence` 取供应商响应中的 `confidence`（可缺失 → `None`）；`derived_confidence = clamp(1 - H(p_5s) / ln(5), 0, 1)`，`p_5s` 为最短 horizon（5s）的 `future_return` 分布，夹取用于消除浮点误差（均匀分布时会算出 -2.2e-16）。
+**理由**：最短 horizon 是短周期决策的主要依据；归一化熵是尺度无关的确定性度量。
+**影响**：若更换公式或改用其它 horizon，必须升级 `question_schema_version` 并同步更新 parser 测试。
+
+## D-011 JevProvider 以「传输注入」形态交付，不实现 HTTP
+
+**日期**：2026-09-28
+**状态**：生效（待人类确认）
+**背景**：P0001.4 的 Included 要求 `JevProvider`，但未授权任何第三方依赖，也没有 Jev endpoint / API Key 契约；NOT Included 明确不做 prompt optimization 与模型训练。
+**决策**：`JevProvider(transport, model=...)` 只固化为：canonical payload → 传输函数 → 原始响应文本 + provider/model 元数据；传输层异常映射为 `PredictionTransportError`。真实 HTTP 客户端与凭证管理留待单独授权。
+**影响**：本阶段的端到端验证全部通过 `tests/fakes.py` 的 `FakeProvider` 完成（SC-10），Replay 测试不可能隐式访问网络（SC-11 有结构性测试）。
+
+## D-012 预测层的时间源与关键参数
+
+**日期**：2026-09-28
+**状态**：生效
+**决策**：
+- 时间一律来自构造时注入的 `Clock`（`market.replay.clock.ReplayClock` 结构上即满足）；`prediction/**` 不 import `time`、不使用 wall-clock（有结构性测试）。
+- `timeout_ms` 与 `ttl_ms` 为必填构造参数，不内置默认值（提案未给出 TTL 数值，不自行编造）。
+- backoff：`next_retry_at = now + min(base * 2^(n-1), cap)`，`base_backoff_ms` 默认 1000、`max_backoff_ms` 默认 60000（纯重试策略，可覆盖）。
+- `max_inflight` 默认 1（提案明确建议）。
+**影响**：Live 使用需要提供系统时钟实现；TTL 数值由人类 / 设计 Agent 决定。
+
+## D-013 结果分类、archive 与 RECORDED 语义
+
+**日期**：2026-09-28
+**状态**：生效
+**决策**：
+- 失败分类：`TIMEOUT` / `TRANSPORT_ERROR` / `PROVIDER_ERROR` / `PARSE_ERROR` / `INVALID_RESPONSE`；空响应与语义非法归 `INVALID_RESPONSE`，JSON 语法错误与非对象 JSON 归 `PARSE_ERROR`。provider 抛出的未预期异常一律归 `PROVIDER_ERROR`。
+- 跳过分类：`SKIPPED_INFLIGHT`（并发上限）、`SKIPPED_BACKOFF`（provider 退避中）、`NOT_ELIGIBLE`（资格闸门）、`NOT_RECORDED`（RECORDED 查不到历史）。
+- 只有 `ACCEPTED` 的记录进入 archive；`STALE_RESPONSE` 只进内存提交日志（`runtime.submissions`），但结果对象仍携带该记录作为证据。
+- `InMemoryPredictionArchive` 保留同一 `market_state_hash` 的全部记录，`find` 返回最早一条（该状态首次被预测时的原始证据）。
+- RECORDED 模式不跑资格闸门、不做 staleness 判定、不调用 provider；它只做查找复现。
+**影响**：持久化 archive（Parquet / 事务库）与 outcome/evaluation 属后续阶段。
