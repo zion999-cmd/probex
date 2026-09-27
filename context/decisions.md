@@ -43,3 +43,44 @@
 **背景**：提案要求记录必须含 `event_id`，且 store 必须 immutable、禁止原地修改历史。
 **决策**：`event_id` = `sha256:` + canonical JSON（不含 ordinal）摘要；读取端重算并比对，不一致抛 `EventIntegrityError`。
 **影响**：历史被手改可被检测；`event_id` 相同不代表同一记录（同一事件重复写入时以 ordinal 区分）。
+
+## D-006 本阶段的 feature 固定定义（schema `market-state-v1`）
+
+**日期**：2026-09-28
+**状态**：生效
+**背景**：P0001.3 要求公式 / 单位 / 窗口 / 缺失语义固定并版本化，但把若干定义留给实现（`normalized_ofi`、VAMP、波动率量纲、`completeness`）。
+**决策**：
+- `microprice = (bid * ask_size + ask * bid_size) / (bid_size + ask_size)`（权重为对侧数量）；分母 0 → `None`。
+- `normalized_ofi_h = ofi_h / (bid_size + ask_size)`：以当前 L1 深度归一，得到与盘口规模可比的流量强度；分母缺失或 0 → `None`。
+- `vamp` = VAMP_5 = 双边前 5 档的 `Σ(price*size) / Σ(size)`（仅盘口，不含成交）；总数量 0 → `None`。
+- `realized_volatility_h = sqrt(Σr² / (h/1000))`，量纲「每 √秒」，因此不随 event frequency 改变量级。
+- `completeness` = price/depth/flow/returns/volatility 五段中非 None 字段数 / 字段总数（45）；trade 段不计入（其可用性由 `trade_stream_available` 单独表达）。
+- 窗口一律为闭区间 `[t-h, t]`，与 return 的「latest observation <= target」规则一致。
+**影响**：以上任一项变化都必须把 `FEATURE_SCHEMA_VERSION` 升级（当前 `market-state-v1`）。
+
+## D-007 盘口健康门与 tradeable 的组合
+
+**日期**：2026-09-28
+**状态**：生效
+**决策**：
+- `feature_ready = book_healthy AND history_ready`；`tradeable = feature_ready AND age_valid`。
+- `history_ready = window_coverage_ms >= 300000`（最长 return 窗口）；因此引擎启动后需要 5 分钟事件时间才可能 `tradeable`（warm-up 语义）。
+- `sequence_contiguous` 为粘性标志（一次 gap 永不复原），**不进入** `tradeable`；它只作为研究侧的数据洁净度信号。
+- `max_book_age_ms` 默认 `None`（不做年龄阈值门控，只要求年龄已知）：提案未给出阈值，本实现不自行编造关键数值。
+**影响**：若需要年龄硬闸门，需人类 / 设计 Agent 给出阈值。
+
+## D-008 OrderBook 只描述 mutation，不解释 mutation
+
+**日期**：2026-09-28
+**状态**：生效
+**背景**：P0001.3 §5 要求 OFI 从 sampled approximation 升级为 event-domain，且明确要求不要为了计算 OFI 把 OrderBook 变成 Feature Engine。
+**决策**：新增 `BookMutation`（side / price / old_size / new_size / 变更前后最优买卖档）与 `OrderBook.apply_delta_with_mutations()`；`apply_delta()` 保持原返回契约（`DeltaOutcome`），成为前者的薄封装；`BookUpdate` 增加 `mutations` 字段（默认空元组，向后兼容）。OFI 公式只存在于 `market/features/flow.py`。
+**影响**：P0001.1 的公开行为不变，既有 205 条测试无需修改。
+
+## D-009 `EventWindow` 属提案要求的窗口基础设施，本阶段无 feature 消费
+
+**日期**：2026-09-28
+**状态**：生效（待设计 Agent 确认）
+**背景**：提案设计 §6 明确「需要至少两种窗口：TimeWindow / EventWindow」，但列出的 feature 全部是时间窗。
+**决策**：实现且有单元测试，本阶段没有 feature 直接消费；所有已定义 feature 使用 `TimeWindow` / `TimeSeries`。
+**影响**：若设计 Agent 认为事件窗不需要，可在后续提案中移除；不建议在无消费方的情况下继续扩展它。

@@ -15,8 +15,11 @@ from pathlib import Path
 
 from connectors.binance.market_data import parse_depth_diff, parse_depth_snapshot
 from market.book.market_book import BookUpdate, BookView, MarketBook
+from market.events.payloads import PriceLevel
 from market.events.types import MarketEvent, Venue
-from market.health.state import HealthTransition
+from market.features.engine import FeatureEngine
+from market.health.state import BookHealth, HealthTransition
+from market.state.types import MarketState
 from storage.events.codec import SCHEMA_VERSION, EventRecord, compute_event_id, dumps_record
 from storage.events.writer import JsonlEventWriter
 
@@ -74,6 +77,25 @@ def depth_diff_event(
         "a": _levels(asks),
     }
     return parse_depth_diff(raw, receive_ts=receive_ts, process_ts=process_ts)
+
+
+def book_view(
+    *,
+    bids: LevelPairs = (),
+    asks: LevelPairs = (),
+    health: BookHealth = BookHealth.HEALTHY,
+    last_update_id: int | None = 1,
+) -> BookView:
+    """手工构造 BookView，用于纯公式测试。"""
+    return BookView(
+        venue=Venue.BINANCE,
+        symbol=SYMBOL,
+        health=health,
+        is_tradeable=health is BookHealth.HEALTHY,
+        last_update_id=last_update_id,
+        bids=tuple(PriceLevel(price=price, size=size) for price, size in bids),
+        asks=tuple(PriceLevel(price=price, size=size) for price, size in asks),
+    )
 
 
 def market_book() -> MarketBook:
@@ -165,4 +187,24 @@ class TempDirTestCase(unittest.TestCase):
 
     def store_path(self, name: str = "events.jsonl") -> Path:
         return self.tmp_path / name
+
+
+def feature_engine(*, max_book_age_ms: int | None = None) -> FeatureEngine:
+    """新建一个针对 `SYMBOL` 的 FeatureEngine。"""
+    return FeatureEngine(Venue.BINANCE, SYMBOL, max_book_age_ms=max_book_age_ms)
+
+
+def feed_engine(engine: FeatureEngine, events: Iterable[MarketEvent]) -> tuple[MarketState, ...]:
+    """驱动 FeatureEngine，并在 `STALE` 时模拟传输层请求重新同步。
+
+    与 `replay_into` 同理：Live 传输层不属于 P0001.1–P0001.3 的范围，
+    因此这里显式承担它的职责。
+    """
+    states: list[MarketState] = []
+    for event in events:
+        state = engine.on_market_event(event)
+        states.append(state)
+        if state.quality.book_health is BookHealth.STALE:
+            engine.request_resync()
+    return tuple(states)
 

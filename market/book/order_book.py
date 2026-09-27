@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 
 from market.events.payloads import BookDeltaPayload, BookSnapshotPayload, PriceLevel
@@ -20,6 +21,34 @@ class BookSide(Enum):
 
     BID = "bid"
     ASK = "ask"
+
+
+@dataclass(frozen=True, slots=True)
+class BookMutation:
+    """一次被应用的盘口档位变化。
+
+    `OrderBook` 只负责「描述事实」：某个档位的 size 从 `old_size` 变为 `new_size`，
+    以及这一次变化前后最优买卖档是什么。如何解释这些事实（例如 OFI）属于 Feature 层。
+
+    `old_size == 0` 表示新增档位；`new_size == 0` 表示删除档位。
+    """
+
+    side: BookSide
+    price: float
+    old_size: float
+    new_size: float
+    best_bid_before: PriceLevel | None
+    best_ask_before: PriceLevel | None
+    best_bid_after: PriceLevel | None
+    best_ask_after: PriceLevel | None
+
+
+@dataclass(frozen=True, slots=True)
+class DeltaApplication:
+    """`apply_delta_with_mutations` 的结果。"""
+
+    outcome: DeltaOutcome
+    mutations: tuple[BookMutation, ...]
 
 
 class DeltaOutcome(Enum):
@@ -76,20 +105,21 @@ class OrderBook:
 
     def apply_delta(self, delta: BookDeltaPayload) -> DeltaOutcome:
         """应用增量，返回判定结果。仅在 `APPLIED` 时改动盘口。"""
-        if self._last_update_id is None:
-            return DeltaOutcome.AWAITING_SNAPSHOT
-        if delta.last_update_id <= self._last_update_id:
-            return DeltaOutcome.ALREADY_APPLIED
-        if delta.first_update_id > self._last_update_id + 1:
-            return DeltaOutcome.GAP
+        return self.apply_delta_with_mutations(delta).outcome
 
-        for level in delta.bids:
-            self._set_level(self._bids, level)
-        for level in delta.asks:
-            self._set_level(self._asks, level)
+    def apply_delta_with_mutations(self, delta: BookDeltaPayload) -> DeltaApplication:
+        """应用增量并逐档描述 mutation。仅在 `APPLIED` 时改动盘口。"""
+        if self._last_update_id is None:
+            return DeltaApplication(outcome=DeltaOutcome.AWAITING_SNAPSHOT, mutations=())
+        if delta.last_update_id <= self._last_update_id:
+            return DeltaApplication(outcome=DeltaOutcome.ALREADY_APPLIED, mutations=())
+        if delta.first_update_id > self._last_update_id + 1:
+            return DeltaApplication(outcome=DeltaOutcome.GAP, mutations=())
+
+        mutations = [self._apply_level(BookSide.BID, level) for level in delta.bids]
+        mutations += [self._apply_level(BookSide.ASK, level) for level in delta.asks]
         self._last_update_id = delta.last_update_id
-        self._invalidate_sorted_cache()
-        return DeltaOutcome.APPLIED
+        return DeltaApplication(outcome=DeltaOutcome.APPLIED, mutations=tuple(mutations))
 
     def reset(self) -> None:
         """清空盘口并回到未同步状态。"""
@@ -99,18 +129,10 @@ class OrderBook:
         self._invalidate_sorted_cache()
 
     def best_bid(self) -> PriceLevel | None:
-        prices = self._sorted_prices(BookSide.BID)
-        if not prices:
-            return None
-        price = prices[0]
-        return PriceLevel(price=price, size=self._bids[price])
+        return self._best_level(BookSide.BID)
 
     def best_ask(self) -> PriceLevel | None:
-        prices = self._sorted_prices(BookSide.ASK)
-        if not prices:
-            return None
-        price = prices[0]
-        return PriceLevel(price=price, size=self._asks[price])
+        return self._best_level(BookSide.ASK)
 
     def depth(self, side: BookSide, limit: int | None = None) -> tuple[PriceLevel, ...]:
         """按撮合优先级返回档位：bid 价格从高到低，ask 价格从低到高。"""
@@ -124,6 +146,32 @@ class OrderBook:
 
     def level_count(self, side: BookSide) -> int:
         return len(self._bids if side is BookSide.BID else self._asks)
+
+    def _apply_level(self, side: BookSide, level: PriceLevel) -> BookMutation:
+        """应用单个档位变化并返回 mutation 描述。"""
+        best_bid_before = self._best_level(BookSide.BID)
+        best_ask_before = self._best_level(BookSide.ASK)
+        levels = self._levels(side)
+        old_size = levels.get(level.price, 0.0)
+        self._set_level(levels, level)
+        self._invalidate_sorted_cache()
+        return BookMutation(
+            side=side,
+            price=level.price,
+            old_size=old_size,
+            new_size=level.size,
+            best_bid_before=best_bid_before,
+            best_ask_before=best_ask_before,
+            best_bid_after=self._best_level(BookSide.BID),
+            best_ask_after=self._best_level(BookSide.ASK),
+        )
+
+    def _best_level(self, side: BookSide) -> PriceLevel | None:
+        levels = self._levels(side)
+        if not levels:
+            return None
+        price = max(levels) if side is BookSide.BID else min(levels)
+        return PriceLevel(price=price, size=levels[price])
 
     @staticmethod
     def _set_level(levels: dict[float, float], level: PriceLevel) -> None:

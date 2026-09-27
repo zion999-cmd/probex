@@ -24,7 +24,7 @@ from collections import deque
 from dataclasses import dataclass
 
 from market.book.errors import MarketBookInvariantError, UnexpectedMarketEventError
-from market.book.order_book import BookSide, DeltaOutcome, OrderBook
+from market.book.order_book import BookMutation, BookSide, DeltaOutcome, OrderBook
 from market.events.payloads import BookDeltaPayload, BookSnapshotPayload, PriceLevel
 from market.events.types import EventType, MarketEvent, Venue
 from market.health.state import BookHealth, HealthTransition, IllegalHealthTransition, require_transition
@@ -38,7 +38,11 @@ DEFAULT_VIEW_DEPTH = 10
 
 @dataclass(frozen=True, slots=True)
 class BookUpdate:
-    """一次事件处理的结果。"""
+    """一次事件处理的结果。
+
+    `mutations` 是本次实际应用的档位变化（P0001.3 起提供，供 Feature 层解释）；
+    未被应用（缓冲 / 重复 / gap）时为空元组。
+    """
 
     event_type: EventType
     sequence: int
@@ -49,6 +53,7 @@ class BookUpdate:
     buffered_deltas: int
     #: 为 True 表示调用方需要重新订阅 / 重新拉取快照以完成恢复。
     resync_required: bool
+    mutations: tuple[BookMutation, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,16 +178,23 @@ class MarketBook:
                 resync_required=False,
             )
 
-        outcome = self._book.apply_delta(delta)
-        if outcome is DeltaOutcome.APPLIED:
-            return self._update(event, health_before, outcome, applied=True, resync_required=False)
-        if outcome is DeltaOutcome.ALREADY_APPLIED:
-            return self._update(event, health_before, outcome, applied=False, resync_required=False)
-        if outcome is DeltaOutcome.GAP:
+        outcome = self._book.apply_delta_with_mutations(delta)
+        if outcome.outcome is DeltaOutcome.APPLIED:
+            return self._update(
+                event,
+                health_before,
+                outcome.outcome,
+                applied=True,
+                resync_required=False,
+                mutations=outcome.mutations,
+            )
+        if outcome.outcome is DeltaOutcome.ALREADY_APPLIED:
+            return self._update(event, health_before, outcome.outcome, applied=False, resync_required=False)
+        if outcome.outcome is DeltaOutcome.GAP:
             self._enter_stale(reason="sequence_gap")
-            return self._update(event, health_before, outcome, applied=False, resync_required=True)
+            return self._update(event, health_before, outcome.outcome, applied=False, resync_required=True)
         raise MarketBookInvariantError(
-            f"HEALTHY book reported {outcome.value} for delta {delta.first_update_id}-{delta.last_update_id}"
+            f"HEALTHY book reported {outcome.outcome.value} for delta {delta.first_update_id}-{delta.last_update_id}"
         )
 
     def _on_snapshot(self, event: MarketEvent, snapshot: BookSnapshotPayload) -> BookUpdate:
@@ -229,6 +241,7 @@ class MarketBook:
         *,
         applied: bool,
         resync_required: bool,
+        mutations: tuple[BookMutation, ...] = (),
     ) -> BookUpdate:
         return BookUpdate(
             event_type=event.event_type,
@@ -239,6 +252,7 @@ class MarketBook:
             applied=applied,
             buffered_deltas=len(self._buffer),
             resync_required=resync_required,
+            mutations=mutations,
         )
 
     def _enter_stale(self, *, reason: str) -> None:

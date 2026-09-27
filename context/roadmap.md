@@ -7,7 +7,7 @@
 ```text
 P0001.1   Market Event + L2 Book + BookHealth         ← 已完成
 P0001.2   Event Store + Deterministic Replay          ← 已完成
-P0001.3   Feature / MarketState
+P0001.3   Feature / MarketState                       ← 已完成
 P0001.4   Jev Prediction Runtime
 P0001.5   Accounting + Risk
 P0001.6   Paper Execution + Order Lifecycle
@@ -25,7 +25,7 @@ P0001.10  Product API / UI / Reports
 | --- | --- |
 | P0001.1 | 已完成（全部 Success Criteria PASS） |
 | P0001.2 | 已完成（全部 Success Criteria PASS） |
-| P0001.3 | 未开始（待独立子提案落盘） |
+| P0001.3 | 已完成（全部 Success Criteria PASS） |
 | P0001.4 | 未开始（待独立子提案落盘） |
 | P0001.5 | 未开始（待独立子提案落盘） |
 | P0001.6 | 未开始（待独立子提案落盘） |
