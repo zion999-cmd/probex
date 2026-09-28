@@ -19,12 +19,15 @@ from connectors.binance.market_data.parsing import (
     require_int,
     require_levels,
     require_mapping,
+    require_optional_int,
     require_str,
 )
 
 BINANCE_VENUE = Venue.BINANCE
 
-_DEPTH_UPDATE = "depthUpdate"
+#: `depthUpdate` 报文的事件名（运行时按此分派）。
+DEPTH_UPDATE_EVENT = "depthUpdate"
+_DEPTH_UPDATE = DEPTH_UPDATE_EVENT
 _DIFF_PATH = "depthUpdate"
 _SNAPSHOT_PATH = "depthSnapshot"
 
@@ -45,10 +48,11 @@ def parse_depth_diff(
     exchange_ts = require_int(require_field(message, "E", path=_DIFF_PATH), path=f"{_DIFF_PATH}.E")
     first_update_id = require_int(require_field(message, "U", path=_DIFF_PATH), path=f"{_DIFF_PATH}.U")
     last_update_id = require_int(require_field(message, "u", path=_DIFF_PATH), path=f"{_DIFF_PATH}.u")
+    previous_update_id = require_optional_int(message.get("pu"), path=f"{_DIFF_PATH}.pu")
     bids = require_levels(require_field(message, "b", path=_DIFF_PATH), path=f"{_DIFF_PATH}.b")
     asks = require_levels(require_field(message, "a", path=_DIFF_PATH), path=f"{_DIFF_PATH}.a")
 
-    payload = _build_delta_payload(first_update_id, last_update_id, bids, asks)
+    payload = _build_delta_payload(first_update_id, last_update_id, bids, asks, previous_update_id)
     return _build_event(
         path=_DIFF_PATH,
         symbol=symbol,
@@ -122,6 +126,7 @@ def _build_delta_payload(
     last_update_id: int,
     bids: tuple[PriceLevel, ...],
     asks: tuple[PriceLevel, ...],
+    previous_update_id: int | None = None,
 ) -> BookDeltaPayload:
     try:
         return BookDeltaPayload(
@@ -129,6 +134,7 @@ def _build_delta_payload(
             last_update_id=last_update_id,
             bids=bids,
             asks=asks,
+            previous_update_id=previous_update_id,
         )
     except InvalidPayloadError as exc:
         raise MarketDataFormatError(f"{_DIFF_PATH}: {exc}") from exc

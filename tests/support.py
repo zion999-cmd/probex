@@ -27,6 +27,24 @@ from storage.events.writer import JsonlEventWriter
 SYMBOL = "BTCUSDT"
 BASE_TS = 1_700_000_000_000
 
+#: 需要直连本机（stub server / 关闭端口）的测试必须绕过系统代理：
+#: 否则 `urllib` 会把 127.0.0.1 也交给 `http_proxy`，使「连接被拒绝」变成「代理超时」。
+LOCALHOST_NO_PROXY = "127.0.0.1,localhost,::1"
+
+
+def bypass_proxy_for_localhost() -> None:
+    """把 localhost 加入 `no_proxy`（幂等；只影响本进程，测试用）。"""
+    import os
+
+    current = os.environ.get("no_proxy") or os.environ.get("NO_PROXY") or ""
+    parts = [part.strip() for part in current.split(",") if part.strip()]
+    for entry in LOCALHOST_NO_PROXY.split(","):
+        if entry not in parts:
+            parts.append(entry)
+    value = ",".join(parts)
+    os.environ["no_proxy"] = value
+    os.environ["NO_PROXY"] = value
+
 LevelPairs = Iterable[tuple[float, float]]
 
 
@@ -65,8 +83,13 @@ def depth_diff_event(
     exchange_ts: int = BASE_TS,
     receive_ts: int = BASE_TS,
     process_ts: int = BASE_TS,
+    previous_update_id: int | None = None,
 ) -> MarketEvent:
-    """构造 Binance USDⓈ-M WS `depthUpdate` 增量事件。"""
+    """构造 Binance USDⓈ-M WS `depthUpdate` 增量事件。
+
+    `previous_update_id` 对应 Futures 的 `pu`（上一条推送的最终 update id）；
+    只在显式给出时写入报文（现货没有该字段）。
+    """
     raw = {
         "e": "depthUpdate",
         "E": exchange_ts,
@@ -77,6 +100,8 @@ def depth_diff_event(
         "b": _levels(bids),
         "a": _levels(asks),
     }
+    if previous_update_id is not None:
+        raw["pu"] = previous_update_id
     return parse_depth_diff(raw, receive_ts=receive_ts, process_ts=process_ts)
 
 

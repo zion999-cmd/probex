@@ -27,7 +27,7 @@ from tests.stub_server import (
     StubResponse,
     openrouter_envelope,
 )
-from tests.support import warm_market_states
+from tests.support import bypass_proxy_for_localhost, warm_market_states
 
 
 def _request():
@@ -101,6 +101,11 @@ class OpenRouterHttpStatusTest(unittest.IsolatedAsyncioTestCase):
 
 
 class OpenRouterTimeoutTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        # 「连接被拒绝」必须直连本机，不能被系统代理改写成超时
+        bypass_proxy_for_localhost()
+
     async def test_http_timeout_maps_to_timeout(self) -> None:
         with StubOpenRouterServer() as stub:
             stub.set_response(StubResponse(body=openrouter_envelope("{}"), delay_s=0.5))

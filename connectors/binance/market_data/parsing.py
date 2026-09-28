@@ -46,7 +46,7 @@ def _require_sequence(value: object, *, path: str) -> Sequence[object]:
     return value
 
 
-def _require_decimal(value: object, *, path: str) -> float:
+def require_decimal(value: object, *, path: str) -> float:
     """Binance 用字符串传输十进制数量。"""
     if isinstance(value, bool) or not isinstance(value, (str, int, float)):
         raise MarketDataFormatError(f"{path}: expected a decimal number, got {type(value).__name__}")
@@ -68,10 +68,36 @@ def require_levels(value: object, *, path: str) -> tuple[PriceLevel, ...]:
         entry = _require_sequence(item, path=entry_path)
         if len(entry) != 2:
             raise MarketDataFormatError(f"{entry_path}: expected [price, size], got {len(entry)} elements")
-        price = _require_decimal(entry[0], path=f"{entry_path}[0]")
-        size = _require_decimal(entry[1], path=f"{entry_path}[1]")
+        price = require_decimal(entry[0], path=f"{entry_path}[0]")
+        size = require_decimal(entry[1], path=f"{entry_path}[1]")
         try:
             levels.append(PriceLevel(price=price, size=size))
         except InvalidPayloadError as exc:
             raise MarketDataFormatError(f"{entry_path}: {exc}") from exc
     return tuple(levels)
+
+
+def require_optional_int(value: object, *, path: str) -> int | None:
+    """可选整数字段：`None` 原样返回；类型不符时 fail closed。"""
+    if value is None:
+        return None
+    return require_int(value, path=path)
+
+
+def require_bool(value: object, *, path: str) -> bool:
+    """布尔字段窄化：拒绝整数冒充布尔（Binance 用真布尔）。"""
+    if not isinstance(value, bool):
+        raise MarketDataFormatError(f"{path}: expected a boolean, got {type(value).__name__}")
+    return value
+
+
+__all__ = [
+    "require_bool",
+    "require_optional_int",
+    "require_decimal",
+    "require_field",
+    "require_int",
+    "require_levels",
+    "require_mapping",
+    "require_str",
+]

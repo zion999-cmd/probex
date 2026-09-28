@@ -150,6 +150,19 @@ class MarketBook:
             return self._on_delta(event, event.payload)
         raise UnexpectedMarketEventError(f"unsupported event type: {event.event_type.value}")
 
+    def invalidate(self, reason: str) -> None:
+        """标记盘口不可信（P0001.9.1）：由传输层在丢失连接 / 重连时调用。
+
+        传输层丢失时不可能伪造一条 gap 事件，但下游必须立刻停止把盘口当作可信：
+        `HEALTHY -> STALE` 是既有合法转换，这里只新增**入口**，不改变任何转换语义。
+        非 `HEALTHY` 时是幂等 no-op（`AWAITING_SNAPSHOT / RESYNCING` 不允许直接进入 `STALE`）。
+        """
+        if not isinstance(reason, str) or not reason:
+            raise MarketBookInvariantError("invalidate reason must be a non-empty string")
+        if self._health is not BookHealth.HEALTHY:
+            return
+        self._enter_stale(reason=reason)
+
     def request_resync(self) -> None:
         """在检测到 gap 后由传输层调用（重订阅 / 重新拉取快照）。
 

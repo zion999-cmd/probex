@@ -22,7 +22,7 @@ from tests.stub_server import (
     systemone_answers,
     systemone_envelope,
 )
-from tests.support import warm_market_states
+from tests.support import bypass_proxy_for_localhost, warm_market_states
 
 THRESHOLD_BPS = 5.0
 
@@ -30,6 +30,8 @@ THRESHOLD_BPS = 5.0
 class SystemOneHttpFailureTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         super().setUp()
+        # 「连接被拒绝」必须直连本机，不能被系统代理改写成超时
+        bypass_proxy_for_localhost()
         self.stub = StubOpenRouterServer().start()
         self.addCleanup(self.stub.stop)
 

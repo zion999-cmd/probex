@@ -7,6 +7,8 @@ import unittest
 
 from market.events.types import EventType, MarketEvent
 from storage.events.codec import (
+    compute_event_id,
+    loads_record,
     SCHEMA_VERSION,
     EventRecord,
     canonical_json,
@@ -23,7 +25,14 @@ from storage.events.errors import (
     EventStoreFormatError,
     UnsupportedSchemaVersionError,
 )
-from tests.support import BASE_TS, depth_diff_event, depth_snapshot_event
+from tests.support import (
+    BASE_TS,
+    depth_diff_event,
+    depth_snapshot_event,
+    record_for,
+    record_line,
+    record_raw,
+)
 
 
 def _snapshot_event() -> MarketEvent:
@@ -307,6 +316,35 @@ class JsonLineDecodingTest(unittest.TestCase):
     def test_non_string_line_rejected(self) -> None:
         with self.assertRaises(EventStoreFormatError):
             loads_record(b"{}")  # type: ignore[arg-type]
+
+
+class DeltaPreviousUpdateIdCodecTest(unittest.TestCase):
+    """P0001.9.1.1 SC-5：`pu` 必须能随 Event Store 往返（否则 replay 会丢失 venue 语义）。"""
+
+    def test_roundtrip_with_previous_update_id(self) -> None:
+        event = depth_diff_event(101, 200, bids=[(100.0, 2.0)], previous_update_id=100)
+        record = record_for(event)
+
+        restored = loads_record(record_line(record)).event
+
+        self.assertEqual(restored.payload.previous_update_id, 100)
+        self.assertEqual(restored.payload.first_update_id, 101)
+        self.assertEqual(compute_event_id(restored), compute_event_id(event))
+
+    def test_roundtrip_without_previous_update_id(self) -> None:
+        event = depth_diff_event(101, 200, bids=[(100.0, 2.0)])
+
+        restored = loads_record(record_line(record_for(event))).event
+
+        self.assertIsNone(restored.payload.previous_update_id)
+        self.assertNotIn("previous_update_id", record_raw(record_for(event))["event"]["payload"])
+
+    def test_encoded_record_carries_the_field_when_present(self) -> None:
+        event = depth_diff_event(101, 200, bids=[(100.0, 2.0)], previous_update_id=100)
+
+        payload = record_raw(record_for(event))["event"]["payload"]
+
+        self.assertEqual(payload["previous_update_id"], 100)
 
 
 if __name__ == "__main__":

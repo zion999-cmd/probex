@@ -347,3 +347,98 @@ cost ≈1.1e-04/call、五分类求和 = 1、Noul 无 confidence（详见提案 
 
 **影响**：Backtest 与真实 Live 之间的成交推断层落地，且每条模拟成交都带
 `fill_reason` / `queue_state` / `event_ordinal` / `aggregate_trade_id` 证据，便于日后区分「高可信模拟」与「信息不足」。
+
+## D-026 Live 公网行情接入的契约与端点（P0001.9.1）
+
+**日期**：2026-09-28
+**状态**：生效
+
+**决策**：
+
+- **零依赖手写 WS 传输**：握手 / 帧 / 掩码 / ping-pong / close / 分片全部用标准库实现（`transport.py`）；
+  不使用 asyncio，由 `pump_once()` 同步驱动（确定性、可离线测试）。wall-clock 只允许出现在
+  `transport.py` / `snapshot.py` / `runtime.py`（由 `tests/unit/test_live_isolation.py` 固定）。
+- **端点单一 Owner**：`connectors/binance/market_data/endpoints.py` 是唯一硬编码 Binance URL 的地方；
+  2026-03-06 公告的 tier 分层（`/public` = depth、`/market` = aggTrade/markPrice、combined `/stream?streams=`）
+  按最佳可得证据固定，**未经官方文档核实**，因此全部可被配置覆盖，且**不做静默 fallback**。
+- **aggressor trade 是唯一成交证据**（延续 D-025）：`aggTrade.m`（isBuyerMaker=true）⇒ aggressor = SELL；
+  单调水位去重；trade 事件不进 FeatureEngine。
+- **mark price 是独立事实**：`MarkPriceObservation` 不进 `MarketEvent`、不改 `market-state-v1`；本阶段只提供输入链与 telemetry。
+- **TradingRules 只信 `filters`**：`pricePrecision` / `quantityPrecision` 永不作为规则来源；缺 filter 即报错。
+- **传输层丢失必须让盘口失效**：新增 `MarketBook.invalidate(reason)` / `FeatureEngine.invalidate(reason)`
+  （HEALTHY → STALE，本身是既有合法转换；非 HEALTHY 时幂等）+ 只读 `FeatureEngine.book_health`。
+  这是 SC-9 的最小必要机制：传输层无法伪造 gap 事件，但重连后必须重新完成 snapshot + 增量对齐才恢复可信。
+- **malformed 与单次快照失败不杀死 runtime**：计入 telemetry 并继续；重连用尽显式抛 `ReconnectExhaustedError`。
+
+**影响**：Live 行情只读链路可离线全量验证（stub WS 服务端 + 注入式传输/HTTP）；真实公网 smoke 为 opt-in
+（`PROBEX_LIVE_SMOKE=1`，无需凭据），端点的最终确认依赖该次运行。
+
+## D-027 真实公网验收发现：`/public` diff 深度流跳号（待裁决）
+
+**日期**：2026-09-28
+**状态**：**待人类裁决**（不擅自改变 P0001.1 的完整性语义）
+
+**已验证事实（真实 Binance USDⓈ-M，经人类本机 Clash 代理隧道，未改端点/未关证书校验）**：
+
+- 端点与凭据：`https://fapi.binance.com`（depth / exchangeInfo / time）与
+  `wss://fstream.binance.com/{public,market}/stream?streams=…` 全部可用；**无需任何 API Key**（SC-12 PASS）。
+- 归属诊断（只读 15s、无 REST）：收到时间与交易所事件时间之差稳定在 −224…−140 ms ⇒ 链路新鲜，问题不在链路。
+- `/public` 的 diff 深度流**跳号**：`@depth` 32 条消息中 12 条有 U/u 空洞（缺 13–315 个 id）；
+  `@depth@100ms` 40 条中 35 条有空洞；`@depth@500ms` 21 条中 3 条；`@depth@250ms` **无数据**（非法后缀）；
+  depth 在 `/market` tier **无数据**（tier 归属确认）。
+- 后果：P0001.1「任何空洞 ⇒ STALE ⇒ 重同步」持续触发 ⇒ HEALTHY 时间占比 ≈14%，REST 重同步 ≈1 次/秒；
+  且同步 REST 抓取阻塞读循环 ⇒ 观测到 7–36s 的 event lag 尖峰。
+- 已实施的无关选项修复：`pump_once(max_messages)` 有界排空、`resync_cooldown_ms`（抑制 74 次、避免 REST 429）、
+  depth 速度后缀可配置（默认 `@depth`）。
+
+**待裁决选项**：A 改用部分深度快照流（`@depth20@100ms`，需明确 `sequence_contiguous` 语义）；
+B 有界空洞视为可接受陈旧（弱化完整性，需显式授权）；C 保持保守策略（研究可用、Maker 不可用）；
+D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
+
+**影响**：P0001.9.1 保持「实现中」，`currentProposal` 保持 `P0001.9.1`，未提交；在裁决前不改变任何完整性语义。
+## D-028 修正：Futures diff depth 的连续性判据必须是 `pu == prev.u`（诊断 P0001.9.1.1）
+
+**日期**：2026-09-28
+**状态**：事实已核实（**修复待提案授权**）；**部分推翻 D-027**
+
+**真实样本（经人类本机代理隧道，仓库外 `/tmp/probex_live/sample_*.jsonl`）**：
+
+| 规则 | `btcusdt@depth`（178 对） | `btcusdt@depth@100ms`（294 对） |
+| --- | --- | --- |
+| `pu` 存在率 | 179/179 | 295/295 |
+| `current.pu == previous.u` | **178/178（100%）** | **294/294（100%）** |
+| `U <= prev.u+1 <= u`（D-003 现行窗口规则） | **0/178** | **0/294** |
+| `U == prev.u + 1` | 0/178 | 0/294 |
+| `pu - prev.u` | 恒 0 | 恒 0 |
+| `U - prev.u`（median） | 116 | 120 |
+| 单事件覆盖 id 数（median） | 27299 | 9972 |
+
+**结论**：
+
+- Futures diff 事件是**大范围聚合**的（覆盖上万 update id），`U` 与上一条 `u` 之间必然有间距 —
+  **D-003 的窗口判据对 Futures 无效**（0% 通过），而 `pu` 判据 100% 通过且 `pu - prev.u` 恒为 0 ⇒ 数据无丢失。
+- 因此 D-027 中「Binance 跳号 / 需要 A/B/C/D 选项」的判断**作废**：真实根因是连续性判据。
+- 待授权修复（会修改 D-003 与 `BookDeltaPayload` 契约，需落盘提案）：
+  解析并携带 `pu`（`BookDeltaPayload.previous_update_id: int | None`），
+  `OrderBook` 优先用 `previous_update_id == last_applied_u`，无 `pu` 时回退窗口规则（现货）。
+## D-029 Futures diff depth 连续性：锚点 + pu 语义（P0001.9.1.1 实施）
+
+**日期**：2026-09-28
+**状态**：生效（**细化 D-003 在 Futures 上的适用性**；现货语义不变）
+
+**决策**：
+
+- `BookDeltaPayload.previous_update_id`（Binance Futures `pu`）成为市场事件契约的一部分；
+  `connectors/binance/market_data/depth.py` 解析它，Event Store codec 原样保存（旧记录解码为 None）。
+- `OrderBook` 的连续性判据分两段：
+  1. **快照锚点（刚应用快照后的第一条增量）**：vendor 文档的「跨过锚点」条件 ——
+     Futures（有 `pu`）要求 `pu <= L < u`；无 `pu` 的 venue 用 `U <= L+1 <= u`（D-003 不变）。
+     理由：REST 快照的 `lastUpdateId` 不是「上一条推送」，`pu` 在该刻不可比。
+  2. **锚点之后**：有 `pu` 时以 venue 语义为准 —— `pu == 已应用的最后 update id` 即连续；
+     `pu != last` 才是真实丢失（GAP → STALE → RESYNC）。没有 `pu` 的增量始终走窗口规则。
+- 因此 **Futures 的 `U != last+1` 不再是异常**（一条事件聚合上万个 update id 是正常形态），
+  这**不是**弱化完整性，而是修正 venue-specific sequence semantics（`Book decrease`/空洞语义不变）。
+- `ALREADY_APPLIED`（`u <= last_applied`）仍在判定最前，与 `pu` 无关。
+
+**证据（真实流，见提案 P0001.9.1.1 §1.1/§1.2）**：`pu` 100% 连续（473 对样本）、旧规则 0% 通过；
+修复后真实 smoke **gap 0 / resync 1（初始）/ HEALTHY 100% / event lag 中位 −48 ms**（修前 7267 ms）。

@@ -130,6 +130,37 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
   `UNKNOWN` 队列绝不产生推测性成交；盘口不可信时挂起并作废队列，恢复后必须重建。
 - `PaperBroker`、Strategy、Prediction、Risk、Accounting 均未改动。
 
+### P0001.9.1 — Binance USDⓈ-M Live Market Data（实现中：离线验收通过，真实 smoke 待公网出口）
+
+- 新增 `connectors/binance/market_data/`：`endpoints`（端点单一 Owner）、`transport`（标准库 WS）、
+  `streams`（stream/tier/订阅/信封）、`trades`（aggTrade → TradePayload + 水位去重）、`mark`（MarkPriceObservation）、
+  `exchange_info`（TradingRules）、`snapshot`（REST 客户端）、`runtime`（LiveMarketDataRuntime + telemetry）。
+- `market/` 新增两个最小入口：`MarketBook.invalidate(reason)` / `FeatureEngine.invalidate(reason)` 与
+  `FeatureEngine.book_health`（SC-9 的必要机制，未改任何既有转换语义）。
+- 端点按 2026 WS 迁移分层（depth → `/public`，aggTrade/markPrice → `/market`），**未经官方文档核实**，可配置覆盖。
+- 真实公网 smoke：`PROBEX_LIVE_SMOKE=1 python3 -m unittest tests.live.test_binance_live_market_data`（无需凭据）；
+  本机无公网出口，**未执行**。`status.json.currentProposal` 仍为 `P0001.9.1`。
+
+### P0001.9.1 — Binance USDⓈ-M Live Market Data（已完成，真实公网验收通过）
+
+- `connectors/binance/market_data/`：`endpoints`（端点单一 Owner）、`transport`（标准库 WS：握手/帧/掩码/ping-pong/分片）、
+  `streams`（stream 名 + tier 归属 + 订阅 + 信封）、`trades`（aggTrade → TradePayload + 水位去重）、
+  `mark`（MarkPriceObservation）、`exchange_info`（TradingRules，只信 filters）、`snapshot`（REST 客户端）、
+  `runtime`（两条 tier 连接、快照对齐、gap→resync、冷却、断线重连、telemetry）。
+- `market/` 新增 `MarketBook.invalidate(reason)` / `FeatureEngine.invalidate(reason)` 与只读 `book_health`（SC-9 的最小机制）。
+- **真实公网 Acceptance（人类本机代理隧道，无凭据）**：SC-12 PASS（REST snapshot + exchangeInfo + server time +
+  depth + aggTrade + markPrice）、SC-13 PASS（45s 窗口：179 depth / 390 aggTrade / 43 markPrice、
+  HEALTHY 100%、event lag 中位 −48 ms、mark age 持续刷新、telemetry 完整）。
+
+### P0001.9.1.1 — Futures Depth Continuity Verification（已完成）
+
+- 根因：Futures diff depth 事件**聚合**上万个 update id（median 27299/9972），`U != prev.u+1` 是常态；
+  P0001.1 的窗口判据对 Futures **0% 通过** ⇒ 每条消息误判 GAP ⇒ 每秒 resync ⇒ 同步 REST 抓取阻塞读循环 ⇒ 7–36s lag。
+- 修复：`BookDeltaPayload.previous_update_id`（`pu`）+ venue-aware 判据 —— 锚点用「跨过锚点」条件
+  （`pu <= L < u`），锚点之后用 `pu == last`；无 `pu` 时保留 D-003 窗口规则（现货语义不变）。
+- 真实流核验：`pu` 100% 连续（199/199、473 对样本）、旧规则 0%；修复后真实 smoke **gap 0 / resync 1 / HEALTHY 100% /
+  event lag 中位 −48 ms**（修前 7267 ms）。
+
 ## 进行中能力
 
 无。

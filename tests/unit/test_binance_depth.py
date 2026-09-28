@@ -11,6 +11,7 @@ import unittest
 from connectors.binance.market_data import MarketDataFormatError, parse_depth_diff, parse_depth_snapshot
 from market.events.payloads import BookDeltaPayload, BookSnapshotPayload
 from market.events.types import EventType, Venue
+from tests.support import BASE_TS, SYMBOL, depth_diff_event, depth_snapshot_event
 
 RECEIVE_TS = 1_700_000_000_010
 PROCESS_TS = 1_700_000_000_020
@@ -186,6 +187,52 @@ class DepthNormalizationBoundaryTest(unittest.TestCase):
     def test_snapshot_last_update_id_must_be_integer(self) -> None:
         self.assert_snapshot_rejected(_snapshot(lastUpdateId="156"))
         self.assert_snapshot_rejected(_snapshot(lastUpdateId=None))
+
+
+class DepthPreviousUpdateIdTest(unittest.TestCase):
+    """P0001.9.1.1 SC-1：Futures `pu`（上一条推送的最终 update id）必须被解析并携带。"""
+
+    def test_pu_is_carried_into_the_payload(self) -> None:
+        event = depth_diff_event(
+            101, 200, bids=[(100.0, 2.0)], previous_update_id=100, exchange_ts=BASE_TS
+        )
+
+        self.assertEqual(event.payload.previous_update_id, 100)
+        self.assertNotIn("pu", {"U": 101, "u": 200})  # 语义提示：pu 与 U/u 是不同字段
+
+    def test_missing_pu_is_none(self) -> None:
+        event = depth_diff_event(101, 200, bids=[(100.0, 2.0)], exchange_ts=BASE_TS)
+
+        self.assertIsNone(event.payload.previous_update_id)
+
+    def test_pu_equal_to_last_update_id_is_allowed(self) -> None:
+        event = depth_diff_event(101, 101, bids=[(100.0, 2.0)], previous_update_id=101)
+
+        self.assertEqual(event.payload.previous_update_id, 101)
+
+    def test_malformed_pu_is_rejected(self) -> None:
+        for value in ("100", 1.5, True, -1):
+            raw = {
+                "e": "depthUpdate",
+                "E": BASE_TS,
+                "T": BASE_TS,
+                "s": SYMBOL,
+                "U": 101,
+                "u": 200,
+                "b": [["100.0", "1"]],
+                "a": [],
+                "pu": value,
+            }
+            with self.subTest(value=value):
+                with self.assertRaises(MarketDataFormatError):
+                    parse_depth_diff(raw, receive_ts=BASE_TS, process_ts=BASE_TS)
+
+    def test_snapshot_payload_has_no_previous_update_id(self) -> None:
+        """`pu` 是 diff 专有字段：快照载荷不含它（也不应凭空造一个）。"""
+        event = depth_snapshot_event(100, bids=[(100.0, 1.0)], asks=[(101.0, 1.0)])
+
+        self.assertIsInstance(event.payload, BookSnapshotPayload)
+        self.assertFalse(hasattr(event.payload, "previous_update_id"))
 
 
 if __name__ == "__main__":

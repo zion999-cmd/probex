@@ -1,9 +1,10 @@
 ## 当前 Proposal
 
-P0001.8 — Event-level Fill Simulation：**已完成**。
-`context/status.json` 中 `currentProposal` 为 `null`（无切换授权，等待人类指定下一 Proposal）。
+P0001.9.1（Binance USDⓈ-M Live Market Data）+ P0001.9.1.1（Futures Depth Continuity Verification）：**均已完成**
+（真实公网 Acceptance 通过）。`context/status.json` 中 `currentProposal` 为 `null`（无切换授权，等待人类指定下一 Proposal）。
 
-**Git**：`d510684`（P0001.6.1）、`6e8d035`（P0001.7 + P0001.7.1）；**P0001.8 未提交**（本轮未获提交授权）。
+**下一步**：P0001.9.2（Private Execution + User Stream）与 P0001.9.3（Startup Recovery + Account Reconciliation）
+均**未落盘提案**，需设计方先落盘；注意 D-021 已预告 `ExecutionAdapter` 需新的（异步 / user stream）契约决策。
 
 ## 本次新增
 
@@ -328,3 +329,162 @@ execution 核心（types/tracker/manager/engine/events）、`market/book`、`mar
 真实 `aggTrade` 归一化与 `TradeFeatures` 接线不在本阶段。
 
 **下一步**：等待人类指定 Proposal（路线下一阶段 P0001.9 Binance Live / P0001.10 Product API，需先落盘独立提案）。
+
+## 人类裁决：P0001.9 拆分（2026-09-28）
+
+原「P0001.9 Binance Live」拆为三个串行子阶段（已记入 `context/roadmap.md`）：
+
+- **P0001.9.1 提案已落盘**（`proposals/P0001.9.1-binance-live-market-data.md`，状态 **已提议**）：
+  按 CLAUDE.md §3.1 该状态**不得实现**；且 `status.json.currentProposal` 为 `null`。需要人类批准 + 明确实施指令。
+- P0001.9.2 / P0001.9.3 提案未落盘。
+
+1. **P0001.9.1 Public Market Data Live** —— 只做公网行情（REST 快照 + WS 深度/成交），不接触私钥与下单。
+2. **P0001.9.2 Private Execution + User Stream** —— 真实下单/撤单 + user data stream。
+3. **P0001.9.3 Startup Recovery + Account Reconciliation** —— 启动恢复与账户对账。
+
+### 待核实的外部事实（必须在提案内钉死，不得在实现中假设）
+
+- Binance 于 2026-03-06 公告 USDⓈ-M Futures WebSocket 路由升级：旧路径 `wss://fstream.binance.com/ws`
+  与 `/stream` 计划于 2026-04-23 退役；新增分层入口 `/public`（高频：`depth`、`bookTicker`）、
+  `/market`（常规：`aggTrade`、`kline`、`markPrice`、`forceOrder`）、`/private`（user data / listenKey）。
+- 来源为 Binance 支持公告的镜像与多个第三方库的迁移 PR/issue（ccxt #28091、ccxt/go-binance #809、
+  tiagosiebler/binance v3.5.0、unicorn-binance-websocket-api #437）。
+- **不确定性（如实记录）**：尚未取得 Binance 官方开发者文档直接列出新路径的页面；
+  `/public/ws` 与 `/public`、`/market/ws` 与 `/market` 的差异在来源间不一致，`/ws` 后缀是否必需未确认；
+  `/public`（`@depth`/`@bookTicker`）与 `/market`（`@aggTrade`）的 stream→tier 映射在不同来源中描述有出入。
+  ⇒ 提案必须先以官方文档或**人类授权的只读探测**钉死 URL 与 stream 归属，再写实现；实现方不得猜测。
+
+### P0001.9.1 提案中仍未固定的契约点（Observation，需人类/设计方裁决后才能实现）
+
+1. **端点 URL 未在提案中固定**：提案全文没有任何 `wss://` / REST base URL 常量，但 SC-12（真实 live smoke）
+   与「长时间只读运行」都必须用到具体 URL。结合下面的 WS 迁移事实，实现方不得自行猜 URL（§12 / Contract First）。
+   建议：提案内显式给出 REST base + WS 三档入口 + depth/aggTrade/markPrice 的 stream 归属，
+   或授权一次只读探测把事实钉死。
+2. **WS 客户端是否允许新增第三方依赖未说明**：仓库当前零第三方依赖（D-002 / §16）。
+   若走标准库，需要手写握手 / 心跳 / 重连（socket + ssl）；若允许 `websockets` 之类，必须由提案明确授权。
+3. **live mark price 的 Owner / 契约未定义**：提案要求「mark 独立事实、不得用 last trade 冒充」且「不改 `market-state-v1`」，
+   但没说 mark 观测如何进入 `AccountingCore.update_mark_price`（谁注入、时间戳用哪个、缺失时是否 fail closed）。
+   这属于新契约，需提案明确后方可实现。
+
+### 各子阶段提案必须回答的契约问题（实现前的输入清单；P0001.9.1 已落盘者见上）
+
+**P0001.9.1（公网行情）**
+
+1. WS/REST 客户端形态：仓库当前零第三方依赖（§16）——是继续用标准库手写握手/重连（socket + `ssl`），
+   还是由人类批准新增依赖？两者都需要提案明确。
+2. 事件边界：Live 必须产出既有 `MarketEvent`（8 字段）；`sequence` / `exchange_ts` / `receive_ts` / `process_ts`
+   的来源与单调性约束；`TradePayload` 是否在本阶段接入 `FeatureEngine`（会触及冻结的 `market-state-v1`，需显式决定）。
+3. 断线/落库：gap 时的 `request_resync()` 触发链（新快照拉取）、重连 backoff、live→Event Store 的落盘纪律
+   （决定 Replay 与 Live 是否可逐事件对齐）。
+4. 时钟：live 的 wall-clock 允许出现在哪一层（P0001.4 只在 transport 允许），核心层继续禁止。
+5. 验收：如何在不依赖「恰好行情发生」的前提下验证（stub server 已存在；是否可以授权有限真实连接探测）。
+
+**P0001.9.2（私钥与下单）**
+
+1. D-021 已声明：`ExecutionAdapter` 第一版是**同步**接口，真实 Binance 需要异步 / user stream 桥接 ——
+   本阶段需要**新的契约决策**（不改 tracker 语义）。
+2. 密钥纪律：只从环境变量读取、不落盘不入日志（既有纪律）；签名（HMAC-SHA256）与 timestamp/recvWindow 语义。
+3. 订单映射：`client_order_id` 生成规则、`postOnly`/`reduceOnly`/`timeInForce` 映射、错误码 → `OrderRejected` 映射表。
+4. listenKey 生命周期（创建 / keepalive / 失效重建）与 `ExecutionEvent` 的桥接顺序（不得二次投递）。
+5. 限流（权重 / 429 / 418）与 kill switch 的交互。
+
+**P0001.9.3（启动恢复与对账）**
+
+1. 启动时的账户事实来源：positions / balance 是「外部事实」，不得伪造为 Fill 注入账本（否则历史盈亏被扭曲）——
+   需要新的契约（例如账户基线快照）与人类对语义的裁决。
+2. 与既有 `execution.reconciliation.reconcile()`、P0001.6.1 的 LOST / unresolved fail-closed 语义如何衔接。
+3. 幂等与「不得静默改写历史」：重启后重复投递的成交、`event_id` / `execution_id` 去重跨进程是否持久化。
+4. 无法确认的订单如何处置（是否继续占用暴露、何时允许恢复报价）。
+
+**下一步**：人类落盘 P0001.9.1 提案后下达实施指令；在此之前保持冻结（不新增依赖、不接触网络、不改公共契约）。
+
+## P0001.9.1 交付摘要（2026-09-28）
+
+**新增**：`connectors/binance/market_data/{endpoints,transport,streams,trades,mark,exchange_info,snapshot,runtime}.py`；
+测试 `tests/ws_stub_server.py`（本地 RFC 6455 stub）+ `tests/live_support.py`（注入式传输/HTTP）+
+unit 6 文件 64 条 / integration 11 条 / fault 9 条 / live 2 条（opt-in）= 92 条。
+
+**修改**：`market/book/market_book.py`（`invalidate`）、`market/features/engine.py`（`invalidate` + `book_health`）、
+`connectors/binance/market_data/{depth,parsing,errors,__init__}.py`。
+
+**未改动**：`portfolio/`、`risk/`、`execution/`、`strategy/`、`prediction/`（只读链路）。
+
+**Acceptance**：SC-1 – SC-11、SC-14、SC-15 PASS（离线）；SC-12/SC-13 的**真实**部分 NOT RUN（无公网出口）；
+端点假设（2026 tier 路径）**尚未被真实连接验证**。
+
+**测试**：`python3 -m unittest discover -s tests -t .` → **1190 passed / 0 failed / 14 skipped**
+（unit 753、integration 152、fault 222、replay 49、live 14 skipped）。
+
+**下一步**：
+1. 人类在具备公网出口的环境跑 live smoke（无需凭据），把真实 gap/reconnect/lag/resync 指标与端点确认补齐；
+2. 据此把 P0001.9.1 置为「已完成」并把 `currentProposal` 置回 `null`；
+3. 再落盘 P0001.9.2（Private Execution + User Stream）提案。
+
+## P0001.9.1 真实公网 Acceptance 执行记录（2026-09-28）—— BLOCKED（网络层）
+
+- 命令：`PROBEX_LIVE_SMOKE=1 python3 -m unittest -v tests.live.test_binance_live_market_data`
+- 结果：`Ran 2 tests in 10.010s — FAILED (errors=1)`；无凭据检查通过；smoke 在 `runtime.connect()` 失败：
+  `TransportError: cannot connect to fstream.binance.com:443: timed out`。
+- 失败层：**DNS 返回非 Binance 地址（`fapi.binance.com → 162.125.2.5` Dropbox 网段、`fstream.binance.com → 128.242.245.189` Akamai 网段）
+  → TCP:443 超时 → TLS / WS handshake 未进入**；HTTP `000`（`curl` exit 28）。
+- 对照：`pypi.org` / `github.com` TCP:443 正常（0.1–0.23s）；`1.1.1.1`、`8.8.8.8` 与 DoH 交叉验证均不可达。
+- 未伪造任何指标：depth/aggTrade/mark 计数 0，gap/reconnect/resync/malformed/duplicate 均记 0（**未发生**），
+  event lag 未采样，first HEALTHY latency NOT OBSERVED，smoke duration 10.010s（仅连接阶段）。
+- 未修改 parser、未 fallback、未猜 endpoint（遵守人类裁决）；P0001.9.1 保持「实现中」，`currentProposal` 保持 `P0001.9.1`，未提交。
+- 下一步：在可达环境重跑同一命令，输出完整 PROBEX LIVE SMOKE REPORT（字段清单见提案 §1.1），
+  通过后 SC-12/SC-13 → PASS、P0001.9.1 → Completed、`currentProposal → null`，再提交并做 detached worktree 复核。
+
+## P0001.9.1 真实公网 Acceptance 结果（2026-09-28，已执行）
+
+**命令/方式**：人类指定命令 + 本机出口修正（本机 DNS 对 `*.binance.com` sinkhole、TLS SNI 被 RST；
+经人类自己的 Clash `127.0.0.1:7890` 隧道，仓库代码/端点/证书校验均未改）。
+
+**结果**：SC-12 **PASS**（无凭据完成 REST snapshot + exchangeInfo + server time + depth + aggTrade + markPrice）；
+SC-13 除**新鲜度**外 PASS（窗口 59.8s、depth 185 / aggTrade 580 / markPrice 26、first HEALTHY 1420ms、
+snapshot latency 636ms、mark age 14–6909ms、gap 36 / resync 38 / suppressed 74、reconnect 0（未发生，不伪造）、malformed 0）；
+**event lag −226 / 7267 / 18159 / 36519 ms（min/median/p95/max）不达标**。
+
+**阻断性发现（提案 §1.3 / D-027）**：`/public` diff 深度流会跳号（`@depth` 12/32 条消息有 13–315 个缺失 id；
+`@depth@100ms` 35/40；`@depth@500ms` 3/21；`@depth@250ms` 与 `/market` tier 均**无数据**）⇒
+保守的 gap→resync 使 HEALTHY 占比仅 ≈14%、REST resync ≈1/s；同步 REST 抓取阻塞读循环放大 lag。
+归属诊断已排除链路：只读时 lag 稳定 −224…−140ms。
+
+**待人类裁决**：A 部分深度快照流（`@depth20@100ms`，需明确 `sequence_contiguous` 语义）／
+B 有界空洞视为可接受陈旧（弱化完整性，需显式授权）／C 保持保守（研究可用、Maker 不可用）／
+D 非阻塞快照抓取（仅缓解新鲜度）。
+
+**状态**：P0001.9.1 保持「实现中」；`status.json.currentProposal` 保持 `P0001.9.1`；未提交。
+裁决后我会按选项实现（含对应的离线/故障测试与验收更新），再关闭并提交。
+## 诊断 P0001.9.1.1 结果（2026-09-28）：连续性判据错了，不是 Binance 丢数据
+
+按人类指路做的只读诊断（**不改生产代码**；原始样本存 `/tmp/probex_live/sample_*.jsonl`）：
+
+| 规则 | `btcusdt@depth`（178 对） | `btcusdt@depth@100ms`（294 对） |
+| --- | --- | --- |
+| `pu` 存在率 | 179/179 | 295/295 |
+| **`current.pu == previous.u`** | **178/178（100%）** | **294/294（100%）** |
+| `U <= prev.u+1 <= u`（D-003 现行） | **0/178** | **0/294** |
+| `U == prev.u+1` | 0/178 | 0/294 |
+| `pu - prev.u` | 恒 0 | 恒 0 |
+| `U - prev.u` median | 116 | 120 |
+| 单事件覆盖 id 数 median | 27299 | 9972 |
+
+⇒ Futures diff 事件聚合上万 update id，`U` 与上一条 `u` 必有间距；**现行窗口判据 0% 通过 ⇒ 每条消息误判 GAP
+⇒ 每秒 resync ⇒ 同步 REST 抓取阻塞读循环 ⇒ 7–36s lag / HEALTHY 占比 14%。根因是判据，不是厂商丢数、不是链路。**
+
+**已作废**：§1.3「Binance 跳号」结论与 A/B/C/D 选项（暂停/不再需要）。
+**待授权修复**：`depth.py` 解析 `pu` → `BookDeltaPayload.previous_update_id: int | None`；
+`OrderBook` 优先 `previous_update_id == last_applied_u`，无 `pu` 时回退窗口规则（现货）。
+这会改 **D-003 与 `BookDeltaPayload` 契约** ⇒ 需落盘提案（P0001.9.1.1 或等效）批准后实施。
+
+**状态**：P0001.9.1 保持「实现中」；`currentProposal` 保持 `P0001.9.1`；未提交；测试 1191 passed / 0 failed / 14 skipped。
+
+## P0001.9.1 + P0001.9.1.1 完成（2026-09-28）
+
+- **P0001.9.1.1 修复**：`BookDeltaPayload.previous_update_id`（Futures `pu`）+ venue-aware 连续性
+  （锚点「跨过快照点」`pu <= L < u`；锚点之后 `pu == last`；无 `pu` 保留窗口规则）→ 真实流 gap 36→0、resync 38→1。
+- **真实公网 Acceptance（对方本机代理隧道，无凭据）**：SC-12 PASS（6 个表面）、SC-13 PASS
+  （45 s 窗口、depth 179 / aggTrade 390 / markPrice 43、HEALTHY 100%、telemetry 完整、lag 有真实采样）。
+- **event lag 归属**（重要）：tight-loop 实测 `/public` depth 中位 −230 ms（新鲜），而 `/market` 的
+  aggTrade / markPrice 中位 2274–2790 ms ⇒ 延迟来自测试所用**代理出口排队**，不是本系统判定/处理问题。
+- 两阶段均已置为「已完成」；`currentProposal` → `null`；本轮按条件授权提交（P0001.9.1 + P0001.9.1.1 同一 commit）。

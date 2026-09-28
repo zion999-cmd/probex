@@ -79,12 +79,20 @@ class BookSnapshotPayload:
 
 @dataclass(frozen=True, slots=True)
 class BookDeltaPayload:
-    """深度增量：描述 `[first_update_id, last_update_id]` 区间内的档位变化。"""
+    """深度增量：描述 `[first_update_id, last_update_id]` 区间内的档位变化。
+
+    `previous_update_id`（Binance Futures 的 `pu`）是**上一条推送的最终 update id**：
+    Futures 的 diff 事件会聚合成千上万个 update id，因此连续性的正确判据是
+    `previous_update_id == 上一条的 last_update_id`，而不是 `first_update_id == 上一条 last + 1`
+    （见 P0001.9.1.1 / D-028）。无该字段的 venue / stream 保持 `None`，由下游回退到窗口规则。
+    """
 
     first_update_id: int
     last_update_id: int
     bids: tuple[PriceLevel, ...]
     asks: tuple[PriceLevel, ...]
+    #: 上一条推送的最终 update id（`pu`）；不适用时为 None。
+    previous_update_id: int | None = None
 
     def __post_init__(self) -> None:
         for name in ("first_update_id", "last_update_id"):
@@ -97,6 +105,14 @@ class BookDeltaPayload:
             raise InvalidPayloadError(
                 f"BookDeltaPayload.last_update_id ({self.last_update_id}) < first_update_id ({self.first_update_id})"
             )
+        if self.previous_update_id is not None:
+            value = self.previous_update_id
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise InvalidPayloadError("BookDeltaPayload.previous_update_id must be an int or None")
+            if value < 0:
+                raise InvalidPayloadError(
+                    f"BookDeltaPayload.previous_update_id must be >= 0, got {value}"
+                )
         object.__setattr__(self, "bids", _require_levels(self.bids, field="bids", allow_zero_size=True))
         object.__setattr__(self, "asks", _require_levels(self.asks, field="asks", allow_zero_size=True))
 

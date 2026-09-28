@@ -75,6 +75,8 @@ class OrderBook:
         self._bids: dict[float, float] = {}
         self._asks: dict[float, float] = {}
         self._last_update_id: int | None = None
+        #: 上一次同步是否来自快照（快照的 lastUpdateId 不是「上一条推送」，pu 在该刻不可比）
+        self._anchored_by_snapshot = True
         self._sorted_bids: tuple[float, ...] | None = None
         self._sorted_asks: tuple[float, ...] | None = None
 
@@ -101,6 +103,7 @@ class OrderBook:
         self._bids = {level.price: level.size for level in snapshot.bids}
         self._asks = {level.price: level.size for level in snapshot.asks}
         self._last_update_id = snapshot.last_update_id
+        self._anchored_by_snapshot = True
         self._invalidate_sorted_cache()
 
     def apply_delta(self, delta: BookDeltaPayload) -> DeltaOutcome:
@@ -108,24 +111,48 @@ class OrderBook:
         return self.apply_delta_with_mutations(delta).outcome
 
     def apply_delta_with_mutations(self, delta: BookDeltaPayload) -> DeltaApplication:
-        """应用增量并逐档描述 mutation。仅在 `APPLIED` 时改动盘口。"""
+        """应用增量并逐档描述 mutation。仅在 `APPLIED` 时改动盘口。
+
+        连续性判据（P0001.9.1.1 / D-028 / D-029）：
+
+        - **快照锚点之后的第一条增量**用 vendor 文档的「跨过快照点」条件：
+          快照序号 `L` 必须落在该增量的覆盖区间内（Futures：`pu <= L < u`；无 `pu`：`U <= L+1 <= u`）。
+          因为 REST 快照的 `lastUpdateId` 不是「上一条推送」，不能与 `pu` 直接比较。
+        - **之后**若增量携带 `previous_update_id`（Binance Futures `pu`），以 venue 语义为准：
+          `previous_update_id == 已应用的最后 update id` 即连续 —— 一条事件内部跨越大量 update id
+          是正常的聚合，不是丢失；只有 `pu` 对不上才是真实丢失（GAP → STALE → resync）。
+        - 没有 `pu` 的增量（现货等）始终回退窗口规则（D-003）。
+        """
         if self._last_update_id is None:
             return DeltaApplication(outcome=DeltaOutcome.AWAITING_SNAPSHOT, mutations=())
         if delta.last_update_id <= self._last_update_id:
             return DeltaApplication(outcome=DeltaOutcome.ALREADY_APPLIED, mutations=())
-        if delta.first_update_id > self._last_update_id + 1:
+        if self._is_gap(delta):
             return DeltaApplication(outcome=DeltaOutcome.GAP, mutations=())
 
         mutations = [self._apply_level(BookSide.BID, level) for level in delta.bids]
         mutations += [self._apply_level(BookSide.ASK, level) for level in delta.asks]
         self._last_update_id = delta.last_update_id
+        self._anchored_by_snapshot = False  # 之后的增量按 venue 的 pu 语义判连续
         return DeltaApplication(outcome=DeltaOutcome.APPLIED, mutations=tuple(mutations))
+
+    def _is_gap(self, delta: BookDeltaPayload) -> bool:
+        """该增量与已应用序号之间是否存在**真实**缺口。"""
+        assert self._last_update_id is not None  # 调用点已保证
+        if delta.previous_update_id is not None:
+            if self._anchored_by_snapshot:
+                # 锚点：`pu > L` 表示 (L, pu] 区间的推送从未被应用 ⇒ 真实缺口
+                return delta.previous_update_id > self._last_update_id
+            return delta.previous_update_id != self._last_update_id
+        # 没有 pu 的 venue（现货）：文档的 update-id 窗口规则
+        return delta.first_update_id > self._last_update_id + 1
 
     def reset(self) -> None:
         """清空盘口并回到未同步状态。"""
         self._bids = {}
         self._asks = {}
         self._last_update_id = None
+        self._anchored_by_snapshot = True
         self._invalidate_sorted_cache()
 
     def best_bid(self) -> PriceLevel | None:

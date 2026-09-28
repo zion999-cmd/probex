@@ -77,6 +77,11 @@ class FeatureEngine:
     def symbol(self) -> str:
         return self._identity.symbol
 
+    @property
+    def book_health(self) -> BookHealth:
+        """盘口可信度（只读转发；Owner 仍是本引擎内部的 `MarketBook`）。"""
+        return self._book.health
+
     def on_market_event(self, event: MarketEvent) -> MarketState:
         """消费一条市场事件，返回该时刻的 immutable `MarketState`。"""
         update = self._book.on_market_event(event)
@@ -128,6 +133,14 @@ class FeatureEngine:
         本引擎不实现传输层；该入口供调用方在观察到 `quality.book_health == STALE` 时使用。
         """
         self._book.request_resync()
+
+    def invalidate(self, reason: str) -> None:
+        """把盘口标记为不可信（P0001.9.1）：传输层丢失 / 重连时由调用方使用。
+
+        与 `request_resync()` 配套：`invalidate()` 使盘口进入 `STALE`，随后调用
+        `request_resync()` 进入 `RESYNCING`，直到新的快照 + 增量对齐后才重新 `HEALTHY`。
+        """
+        self._book.invalidate(reason)
 
     def _track_health(self, update: BookUpdate, event: MarketEvent) -> bool:
         """维护健康相关状态，返回本事件之后盘口是否 HEALTHY。"""

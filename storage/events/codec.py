@@ -198,13 +198,16 @@ def _encode_payload(payload: BookSnapshotPayload | BookDeltaPayload | TradePaylo
             "asks": _encode_levels(payload.asks),
         }
     if isinstance(payload, BookDeltaPayload):
-        return {
+        encoded: dict[str, object] = {
             "kind": EventType.BOOK_DELTA.value,
             "first_update_id": payload.first_update_id,
             "last_update_id": payload.last_update_id,
             "bids": _encode_levels(payload.bids),
             "asks": _encode_levels(payload.asks),
         }
+        if payload.previous_update_id is not None:
+            encoded["previous_update_id"] = payload.previous_update_id
+        return encoded
     if isinstance(payload, TradePayload):
         return {
             "kind": EventType.TRADE.value,
@@ -223,54 +226,62 @@ def _encode_levels(levels: Sequence[PriceLevel]) -> list[list[float]]:
 def _decode_payload(raw: object, *, path: str) -> BookSnapshotPayload | BookDeltaPayload | TradePayload:
     message = _require_object(raw, path=path)
     kind = _require_str(_require_field(message, "kind", path=path), path=f"{path}.kind")
-
     if kind == EventType.TRADE.value:
-        aggregate_trade_id = _require_int(
-            _require_field(message, "aggregate_trade_id", path=path), path=f"{path}.aggregate_trade_id"
-        )
-        price = _require_number(_require_field(message, "price", path=path), path=f"{path}.price")
-        quantity = _require_number(_require_field(message, "quantity", path=path), path=f"{path}.quantity")
-        aggressor = _decode_aggressor(
-            _require_field(message, "aggressor", path=path), path=f"{path}.aggressor"
-        )
-        try:
-            return TradePayload(
-                aggregate_trade_id=aggregate_trade_id, price=price, quantity=quantity, aggressor=aggressor
-            )
-        except MarketEventError as exc:
-            raise EventStoreFormatError(f"{path}: {exc}") from exc
-
+        return _decode_trade_payload(message, path=path)
     if kind == EventType.BOOK_SNAPSHOT.value:
-        last_update_id = _require_int(
-            _require_field(message, "last_update_id", path=path), path=f"{path}.last_update_id"
-        )
-        bids = _decode_levels(_require_field(message, "bids", path=path), path=f"{path}.bids")
-        asks = _decode_levels(_require_field(message, "asks", path=path), path=f"{path}.asks")
-        try:
-            return BookSnapshotPayload(last_update_id=last_update_id, bids=bids, asks=asks)
-        except MarketEventError as exc:
-            raise EventStoreFormatError(f"{path}: {exc}") from exc
-
+        return _decode_snapshot_payload(message, path=path)
     if kind == EventType.BOOK_DELTA.value:
-        first_update_id = _require_int(
-            _require_field(message, "first_update_id", path=path), path=f"{path}.first_update_id"
-        )
-        last_update_id = _require_int(
-            _require_field(message, "last_update_id", path=path), path=f"{path}.last_update_id"
-        )
-        bids = _decode_levels(_require_field(message, "bids", path=path), path=f"{path}.bids")
-        asks = _decode_levels(_require_field(message, "asks", path=path), path=f"{path}.asks")
-        try:
-            return BookDeltaPayload(
-                first_update_id=first_update_id,
-                last_update_id=last_update_id,
-                bids=bids,
-                asks=asks,
-            )
-        except MarketEventError as exc:
-            raise EventStoreFormatError(f"{path}: {exc}") from exc
+        return _decode_delta_payload(message, path=path)
+    raise EventStoreFormatError(f"{path}.kind: unsupported payload kind {kind!r}")
 
-    raise EventStoreFormatError(f"{path}.kind: unknown payload kind {kind!r}")
+
+def _decode_delta_payload(message: Mapping[str, object], *, path: str) -> BookDeltaPayload:
+    first_update_id = _require_int(
+        _require_field(message, "first_update_id", path=path), path=f"{path}.first_update_id"
+    )
+    last_update_id = _require_int(
+        _require_field(message, "last_update_id", path=path), path=f"{path}.last_update_id"
+    )
+    bids = _decode_levels(_require_field(message, "bids", path=path), path=f"{path}.bids")
+    asks = _decode_levels(_require_field(message, "asks", path=path), path=f"{path}.asks")
+    previous_update_id = _require_optional_int(message.get("previous_update_id"), path=f"{path}.previous_update_id")
+    try:
+        return BookDeltaPayload(
+            first_update_id=first_update_id,
+            last_update_id=last_update_id,
+            bids=bids,
+            asks=asks,
+            previous_update_id=previous_update_id,
+        )
+    except MarketEventError as exc:
+        raise EventStoreFormatError(f"{path}: {exc}") from exc
+
+
+def _decode_snapshot_payload(message: Mapping[str, object], *, path: str) -> BookSnapshotPayload:
+    last_update_id = _require_int(
+        _require_field(message, "last_update_id", path=path), path=f"{path}.last_update_id"
+    )
+    bids = _decode_levels(_require_field(message, "bids", path=path), path=f"{path}.bids")
+    asks = _decode_levels(_require_field(message, "asks", path=path), path=f"{path}.asks")
+    try:
+        return BookSnapshotPayload(last_update_id=last_update_id, bids=bids, asks=asks)
+    except MarketEventError as exc:
+        raise EventStoreFormatError(f"{path}: {exc}") from exc
+
+
+def _decode_trade_payload(message: Mapping[str, object], *, path: str) -> TradePayload:
+    aggregate_trade_id = _require_int(
+        _require_field(message, "aggregate_trade_id", path=path), path=f"{path}.aggregate_trade_id"
+    )
+    price = _require_number(_require_field(message, "price", path=path), path=f"{path}.price")
+    quantity = _require_number(_require_field(message, "quantity", path=path), path=f"{path}.quantity")
+    aggressor = _decode_aggressor(_require_field(message, "aggressor", path=path), path=f"{path}.aggressor")
+    try:
+        return TradePayload(
+            aggregate_trade_id=aggregate_trade_id, price=price, quantity=quantity, aggressor=aggressor
+        )
+    except MarketEventError as exc:
+        raise EventStoreFormatError(f"{path}: {exc}") from exc
 
 
 def _decode_levels(raw: object, *, path: str) -> tuple[PriceLevel, ...]:
@@ -347,6 +358,12 @@ def _decode_venue(value: object, *, path: str) -> Venue:
         return _VENUES_BY_VALUE[text]
     except KeyError:
         raise EventStoreFormatError(f"{path}: unknown venue {text!r}") from None
+
+
+def _require_optional_int(value: object, *, path: str) -> int | None:
+    if value is None:
+        return None
+    return _require_int(value, path=path)
 
 
 def _decode_aggressor(value: object, *, path: str) -> AggressorSide:
