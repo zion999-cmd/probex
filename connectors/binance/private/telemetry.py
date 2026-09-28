@@ -59,6 +59,8 @@ class PrivateStreamCounters:
     out_of_order_count: int = 0
     unsupported_event_count: int = 0
     malformed_count: int = 0
+    #: P0001.9.3.2：discontinuity listener 抛异常的次数（observer 故障隔离，仅计数 + 异常类型名）
+    discontinuity_listener_failure_count: int = 0
     snapshot_count: int = 0
     snapshot_failure_count: int = 0
     snapshot_round_trip_ms: int | None = None
@@ -91,6 +93,7 @@ class PrivateStreamTelemetry:
     out_of_order_count: int
     unsupported_event_count: int
     malformed_count: int
+    discontinuity_listener_failure_count: int
     snapshot_count: int
     snapshot_failure_count: int
     snapshot_round_trip_ms: int | None

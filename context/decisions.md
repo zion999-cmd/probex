@@ -658,3 +658,18 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
    `StartupRecovery.bind(runtime)` 订阅后**自动**回落 `NOT_RECOVERED`。
    测试**不得**用 `recovery.invalidate()` 模拟接线（SC-4）；重连后必须重走完整恢复流程才可 `RECOVERED`（SC-5）。
 4. **不新增架构层、不引入依赖、不放宽任何既有 fail-closed 语义**；`fact_limit` 仍然只是 current-state 窗口（D-039）。
+
+## D-041 observer 故障隔离契约：telemetry 只记异常类型名（P0001.9.3.2）
+
+**日期**：2026-09-28
+**状态**：生效
+
+- `PrivateAccountRuntime._notify_discontinuity` 是 **observer 边界**，必须满足：
+  ① 先落 `discontinuity_events` 事实；② 逐个 listener 独立调用；③ listener 异常**绝不外抛**
+  （不得破坏 `_reconnect` / `_recreate_listen_key` / `stop()`）；④ 只捕获 `Exception`
+  （`KeyboardInterrupt` / `SystemExit` 等 `BaseException` 照常传播）。
+- 失败审计沿用现有 counter 风格：`discontinuity_listener_failure_count` +
+  `last_error = "discontinuity listener failed: <ExceptionType>"`。
+  **只记录异常类型名，不记录消息 / 参数 / 堆栈**——telemetry 不得成为敏感内容的旁路。
+- 通用原则（延续 D-014 / D-030）：**任何 observer / 回调边界都不得改变被观察对象的控制流**；
+  未来新增订阅点必须复用同一隔离模式，而不是各自实现。

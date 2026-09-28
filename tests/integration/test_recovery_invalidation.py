@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import unittest
+from collections import deque
 
 from connectors.binance.private.recovery import RecoveryStatus
 from tests.private_support import (
@@ -165,6 +166,199 @@ class DiscontinuityListenerTest(unittest.TestCase):
         connection.push("{}")
 
         self.assertEqual(connection.recv_text(timeout_s=0.01), "{}")
+
+
+class DiscontinuityNotificationReliabilityTest(unittest.TestCase):
+    """P0001.9.3.2：observer 故障隔离——listener 异常不得破坏 runtime 的恢复路径。"""
+
+    #: 会被塞进异常消息的敏感标记：绝不允许出现在 telemetry 里。
+    SECRET_MARKER = "secret-token-should-not-leak"
+
+    def _raising(self, seen: list[str], fail_times: int | None = None):
+        """构造一个会抛异常（默认每次都抛）的 listener，并记录它自己被调用过。"""
+        state = {"calls": 0}
+
+        def listener(reason: str) -> None:
+            state["calls"] += 1
+            seen.append(f"raiser:{reason}")
+            if fail_times is None or state["calls"] <= fail_times:
+                raise RuntimeError(f"{self.SECRET_MARKER}: {reason}")
+
+        return listener, state
+
+    def _runtime_with_listeners(self, fail_times: int | None = None):
+        runtime, fetcher, factory = build_runtime()
+        seen: list[str] = []
+        runtime.subscribe_discontinuity(seen.append)
+        raiser, state = self._raising(seen, fail_times=fail_times)
+        runtime.subscribe_discontinuity(raiser)
+        runtime.subscribe_discontinuity(lambda reason: seen.append(f"after:{reason}"))
+        runtime.start()
+        return runtime, fetcher, factory, seen, state
+
+    # --- SC-1 ---------------------------------------------------------------
+
+    def test_sc1_other_listeners_still_receive_when_one_raises(self) -> None:
+        runtime, _fetcher, factory, seen, state = self._runtime_with_listeners()
+
+        factory.connection.drop()
+        runtime.pump_once(timeout_s=0.01)  # 不得抛出
+
+        self.assertEqual(state["calls"], 1)  # 出错的 listener 确实被调用过
+        self.assertEqual(
+            seen,
+            [
+                "user data stream disconnected; reconnecting",
+                "raiser:user data stream disconnected; reconnecting",
+                "after:user data stream disconnected; reconnecting",
+            ],
+        )
+
+    def test_sc1_discontinuity_fact_is_recorded_before_listeners_run(self) -> None:
+        """即使**所有** listener 都抛异常，事实仍必须落审计。"""
+        runtime, _fetcher, factory = build_runtime()
+        first, _ = self._raising([])
+        second, _ = self._raising([])
+        runtime.subscribe_discontinuity(first)
+        runtime.subscribe_discontinuity(second)
+        runtime.start()
+
+        factory.connection.drop()
+        runtime.pump_once(timeout_s=0.01)
+
+        self.assertEqual(len(runtime.discontinuity_events), 1)
+        self.assertEqual(runtime.telemetry.discontinuity_listener_failure_count, 2)
+
+    def test_sc1_recovery_is_still_invalidated_with_a_failing_listener(self) -> None:
+        runtime, fetcher, factory = build_runtime()
+        recovery, _, _, _ = build_recovery(
+            responses=recovery_responses(
+                position=position_risk_payload(position_amt="0", entry_price="0", mark_price="0")
+            ),
+            clock=lambda: BASE_TS,
+        )
+        recovery.bind(runtime)
+        raiser, _ = self._raising([])
+        runtime.subscribe_discontinuity(raiser)  # 坏了也不影响 recovery 订阅
+        runtime.start()
+        self.assertIs(
+            recovery.run(stream_state=stream_state(), snapshot_provider=recovery.fetch_snapshot).status,
+            RecoveryStatus.RECOVERED,
+        )
+
+        factory.connection.drop()
+        runtime.pump_once(timeout_s=0.01)
+
+        self.assertIs(recovery.state, RecoveryStatus.NOT_RECOVERED)
+        self.assertFalse(runtime.continuity_assumed)
+        self.assertTrue(fetcher.calls)  # start() 已经走过真实 REST（快照）
+
+    # --- SC-2 / SC-3 / SC-4 -------------------------------------------------
+
+    def test_sc2_reconnect_still_completes_with_failing_listener(self) -> None:
+        runtime, _fetcher, factory, _seen, _state = self._runtime_with_listeners()
+        urls_before = len(factory.urls)
+
+        factory.connection.drop()
+        runtime.pump_once(timeout_s=0.01)  # 不得抛出
+
+        self.assertGreater(len(factory.urls), urls_before)  # 真的重连了
+        self.assertEqual(runtime.telemetry.reconnect_count, 1)
+        self.assertEqual(runtime.lifecycle_state, "ACTIVE")
+        self.assertFalse(runtime.continuity_assumed)
+        self.assertEqual(runtime.telemetry.discontinuity_listener_failure_count, 1)
+
+    def test_sc3_listen_key_recreation_is_unaffected_by_failing_listener(self) -> None:
+        runtime, fetcher, factory, _seen, _state = self._runtime_with_listeners()
+        fetcher.listen_keys = deque([fetcher.listen_keys[0], "LK-SECOND", "LK-THIRD"])
+        factory.connection.push(listen_key_expired_message())
+
+        batch = runtime.pump_once(timeout_s=0.01)  # 不得抛出
+
+        self.assertTrue(any("listenKey" in error for error in batch.errors))
+        self.assertEqual(runtime.telemetry.listen_key_expired_count, 1)
+        self.assertEqual(runtime.telemetry.listen_key_created_count, 2)
+        self.assertEqual(runtime.lifecycle_state, "ACTIVE")
+        self.assertIn("LK-SECOND", factory.urls[-1])
+        self.assertEqual(runtime.telemetry.discontinuity_listener_failure_count, 1)
+
+    def test_sc4_stop_survives_failing_listener(self) -> None:
+        runtime, _fetcher, _factory, _seen, _state = self._runtime_with_listeners()
+
+        runtime.stop()  # 不得抛出
+
+        self.assertEqual(runtime.lifecycle_state, "STOPPED")
+        self.assertIn("runtime stopped", runtime.discontinuity_events)
+        self.assertEqual(runtime.telemetry.discontinuity_listener_failure_count, 1)
+
+    def test_sc4_stop_survives_failing_listener_even_without_start(self) -> None:
+        runtime, _fetcher, _factory = build_runtime()
+        raiser, _ = self._raising([])
+        runtime.subscribe_discontinuity(raiser)
+
+        runtime.stop()
+
+        self.assertEqual(runtime.lifecycle_state, "STOPPED")
+        self.assertEqual(runtime.telemetry.discontinuity_listener_failure_count, 1)
+
+    # --- SC-5 ---------------------------------------------------------------
+
+    def test_sc5_listener_failure_is_audited_and_leaks_nothing(self) -> None:
+        runtime, _fetcher, factory, _seen, _state = self._runtime_with_listeners()
+
+        factory.connection.drop()
+        runtime.pump_once(timeout_s=0.01)
+
+        telemetry = runtime.telemetry
+        self.assertEqual(telemetry.discontinuity_listener_failure_count, 1)
+        self.assertEqual(telemetry.last_error, "discontinuity listener failed: RuntimeError")
+        self.assertNotIn(self.SECRET_MARKER, telemetry.last_error or "")
+        rendered = repr(telemetry)
+        self.assertNotIn(self.SECRET_MARKER, rendered)  # 整个 telemetry 快照里都不许出现
+
+    def test_sc5_failure_count_grows_with_each_failing_listener(self) -> None:
+        runtime, _fetcher, factory = build_runtime()
+        first, _ = self._raising([])
+        second, _ = self._raising([])
+        runtime.subscribe_discontinuity(first)
+        runtime.subscribe_discontinuity(second)
+        runtime.start()
+
+        factory.connection.drop()
+        runtime.pump_once(timeout_s=0.01)
+        factory.connection.drop()
+        runtime.pump_once(timeout_s=0.01)
+
+        self.assertEqual(runtime.telemetry.discontinuity_listener_failure_count, 4)
+
+    def test_sc5_healthy_listeners_leave_the_failure_counter_at_zero(self) -> None:
+        runtime, _fetcher, factory = build_runtime()
+        seen: list[str] = []
+        runtime.subscribe_discontinuity(seen.append)
+        runtime.subscribe_discontinuity(lambda reason: seen.append(f"second:{reason}"))
+        runtime.start()
+
+        factory.connection.drop()
+        runtime.pump_once(timeout_s=0.01)
+
+        self.assertEqual(runtime.telemetry.discontinuity_listener_failure_count, 0)
+        # last_error 此时记录的是断线本身，不得出现任何 listener 失败痕迹
+        self.assertNotIn("discontinuity listener failed", runtime.telemetry.last_error or "")
+        self.assertEqual(len(seen), 2)  # 两个健康 listener 都收到了事实
+
+    def test_base_exceptions_are_not_swallowed(self) -> None:
+        """observer 边界只隔离 `Exception`：`KeyboardInterrupt` 必须照常传播（不吞系统退出）。"""
+        runtime, _fetcher, factory = build_runtime()
+
+        def interrupt(reason: str) -> None:
+            raise KeyboardInterrupt
+
+        runtime.subscribe_discontinuity(interrupt)
+        runtime.start()
+
+        factory.connection.drop()
+        with self.assertRaises(KeyboardInterrupt):
+            runtime.pump_once(timeout_s=0.01)
 
 
 if __name__ == "__main__":

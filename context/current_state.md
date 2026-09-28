@@ -15,7 +15,7 @@ Provider identity 核实（决策 D，提案 §1.7）与授权探测 P1/P2（提
   P2 单条 `noul` 探针 → HTTP 200、604 ms、`answers.ok={type:noul,noul:0.99}`、cost 1.1634e-05。
 - **热路径 Jev 的真实目标应为 `/api/v1/systemone`**；实现 typed provider 需新提案（尚未授权、尚未改代码）。
 
-`context/status.json` 的 `currentProposal` 为 `null`（**P0001.9.3.1 已收口**，等待下一条正式 Proposal）。
+`context/status.json` 的 `currentProposal` 为 `null`（**P0001.9.3.2 已收口**，等待下一条正式 Proposal）。
 
 ## 已完成能力
 
@@ -220,6 +220,19 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
   已验证外部 5、**不可归属 0** ⇒ `RECOVERED`（`foreign_fills=5`、`unresolved_fill_order_ids=[]`、`synthetic_fills=0`）。
 - 全量测试 **1405 passed / 0 failed / 19 skipped**；`context/status.json.currentProposal` 回到 `null`。
 
+### P0001.9.3.2 — Discontinuity Notification Reliability（已完成）
+
+- `_notify_discontinuity` 升级为**故障隔离的 observer 边界**：先记录 `discontinuity_events` 事实 →
+  逐个 listener 独立 `try` → 异常**绝不外抛**（只捕获 `Exception`；`KeyboardInterrupt` 等照常传播）
+  ⇒ listener 崩溃不会破坏 reconnect / listenKey recreate / `stop()`。
+- 失败审计沿用 counter 风格：`discontinuity_listener_failure_count` +
+  `last_error = "discontinuity listener failed: <ExceptionType>"`（**只记类型名**，不记消息/参数/堆栈 ⇒ telemetry 无敏感旁路）。
+- 新增 `DiscontinuityNotificationReliabilityTest` 11 条（多 listener 故障、reconnect / recreate / stop 回归、
+  审计与不泄漏、`BaseException` 不被吞）；**未改** recovery 业务语义 / ownership / fill 分类。
+- 文档状态清理（SC-6）：`current_state` 版本表改为 `4b69a73` 并明确已提交 push；`handoff` 顶部新增历史段落
+  **superseded** 说明，两处「尚未 commit」表述就地标注 superseded。
+- 全量测试 **1416 passed / 0 failed / 19 skipped**；`context/status.json.currentProposal` 回到 `null`。
+
 ## 进行中能力
 
 无。
@@ -227,7 +240,7 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 
 ## 下一步
 
-- **无授权中的步骤**：P0001.9.3 / P0001.9.3.1 均已收口，`currentProposal = null`。下一阶段必须由人类/设计方落盘正式 Proposal，
+- **无授权中的步骤**：P0001.9.3 / P0001.9.3.1 / P0001.9.3.2 均已收口，`currentProposal = null`。下一阶段必须由人类/设计方落盘正式 Proposal，
   再由人类下达「读取 … 实施」指令后才可实现（不得从 roadmap / handoff 推断任务）。
 - 待人类决定（不阻塞）：① adverse-selection 阈值 X（bps）；② 五分类 bucket 数值分档；
   ③ `RiskLimits` 全部限额数值；④ `MakerPolicyConfig` 生产数值；⑤ 是否补验**主网**私有链路（含 D-036 时钟校正口径）；
@@ -256,7 +269,9 @@ Git 仓库已初始化；P0001.1 – P0001.9.2.1 均已提交并推送（每个 
 | `2d7d508` | P0001.4.1 OpenRouter transport | 541 passed（4 skipped） |
 | `7053a70` … `aeb4ab8` | P0001.6 – P0001.9.2（含 1.9.1 / 1.9.1.1 / 1.9.2.1） | 1190 – 1327 passed |
 | `1be451a` | **P0001.9.3** Startup Recovery + Account Reconciliation | 1387 passed（含 P0001.9.3.1 前的基线） |
-| （未提交） | **P0001.9.3.1** Recovery Contract Closure | 工作树 + 独立快照 1405 passed（见提案 §1.5） |
+| `4b69a73` | **P0001.9.3.1** Recovery Contract Closure | 1405 passed（detached worktree 复核） |
+| （未提交） | **P0001.9.3.2** Discontinuity Notification Reliability | 工作树 + 独立快照 1416 passed（见提案 §1.4） |
 
 `CLAUDE.md` 与 `.gitignore` 被使用者全局 gitignore（`~/.gitignore_global`）排除，未纳入版本控制。
-P0001.9.3.1 的改动**未提交**（人类本轮指令只授权实施，未授权 commit/push，见 CLAUDE.md §28）。
+P0001.9.3（`1be451a`）与 P0001.9.3.1（`4b69a73`）均已提交并 **push 到 `origin/master`**；
+P0001.9.3.2 的改动尚未提交（见「版本」表；当前工作树状态以 `git status` 为准）。

@@ -1,3 +1,17 @@
+## 文档状态说明（2026-09-28）
+
+本文档是**按时间追加**的历史记录。早期 session 段落里的「未提交 / 未获授权 / 未执行 push」等表述
+**已被后续 commit 推翻**，一律视为 **superseded**，不代表当前状态。
+
+当前事实（提交与推送状态）：
+
+| commit | 阶段 | 远端 |
+| --- | --- | --- |
+| `1be451a` | P0001.9.3 Startup Recovery + Account Reconciliation | 已 push 到 `origin/master` |
+| `4b69a73` | P0001.9.3.1 Recovery Contract Closure | 已 push 到 `origin/master` |
+
+判断"当前是否已提交"只以 `git log` / `git status` 为准，不引用本文档的历史句子。
+
 ## 当前 Proposal
 
 **P0001.9.2 — Private Account + User Stream Validation：已完成（2026-09-28）。**
@@ -700,7 +714,8 @@ P0001.9.2 的契约是 **futures**（`/fapi/v1/listenKey`、`ORDER_TRADE_UPDATE`
 **阻塞**：无。
 
 **下一步**：`currentProposal = null`；等待人类/设计方落盘下一条正式 Proposal 后再由人类下达实施指令。
-P0001.9.3 的代码改动**尚未 commit / push**（未获授权，CLAUDE.md §28）。
+~~P0001.9.3 的代码改动尚未 commit / push~~ —— **superseded（2026-09-28）**：
+P0001.9.3 已作为 commit `1be451a` 提交并 push 到 `origin/master`。
 
 ## 2026-09-28：人类裁决 D-039（下一阶段必须遵守）
 
@@ -749,6 +764,50 @@ P0001.9.3 的代码改动**尚未 commit / push**（未获授权，CLAUDE.md §2
    若要放宽必须由人类裁决「可验证证据规则」，实现方不得自行降级。
 2. `fact_limit` 仍只是 current-state 窗口（D-039）。
 3. `RECOVERED` ≠ `LIVE TRADE READY`（D-039）。
+
+**阻塞**：无。
+**下一步**：`currentProposal = null`；等待人类/设计方落盘下一条正式 Proposal。
+~~本轮改动尚未 commit / push~~ —— **superseded（2026-09-28）**：
+P0001.9.3.1 已作为 commit `4b69a73` 提交并 push 到 `origin/master`。
+
+## 2026-09-28：P0001.9.3.2 Discontinuity Notification Reliability（已完成）
+
+**当前 Proposal**：P0001.9.3.2（实施中设为 `P0001.9.3.2`，完成后按 CLAUDE.md §5 回到 `null`，无下一提案切换授权）。
+
+**本次新增**：`tests/integration/test_recovery_invalidation.py::DiscontinuityNotificationReliabilityTest`（11 条）。
+**本次修改**
+
+- `connectors/binance/private/runtime.py`：`_notify_discontinuity` 故障隔离（先记录事实 → 逐 listener 独立 `try` →
+  异常不外抛；只捕获 `Exception`；失败写计数 + 异常类型名）。
+- `connectors/binance/private/telemetry.py`：`PrivateStreamCounters` / `PrivateStreamTelemetry` 新增
+  `discontinuity_listener_failure_count`（沿用既有 counter 风格，未新建日志系统）。
+- `context/current_state.md`：版本表 `4b69a73` 行 + 明确已提交并 push。
+- `context/handoff.md`：顶部新增「文档状态说明」——早期段落的「未提交 / 未获授权 / 未执行 push」一律
+  **superseded**（判断当前状态只以 `git log` / `git status` 为准）；P0001.9.3 / P0001.9.3.1 两处就地标注 superseded。
+- `proposals/P0001.9.3.2-*.md`（§0 契约 + §1 结果）、`context/roadmap.md`、`context/decisions.md`（D-041）。
+
+**本次删除**：无。
+
+**Acceptance 结果（SC-1 – SC-7 全 PASS，矩阵见提案 §1.2）**
+
+- SC-1：listener A 抛异常时 B 仍收到；**所有** listener 都抛异常时 `discontinuity_events` 仍记录事实；
+  recovery 订阅者在其他 listener 崩溃时仍被自动置为 `NOT_RECOVERED`。
+- SC-2/SC-3/SC-4：带崩溃 listener 的情况下，reconnect（`reconnect_count=1`、`ACTIVE`、`continuity_assumed=False`）、
+  listenKey recreate（新 key 生效）、`stop()`（`STOPPED`，含未 `start()` 的情形）均正常完成，且**无异常逃逸**。
+- SC-5：`discontinuity_listener_failure_count` 随每次失败累加；`last_error` 仅含异常类型名；
+  异常消息里的敏感标记在 `last_error` 与整个 telemetry `repr` 中都不出现。
+- 附加边界：`KeyboardInterrupt` 不被吞（observer 边界只隔离 `Exception`）。
+- SC-6：`current_state` 不再声称 `1be451a` / `4b69a73` 未提交；历史段落显式 superseded。
+
+**测试结果**：unit 879 / integration 208 / fault 261 / replay 49 passed；live 19 skipped；
+全量 **1416 passed / 0 failed / 19 skipped**；独立检出（`git archive HEAD` + 工作树叠加，未产生 commit）同样全 PASS。
+
+**风险 / 已知问题**
+
+1. `discontinuity_events` 列表无上限（按运行时长增长），当前只用于审计/live 报告，未截断（不属本提案范围）。
+2. listener 失败只保留异常类型名，不保留 reason 与 listener 身份（刻意的"最小泄漏面"）；
+   若需要更强可观测性须由新提案明确字段与脱敏规则。
+3. 仍然：`RECOVERED` ≠ `LIVE TRADE READY`（D-039）；主网私有链路未验证；延迟须按 D-036 时钟校正。
 
 **阻塞**：无。
 **下一步**：`currentProposal = null`；等待人类/设计方落盘下一条正式 Proposal。

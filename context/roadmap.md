@@ -23,6 +23,7 @@ P0001.9.2 Private Account + User Stream Validation ← 已完成（TESTNET_PRIVA
 P0001.9.2.1 Private Connectivity Contract Audit & CCXT Fit ← 已完成（裁决 KEEP_NATIVE_PRIVATE）
 P0001.9.3 Startup Recovery + Account Reconciliation ← 已完成（测试网真实只读验收 PASS）
 P0001.9.3.1 Recovery Contract Closure             ← 已完成（ownership / unresolved fills / 断线接线收口）
+P0001.9.3.2 Discontinuity Notification Reliability ← 已完成（observer 故障隔离 + 审计 + 文档清理）
 P0001.10  Product API / UI / Reports       ← 未启动（待正式 Proposal）
 ```
 
@@ -57,4 +58,5 @@ P0001.10  Product API / UI / Reports       ← 未启动（待正式 Proposal）
 | P0001.9.2.1 | 已完成（裁决 `KEEP_NATIVE_PRIVATE`） |
 | P0001.9.3 | 已完成（测试网真实验收 PASS：RECOVERED / 无 synthetic Fill / foreign open 0） |
 | P0001.9.3.1 | 已完成（严格 ownership + `BLOCKED: UNRESOLVED_FILLS` + runtime→recovery 自动失效接线） |
+| P0001.9.3.2 | 已完成（listener 异常隔离 + 失败计数审计 + current_state/handoff 失效表述清理） |
 | P0001.10 | 未开始（待正式提案落盘） |

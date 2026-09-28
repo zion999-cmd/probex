@@ -210,6 +210,7 @@ class PrivateAccountRuntime:
             out_of_order_count=counters.out_of_order_count,
             unsupported_event_count=counters.unsupported_event_count,
             malformed_count=counters.malformed_count,
+            discontinuity_listener_failure_count=counters.discontinuity_listener_failure_count,
             snapshot_count=counters.snapshot_count,
             snapshot_failure_count=counters.snapshot_failure_count,
             snapshot_round_trip_ms=counters.snapshot_round_trip_ms,
@@ -233,10 +234,25 @@ class PrivateAccountRuntime:
         self._discontinuity_listeners.append(listener)
 
     def _notify_discontinuity(self, reason: str) -> None:
-        """记录并广播一次连续性丢失（先落审计，再回调；回调异常不得破坏运行时）。"""
+        """记录并广播一次连续性丢失（P0001.9.3.2 §0.1）。
+
+        顺序与纪律：
+
+        1. **先记录事实**（`discontinuity_events`），保证即使所有 listener 都失败也有审计证据；
+        2. 每个 listener **独立** `try`，一个失败不影响其他 listener；
+        3. 异常**绝不向上抛**，以免破坏 `_reconnect` / `_recreate_listen_key` / `stop()` 的既有语义；
+        4. 失败只记 `discontinuity_listener_failure_count` + 异常**类型名**（不记消息/参数/堆栈，
+           避免任何敏感内容进入 telemetry）。
+
+        只捕获 `Exception`：`KeyboardInterrupt` / `SystemExit` 等 `BaseException` 照常传播。
+        """
         self._discontinuity_events.append(reason)
         for listener in list(self._discontinuity_listeners):
-            listener(reason)
+            try:
+                listener(reason)
+            except Exception as exc:  # noqa: BLE001 —— observer 边界：逐个隔离，绝不外泄
+                self.counters.discontinuity_listener_failure_count += 1
+                self.counters.last_error = f"discontinuity listener failed: {type(exc).__name__}"
 
     def lag_within_threshold(self) -> bool:
         """SC-13 判定：已采样且 median 不超过配置阈值（样本不足视为未达标，不猜）。"""
