@@ -397,6 +397,7 @@ Git 仓库已初始化；P0001.1 – P0001.9.2.1 均已提交并推送（每个 
 | `2543eea` | **P0001.9.4.2** Persistent Equity High-Watermark | 1584 passed（detached worktree 复核） |
 | `1fa7dcc` | docs: 版本表补记 P0001.9.4.1.1 / P0001.9.4.2 | 1584 passed |
 | `a2ab8da` | **P0001.9.5** Execution Readiness Evidence Binding | 1631 passed（detached worktree 复核） |
+| `afc0196` | **P0001.9.6** Binance USDⓈ-M ExecutionAdapter（含 UNKNOWN≠EMPTY correction） | 1693 passed（detached worktree 复核） |
 
 `CLAUDE.md` 与 `.gitignore` 被使用者全局 gitignore（`~/.gitignore_global`）排除，未纳入版本控制。
 P0001.9.3（`1be451a`）与 P0001.9.3.1（`4b69a73`）均已提交并 **push 到 `origin/master`**；
@@ -406,5 +407,9 @@ P0001.9.5 已作为 `a2ab8da`（1631 passed）、P0001.9.6 已作为 `afc0196`�
 依次提交并 **push 到 `origin/master`**；
 当前工作树状态以 `git status` 为准。
 
-> **流程要求（防漂移）**：每次收尾 commit 之后必须**立即**在本表补行（commit hash + 该 commit 的 detached worktree 结果），
-> 并在提交前自检「本表是否已包含即将产生的 commit hash」；否则后续 Agent 会据本表误判当前状态。
+> **流程要求（防漂移）**：
+> ① 本表只登记**阶段 commit**（即带 Proposal 的实现提交）；纯 docs 提交由 `git log` 体现，**不入表**
+> （否则会出现"记录自己 hash"的自引用循环）；
+> ② 每次收尾 commit 之后必须**立即**补行（hash + 该 commit 的 detached worktree 结果），
+> 并在提交前自检「本表是否已包含即将产生的阶段 commit hash」；
+> ③ 判断"当前是否已提交"以 `git log` / `git status` 为准，本表只是索引。
