@@ -269,3 +269,56 @@ cost ≈1.1e-04/call、五分类求和 = 1、Noul 无 confidence（详见提案 
 - 快照入参必须自洽（`total == confirmed + uncertain`），否则 `ValueError`（fail closed）。
 **影响**：LOST 期间新暴露会被更保守地挡住 —— 这是刻意的 fail-closed 取舍（宁可少开仓，不可漏算风险）。
 
+## D-023 Maker 策略层的契约（P0001.7）
+
+**日期**：2026-09-28
+**状态**：生效
+
+**决策**：
+
+- 新增 `strategy/` 领域层，只产出决策（`OrderProposal`，永远 `post_only=True`）与 KEEP/CANCEL/REPLACE/PLACE/NONE 分类；
+  撤单与重挂仍由 `execution.OrderManager` 执行（cancel-before-replace 不变）。策略层不写 Accounting、不联网、不读 wall-clock
+  （时间只来自 `RiskSnapshot.now_ms`）。
+- 策略层只依赖 `execution.types`（订单事实契约），禁止依赖 `execution.engine/manager/adapters/tracker` 与 `prediction.runtime`；
+  execution 层继续禁止依赖 strategy（双向隔离由测试固定）。
+- 全部经济参数（tick、step、base_size、`minimum_edge_bps`、各阈值、目标仓位、因子上界、生命周期阈值）为 `MakerPolicyConfig`
+  必填项、无默认值（§12）。
+- `minimum_edge_bps` 的语义 =「新增暴露的报价相对 mid 的方向性优势下限」；由 tick 数解析求解，达到上限仍不满足 → 该侧不报价。
+  reduce-only 报价豁免 cost floor（只降低风险）。
+- Prediction 只通过「后退 tick 数 / 哪一侧允许报价 / 有界 confidence factor」影响决策；
+  `buy/sell_fill_probability` **永不进入数量公式**（高 fill probability 可能正是高 adverse selection）。
+- 全局门（HALT_ALL > 市场不可用 > prediction stale > 未知暴露 > REDUCE_ONLY）禁止新增暴露，且**只保留已有 reduce-only 挂单**；
+  REDUCE_ONLY 模式例外地允许新挂 reduce-only。
+- 无 prediction 时新增暴露一律禁止（cost floor 不可评估 → fail closed），这是推导结果而非新增业务规则。
+
+**影响**：策略层可独立测试（114 条新测试），风险语义仍由 RiskGate 单点负责；P0001.8 的 event-level fill simulation 可在不改动本层契约的前提下接入。
+
+**人类裁决补记（2026-09-28）**：
+
+- 保留：`REDUCE_ONLY` 允许新挂 reduce-only；库存偏多时买侧「缩量 + 后退」而非停报（以后再加明确仓位阈值）。
+- **否决**「无/过期 prediction 时不允许新增 reduce-only」。理由：持仓遇到 Jev 故障/prediction 过期时，若没有存量退出挂单，
+  系统将无法主动降低风险，与「降低 exposure 应优先允许」的原则冲突。
+  因此本决策中「全局门只保留已有 reduce-only、不新增」的部分**被修正为**：
+  prediction 不可用时禁止新增**增加暴露**的报价，但**必须允许新增 reduce-only** 报价。
+- 该修正需要子阶段（独立提案）落地；在落地前 P0001.7 保持「实现中」，`currentProposal = "P0001.7"`。
+- 待明确项（不得由实现方自行决定）：`MARKET_UNHEALTHY` / `UNKNOWN_EXPOSURE` / `HALT_ALL` 下是否也允许新增 reduce-only；
+  无 prediction 时 reduce-only 报价的定价与规模依据。
+
+## D-024 Prediction 不可用时的降险连续性（P0001.7.1）
+
+**日期**：2026-09-28
+**状态**：生效（修正 D-023 中「全局门一律不新增 reduce-only」的部分）
+
+**决策**：
+
+- prediction 缺失 / 过期 / 缺 horizon 时：**只**禁止新增**增加暴露**的报价；**允许**新增 reduce-only 报价。
+  理由（人类裁决）：已持仓 + Jev 故障 + 无存量退出挂单时，系统必须仍能主动降低风险（「降低 exposure 应优先允许」）。
+- prediction 不可用时**完全退出方向性调整**：不沿用过期分布、不做 adverse-selection 后退/禁止、不做预测方向后退（不伪造 prediction）。
+- 无 prediction 的 reduce-only 报价仍必须通过：市场可用性（tradeable / book / best bid+ask+mid）、KillSwitch、订单合法性、post-only、RiskGate。
+  定价只用 best bid/ask + tick + 库存偏置；规模用有界 `confidence_factor` 下界。
+- 生命周期：prediction valid → stale 时，增加暴露的旧报价 CANCEL；合法 reduce-only 报价走正常比较（KEEP 或 REPLACE），不是全部撤掉。
+- 其他全局门保持不变：`MARKET_UNHEALTHY` / `UNKNOWN_EXPOSURE` / `HALT_ALL` 阻断全部新增报价；`REDUCE_ONLY` 熔断允许新增 reduce-only。
+- `fresh_prediction()` 是「prediction 是否可用于方向性判断」的唯一判据。
+
+**影响**：MakerPolicy 的 `PREDICTION_STALE` 分支 `allow_new_reducing=True`；观察项（`UNKNOWN_EXPOSURE` 与 `adverse_selection_block`
+对 reduce-only 的处理、中断期的 replace churn）记录在提案 P0001.7 §2，需人类裁决后才能变更。

@@ -101,6 +101,24 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 - 释放条件：reconciliation 明确确认终态或补齐资料；仅「外部消失」不释放。
 - `Order` 状态机 / Accounting / late-fill 语义均未改动。
 
+### P0001.7 — Market Making Policy（已完成）
+
+- 新增 `strategy/maker/`：`pricing`（QuotePrice）、`sizing`（QuoteSize）、`inventory`（InventoryBias）、
+  `lifecycle`（QuoteLifecycle）、`policy`（MakerPolicy 编排）、`types`（配置与决策契约）。
+- 决策形态：`MakerDecision{mode: both|bid_only|ask_only|none, bid/ask: QuoteDecision}`，
+  `QuoteAction = PLACE | KEEP | CANCEL | REPLACE | NONE`；报价规格见 `MakerDecision.quotes()`。
+- 全局门（fail closed）：`KILL_SWITCH(HALT_ALL|REDUCE_ONLY)` > `MARKET_UNHEALTHY` > `PREDICTION_STALE` > `UNKNOWN_EXPOSURE`。
+- prediction 不可用时（缺失 / 过期 / 缺 horizon）：只禁止新增**增加暴露**的报价，**允许新增 reduce-only**，且完全退出方向性调整
+  （`fresh_prediction()` 不伪造预测）—— 由 **P0001.7.1** 落地（人类裁决：降险不得被预测可用性阻断）。
+- 策略层不修改 Accounting / Execution 状态机 / Prediction Runtime（SC-13 由依赖扫描测试固定）。
+
+### P0001.7.1 — Prediction Outage Reduce-only Continuity（已完成）
+
+- 全局门 `PREDICTION_STALE` 改为 `allow_new_reducing=True`；`MARKET_UNHEALTHY` / `UNKNOWN_EXPOSURE` / `HALT_ALL` 仍阻断全部新增报价。
+- 生命周期：中断时增加暴露的旧报价 CANCEL、合法 reduce-only 报价 KEEP/REPLACE（不是全部撤掉）。
+- 观察项（未实施，待裁决）：`UNKNOWN_EXPOSURE` 与 `adverse_selection_block` 对 reduce-only 的处理、中断期 REPLACE churn。
+- 策略层不修改 Accounting / Execution 状态机 / Prediction Runtime（SC-13 由依赖扫描测试固定）。
+
 ## 进行中能力
 
 无。

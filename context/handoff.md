@@ -1,8 +1,9 @@
 ## 当前 Proposal
 
-P0001.6.1 — Uncertain Order Exposure：**已完成**。
-
+P0001.7（Market Making Policy）+ P0001.7.1（Prediction Outage Reduce-only Continuity）：**已完成**。
 `context/status.json` 中 `currentProposal` 为 `null`（无切换授权，等待人类指定下一 Proposal）。
+
+**Git**：P0001.6.1 = `d510684`；P0001.7 + P0001.7.1 = 见下文本轮提交（一个 commit）。
 
 ## 本次新增
 
@@ -274,3 +275,31 @@ python3 -m unittest -v tests.live.test_openrouter_live
 本轮改动**未提交**（本轮未获提交授权）。
 
 
+## P0001.7 + P0001.7.1 交付摘要（2026-09-28）
+
+**新增（P0001.7）**：`strategy/__init__.py`、`strategy/maker/{__init__,types,pricing,sizing,inventory,lifecycle,policy}.py`；
+测试 `tests/strategy_support.py` + unit(5 文件 65 条) / integration(2 文件 23 条) / fault(3 文件 24 条) / replay(2 条)。
+
+**新增（P0001.7.1）**：`tests/fault/test_prediction_outage_reduce_only.py`（16 条）。
+
+**修改（P0001.7.1）**：`strategy/maker/policy.py`（`PREDICTION_STALE` → `allow_new_reducing=True`；新增
+`fresh_prediction()` 让不可用 prediction 完全退出方向性调整且不伪造）、`strategy/maker/__init__.py`（导出 `fresh_prediction`）、
+`tests/fault/test_stale_prediction_quote_cancel.py`（+2 条，1 条按 SC-5 修正）、
+`tests/integration/test_maker_paper_execution.py`（中断期出口报价连续性，按 SC-5 修正）。
+
+**修改（未触碰业务代码）**：`proposals/P0001.7*`、`context/{current_state,handoff,decisions,roadmap,status.json}`。
+**未触碰** Execution / Accounting / Prediction Runtime（SC-13 由 `tests/unit/test_strategy_isolation.py` 固定）。
+
+**Acceptance**：P0001.7 SC-1 – SC-14 全部 PASS（SC-2 为裁决修正后的语义）；P0001.7.1 SC-1 – SC-8 全部 PASS。
+人类裁决：②③ 保留；①（无 prediction 不允许新增 reduce-only）被否决并由 P0001.7.1 修正。
+
+**测试**：`python3 -m unittest discover -s tests -t .` → **1014 passed / 0 failed / 12 skipped**
+（unit 668、integration 103、fault 193、replay 38、live 12 skipped）。
+
+**观察项（未实施，待人类裁决，见提案 P0001.7 §2）**
+
+1. `UNKNOWN_EXPOSURE`：策略层阻断全部新增报价（含 reduce-only），但 RiskGate 只拦增加暴露的 → 两层不一致。
+2. `adverse_selection_block`：有新鲜 prediction 时该侧（含 reduce-only 侧）被禁止新增报价。
+3. 中断期 reduce-only 挂单可能因 SIZE_DRIFT 被 REPLACE（confidence factor 取下界所致）→ 撤单窗口内暂时没有出口报价。
+
+**下一步**：等待人类指定 Proposal（路线下一阶段 P0001.8 Event-level Fill Simulation，需先落盘独立提案）。
