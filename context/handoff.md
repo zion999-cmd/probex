@@ -146,14 +146,33 @@ python3 -m unittest -v tests.live.test_openrouter_live
 
 `fmz_v3(1).js` 在整个 `~/Workspace` 中不存在（已检索）；现存唯一 Jev 参考实现即 `activation-room-poc`。
 
-## 下一步（需人类授权）
+## P1 / P2 探测结果（人类授权，2026-09-28）→ NATIVE_TYPED_JEV_AVAILABLE
 
-| 探测 | 内容 | 成本 | 回答 |
-| --- | --- | --- | --- |
-| P1 | `GET https://openrouter.ai/api/v1/models` 查 `typesafe/jev-1.13` / `typesafe/jev-router` 元数据 | 免费（只读） | Q3 部分 + Q5 |
-| P2 | 单条 `noul` 探针 `POST https://openrouter.ai/api/v1/systemone`（`model=jev-1.13`） | ~2e-05，~300–550 ms | Q3 完整 + Q4 现状复核 |
+**P1**（`GET /api/v1/models`，只读）：HTTP 200、459 ms、458 个模型。
+`typesafe/jev-router` 已列出，且被标记为 **Router**（`tokenizer="Router"`、`pricing={prompt:-1,completion:-1}`、`supported_parameters=[]`、`context_length=1e6`）；
+`typesafe/jev-1.13` 与 `typesafe/jev-latest` **不在**该清单。
 
-两个探测都必须由人类明确授权；**不使用 `activation-room-poc/.env` 的凭证**，只使用本次会话人类提供的 OpenRouter Key。
+**P2**（`POST /api/v1/systemone`，单条最小 `noul`，134 字节，仅一次）：
 
-授权后可能的后续方向（本次不实施，仅备忘）：恢复 typed `/v1/systemone` 作为 Provider；或等待 `typesafe/jev-router` 稳定；
-或更换 Provider。任何方向都需要新的提案，并会决定 `jev-market-v1` 是否需要演化为 Choice/Noul 同构的 schema。
+| 项 | 值 |
+| --- | --- |
+| HTTP status | 200 |
+| latency | 604 ms |
+| resolved model | `typesafe/jev-1.13-20260917` |
+| provider | `TypeSafe` |
+| response id | `gen-dec-1790554520-jlTE19blNb9oQLiQGg9n` |
+| answers | `{"ok": {"type": "noul", "noul": 0.99}}` |
+| usage / cost | input 277 / output 20 / 1.1634e-05 |
+
+判定：**NATIVE_TYPED_JEV_AVAILABLE**（见 `context/decisions.md` D-018）→ 热路径 Jev 应以 `/api/v1/systemone` 为目标。
+
+**本轮未做**：未改 Prediction Runtime、未改 `jev-market-v1`、未加兼容 parser、未重测 `typesafe/jev-router`、未进入 P0001.5、未做第二次 P2。
+
+## 下一步（等待人类授权）
+
+实现 typed SystemOne provider 需要**新提案**，至少要定：
+1. Question schema 演化：五分类 `future_return` → **Choice（5 路）**；四个概率问题 → **Noul**；`confidence` 只存在于 Choice/Score。
+2. Provider 契约：`POST {base}/v1/systemone`，body `{model, state, questions}`，响应 `answers.<qid>.{type,noul|choice|score}`。
+3. 是否保留 P0001.4 的 `Prediction`/`PredictionRecord` 上层契约不变（transport 换实现，schema 升级）。
+
+在上述授权前保持冻结：不动 `jev-market-v1`、不加兼容 parser、不做 prompt engineering、不进入 P0001.5。

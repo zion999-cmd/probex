@@ -8,9 +8,12 @@ P0001.1 – P0001.4 已完成并通过全部验收。
 （unstable model identity / unstable output contract / 4.9–19 s latency）。
 P0001.4.1 以 `CONTRACT_MISMATCH` / `PROVIDER_UNSUITABLE` 作为有效实验结论关闭，SC-1 按决策豁免，`jev-market-v1` 保持不变。
 
-Provider identity 核实（决策 D，提案 §1.7）：旧 ~270 ms Jev = 同一 OpenRouter 平台的
-`POST https://openrouter.ai/api/v1/systemone` + model `jev-1.13`（解析为 `typesafe/jev-1.13-20260917`，provider `TypeSafe`），
-typed `answers.<id>.{noul|choice|score}`、不生成文本。其**当前可用性**需一次获授权的探测（提案 §1.8）。
+Provider identity 核实（决策 D，提案 §1.7）与授权探测 P1/P2（提案 §1.8）已完成，结论 **NATIVE_TYPED_JEV_AVAILABLE**（D-018）：
+- 旧 ~270 ms Jev = 同一 OpenRouter 平台的 `POST https://openrouter.ai/api/v1/systemone` + model `jev-1.13`
+  （解析为 `typesafe/jev-1.13-20260917`，provider `TypeSafe`），typed `answers.<id>.{noul|choice|score}`、不生成文本。
+- 授权探测：P1 中 `typesafe/jev-router` 被标记为 **Router**（`tokenizer=Router`、`pricing=-1/-1`），`typesafe/jev-1.13` 不在 chat 模型清单；
+  P2 单条 `noul` 探针 → HTTP 200、604 ms、`answers.ok={type:noul,noul:0.99}`、cost 1.1634e-05。
+- **热路径 Jev 的真实目标应为 `/api/v1/systemone`**；实现 typed provider 需新提案（尚未授权、尚未改代码）。
 
 `context/status.json` 的 `currentProposal` 为 `null`。
 
@@ -60,7 +63,8 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 
 ## Blocker
 
-无进行中的实现。Jev 接入路径的下一步（typed 端点探测 / 等 `jev-router` 成熟 / 换 provider）**等待人类授权**，见提案 §1.8。
+无进行中的实现。Provider identity 五问已全部回答（Q3 = 可用，见提案 §1.8）。
+下一步实现 typed SystemOne provider **等待人类授权与新提案**（涉及 question schema 与 Choice/Noul 映射决策）。
 冻结项：在 Provider identity 五问全部回答前，不进入 P0001.5、不改 `jev-market-v1`、不加兼容 parser、不做 prompt engineering。
 
 ## 版本

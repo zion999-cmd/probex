@@ -176,3 +176,17 @@
 `POST https://openrouter.ai/api/v1/systemone`、model `jev-1.13` → 解析为 `typesafe/jev-1.13-20260917`、provider `TypeSafe`、
 typed `answers.<id>.{noul|choice|score}`、不生成文本。与 `typesafe/jev-router` 属同一平台不同接口/上游。
 **影响**：Jev 接入路径的后续选择（恢复 typed 端点 / 等 `jev-router` 成熟 / 换 provider）需新的授权；可用性探测见提案 §1.8。
+
+## D-018 热路径 Jev 的真实目标是 typed `/api/v1/systemone`（NATIVE_TYPED_JEV_AVAILABLE）
+
+**日期**：2026-09-28
+**状态**：生效（人类授权的 P1/P2 探测后的事实认定）
+**事实证据**（详见 `proposals/P0001.4.1-...md` §1.8）：
+- P1 `GET /api/v1/models`（458 个模型）：`typesafe/jev-router` 已列出并被标记为 **Router**（`tokenizer=Router`、`pricing=-1/-1`、`supported_parameters=[]`、context 1e6）；
+  `typesafe/jev-1.13` 与 `typesafe/jev-latest` 均**不在**该清单。
+- P2 `POST /api/v1/systemone`（单条最小 `noul`，134 字节）：HTTP 200、604 ms、
+  `model=typesafe/jev-1.13-20260917`、`provider=TypeSafe`、`answers.ok={type:noul,noul:0.99}`、`cost=1.1634e-05`、无 `confidence`。
+**判定**：`NATIVE_TYPED_JEV_AVAILABLE`。
+**含义**：Probex 热路径 Jev 的真实目标应是 `/api/v1/systemone`，而不是 chat completions 的 `typesafe/jev-router`。
+**边界**：本条只是事实认定，**尚未**修改任何代码或 schema；实现 typed SystemOne provider（含 question schema 与 Choice/Noul 映射）需要新的提案与授权。
+**不做**：不 fallback 到 chat completions、不修改 `jev-market-v1`、不增加兼容 parser、不做 prompt engineering。
