@@ -1,10 +1,21 @@
 ## 当前 Proposal
 
-P0001.9.1（Binance USDⓈ-M Live Market Data）+ P0001.9.1.1（Futures Depth Continuity Verification）：**均已完成**
-（真实公网 Acceptance 通过）。`context/status.json` 中 `currentProposal` 为 `null`（无切换授权，等待人类指定下一 Proposal）。
+P0001.9.2 — Private Account + User Stream Validation：**实现中（未关闭）**。
 
-**下一步**：P0001.9.2（Private Execution + User Stream）与 P0001.9.3（Startup Recovery + Account Reconciliation）
-均**未落盘提案**，需设计方先落盘；注意 D-021 已预告 `ExecutionAdapter` 需新的（异步 / user stream）契约决策。
+离线验收 SC-1/2/3/5/7/8/9/10/11/14/15 PASS（**1310 passed / 0 failed / 17 skipped**）；
+SC-4/SC-6/SC-12/SC-13 的**真实**部分因本机无凭据 **NOT RUN**。`status.json.currentProposal` = `P0001.9.2`，**未提交**。
+
+**补齐方式**（人类在自己 shell 执行，凭据只留在环境变量里）：
+
+```bash
+export BINANCE_API_KEY=...
+export BINANCE_API_SECRET=...
+export PROBEX_LIVE_PRIVATE=1
+python3 -m unittest -v tests.live.test_binance_private_live
+```
+
+报告会打印 `PROBEX PRIVATE LIVE SMOKE REPORT`（账户/持仓事实、listenKey 状态、private lag median/p95/max 或路径 RTT、
+去重/乱序/keepalive/重连计数）。若 median lag 超过 `max_median_private_lag_ms` ⇒ 按提案 SC-13 标记 **BLOCKED**，不进入真实下单。
 
 ## 本次新增
 

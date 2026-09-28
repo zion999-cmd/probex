@@ -30,6 +30,11 @@ DEPTH_PATH = "/fapi/v1/depth"
 EXCHANGE_INFO_PATH = "/fapi/v1/exchangeInfo"
 SERVER_TIME_PATH = "/fapi/v1/time"
 
+#: 私有账户端点（P0001.9.2）。**只读**：本仓库不包含任何下单/撤单端点常量。
+ACCOUNT_PATH = "/fapi/v2/account"
+POSITION_RISK_PATH = "/fapi/v2/positionRisk"
+LISTEN_KEY_PATH = "/fapi/v1/listenKey"
+
 #: WS 主机（tier 只是路径前缀）。
 WS_HOST = "wss://fstream.binance.com"
 
@@ -59,6 +64,21 @@ class StreamTier(Enum):
             raise ValueError("streams must not be empty")
         return f"{self.base_url}/stream?streams={'/'.join(streams)}"
 
+    def user_data_url(self, listen_key: str, *, ws_host: str | None = None) -> str:
+        """user data stream URL（private tier，listenKey 作为查询参数）。
+
+        不确定性：2026 tier 迁移后的 private 入口形态来自第三方迁移 PR 与支持公告镜像，
+        未取得官方开发者文档直证 ⇒ 允许整体覆盖（`ws_host`），错误以可观察失败暴露。
+        """
+        if not isinstance(listen_key, str) or not listen_key:
+            raise ValueError("listen_key must be a non-empty string")
+        base = self.base_url if ws_host is None else self.with_host(ws_host)
+        return f"{base}/ws?listenKey={listen_key}"
+
+    def sanitized_user_data_url(self, listen_key: str, *, ws_host: str | None = None) -> str:
+        """遮蔽 listenKey 的 URL（用于日志 / telemetry / 异常文本）。"""
+        return self.user_data_url(listen_key, ws_host=ws_host).replace(listen_key, "***")
+
     def with_host(self, ws_host: str) -> str:
         """覆盖 WS 主机（用于测试 / 端点迁移），返回该 tier 的基础 URL。"""
         if not isinstance(ws_host, str) or not ws_host.startswith(("ws://", "wss://")):
@@ -67,8 +87,11 @@ class StreamTier(Enum):
 
 
 __all__ = [
+    "ACCOUNT_PATH",
     "DEPTH_PATH",
     "EXCHANGE_INFO_PATH",
+    "LISTEN_KEY_PATH",
+    "POSITION_RISK_PATH",
     "REST_BASE_URL",
     "SERVER_TIME_PATH",
     "WS_HOST",

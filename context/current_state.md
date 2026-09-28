@@ -161,6 +161,16 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 - 真实流核验：`pu` 100% 连续（199/199、473 对样本）、旧规则 0%；修复后真实 smoke **gap 0 / resync 1 / HEALTHY 100% /
   event lag 中位 −48 ms**（修前 7267 ms）。
 
+### P0001.9.2 — Private Account + User Stream Validation（实现中：离线通过，真实凭据 smoke 待执行）
+
+- 新增 `connectors/binance/private/`：`auth`（凭据 + HMAC 签名 + server-time offset + 遮蔽工具）、`rest`（签名 REST + listenKey）、
+  `account` / `positions`（账户与持仓事实）、`events`（ACCOUNT_UPDATE / ORDER_TRADE_UPDATE / listenKeyExpired + 去重/乱序）、
+  `user_stream`（7 态 listenKey 状态机 + private tier WS 客户端）、`telemetry`、`runtime`（只读运行时）、`errors`。
+- 纪律：凭据只在环境变量中；签名与 query 不进日志/异常；**无任何下单/撤单端点**（静态测试固定）；
+  非 one-way/USDT-M fail closed；重连后 `continuity_assumed=False`。
+- 本机无凭据 ⇒ 认证 smoke NOT RUN（运行即抛 `CredentialsError ... refusing to start`，即 SC-1 的真实证据）；
+  `status.json.currentProposal` 仍为 `P0001.9.2`，未提交。
+
 ## 进行中能力
 
 无。

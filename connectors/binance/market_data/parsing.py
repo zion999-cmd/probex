@@ -84,6 +84,20 @@ def require_optional_int(value: object, *, path: str) -> int | None:
     return require_int(value, path=path)
 
 
+def require_optional_decimal(value: object, *, path: str) -> float | None:
+    """可选十进制字段：`None` 原样返回；类型不符时 fail closed。"""
+    if value is None:
+        return None
+    return require_decimal(value, path=path)
+
+
+def require_optional_str(value: object, *, path: str) -> str | None:
+    """可选非空字符串字段。"""
+    if value is None:
+        return None
+    return require_str(value, path=path)
+
+
 def require_bool(value: object, *, path: str) -> bool:
     """布尔字段窄化：拒绝整数冒充布尔（Binance 用真布尔）。"""
     if not isinstance(value, bool):
@@ -93,7 +107,9 @@ def require_bool(value: object, *, path: str) -> bool:
 
 __all__ = [
     "require_bool",
+    "require_optional_decimal",
     "require_optional_int",
+    "require_optional_str",
     "require_decimal",
     "require_field",
     "require_int",

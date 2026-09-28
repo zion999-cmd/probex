@@ -38,8 +38,13 @@ ALLOWED_ROOTS = {
     "connectors",
 } | SENSITIVE_ROOTS
 
-#: 凭据相关标识（本阶段必须为零）。
-CREDENTIAL_MARKERS = ("apiKey", "api_key", "secret", "listenKey", "listen_key", "signature", "Authorization")
+#: 凭据相关标识（public market data 层必须为零）。
+#:
+#: 注：`listenKey` 自 P0001.9.2 起允许**只**出现在 `endpoints.py`（私有 tier 的 URL 模板常量），
+#: 其余 market_data 模块仍禁止涉及任何凭据/密钥概念（见 `test_listen_key_only_in_endpoints`）。
+CREDENTIAL_MARKERS = ("apiKey", "api_key", "secret", "signature", "Authorization")
+#: 允许出现 `listenKey` 的模块（仅端点常量）。
+LISTEN_KEY_ALLOWED = {"endpoints.py"}
 
 
 def _files() -> list[Path]:
@@ -85,12 +90,20 @@ class LiveIsolationTest(unittest.TestCase):
                 self.assertEqual(_imported_roots(path) - ALLOWED_ROOTS, set())
 
     def test_no_credentials_anywhere_in_the_phase(self) -> None:
-        """SC-12：整层没有任何凭据引用 ⇒ 无 API Key 也能完成全部 live smoke。"""
+        """SC-12：public market data 层没有任何凭据引用 ⇒ 无 API Key 也能完成全部 live smoke。"""
         for path in _files():
             source = path.read_text(encoding="utf-8")
             for marker in CREDENTIAL_MARKERS:
                 with self.subTest(module=path.name, marker=marker):
                     self.assertNotIn(marker, source)
+
+    def test_listen_key_only_in_endpoints(self) -> None:
+        """`listenKey` 只作为端点常量存在；market data 逻辑不接触 listenKey 概念。"""
+        for path in _files():
+            if path.name in LISTEN_KEY_ALLOWED:
+                continue
+            with self.subTest(module=path.name):
+                self.assertNotIn("listen", path.read_text(encoding="utf-8").lower())
 
 
 if __name__ == "__main__":

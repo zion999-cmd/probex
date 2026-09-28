@@ -442,3 +442,32 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
 
 **证据（真实流，见提案 P0001.9.1.1 §1.1/§1.2）**：`pu` 100% 连续（473 对样本）、旧规则 0% 通过；
 修复后真实 smoke **gap 0 / resync 1（初始）/ HEALTHY 100% / event lag 中位 −48 ms**（修前 7267 ms）。
+## D-030 私有账户层（只读）的契约（P0001.9.2）
+
+**日期**：2026-09-28
+**状态**：生效（**未关闭**：真实凭据 smoke 未执行，SC-4/6/12/13 待补真实数据）
+
+**决策**：
+
+- **凭据纪律**：只从环境变量 `BINANCE_API_KEY` / `BINANCE_API_SECRET` 读取（唯一读取点 `auth.py`）；
+  凭据与**签名**都按敏感处理——`repr`/`str`/异常/telemetry/事件记录一律遮蔽，
+  REST 错误只报 `method + path + HTTP 状态`（签名等价可重放凭证）。
+- **签名**：`HMAC-SHA256(secret, canonical_query)`，参数排序后追加 `timestamp` 与 `recvWindow`；
+  发出的 query 与签名的 query 逐字节一致；签名时间戳 = 本地时间 + `ServerTimeOffset`（先测 `/fapi/v1/time`）。
+- **只读边界**：本层没有任何下单/撤单/杠杆/保证金模式/持仓模式端点（静态测试固定）；
+  只产出 `AccountSnapshotObservation` / `PositionObservation` / `OrderUpdateObservation` 等事实，
+  不写 `OrderTracker` / Accounting、不驱动 `ExecutionEngine`；对账属 P0001.9.3。
+- **账户模式**：只接受 one-way + USDT-M；`positionSide != BOTH` 或 `dualSidePosition=True` ⇒
+  `UnsupportedAccountModeError`（fail closed，不自动兼容）。
+- **启动顺序**：`listenKey → user stream → account/position snapshot → snapshot boundary`，
+  避免「先快照、后开流」的状态空窗；边界（两个接收时间戳 + listenKey 状态）留给 P0001.9.3。
+- **listenKey 生命周期**：7 态显式状态机（`STOPPED/STARTING/ACTIVE/RENEWING/EXPIRED/RECONNECTING/FAILED`），
+  非法转换抛错；keepalive 间隔与 TTL 全部注入（TTL 官方 60 分钟，常量仅作参考）；
+  续期失败 ⇒ `FAILED`；TTL 到期或 `listenKeyExpired` ⇒ 重建 + 重连。
+- **连续性**：重连 / 重建 listenKey 后 `continuity_assumed = False`，只有新的 snapshot boundary 才恢复；
+  不静默假设事件连续（真正对账留给 P0001.9.3）。
+- **去重/乱序**：订单事件按每单 `cumulative_fill_quantity` 水位 + `(client_order_id, trade_id)`；
+  账户事件按 `(transaction_ts, event_ts)` 水位；两者计数进 telemetry。
+- **lag 语义**：`private_lag_ms` = 业务事件的 `receive_ts - event_ts` 分布（median/p95/max）；
+  窗口内无业务事件时以 `snapshot_round_trip_ms`（私有 REST 路径 RTT）作为**明确标注**的替代基准；
+  SC-13 的 BLOCKED 判定按 median 与 `max_median_private_lag_ms` 比较。

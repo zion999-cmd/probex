@@ -19,7 +19,7 @@ P0001.7.1 Prediction Outage Reduce-only Continuity ← 已完成
 P0001.8   Event-level Fill Simulation            ← 已完成
 P0001.9.1 Public Market Data Live                ← 已完成（真实公网验收通过）
 P0001.9.1.1 Futures Depth Continuity Verification ← 已完成（pu 判据修正）
-P0001.9.2 Private Execution + User Stream        ← 未开始
+P0001.9.2 Private Account + User Stream Validation ← 实现中（离线全通过；真实凭据 smoke 待执行）
 P0001.9.3 Startup Recovery + Account Reconciliation ← 未开始
 P0001.5   Accounting + Risk
 P0001.6   Paper Execution + Order Lifecycle
