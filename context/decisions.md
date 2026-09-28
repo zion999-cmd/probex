@@ -823,3 +823,35 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
    不是防篡改凭证（提案明文不声称）。
 7. **D-043 状态**：主要条款已关闭（见 P0001.9.5 §1.5）；**未**关闭的是"activation/authority 的产品 CLI 入口"
    与"主网验证记录的自动化"（需独立提案）。
+
+## D-048 Binance USDⓈ-M ExecutionAdapter：写边界 / 三分类 / 幂等主键（P0001.9.6）
+
+**日期**：2026-09-28
+**状态**：生效
+
+1. **读写边界显式分离**：`connectors/binance/private/` 保持只读；写路径独立在
+   `connectors/binance/execution/`（`/fapi/v1/order` 的 POST/DELETE/GET）。静态测试固定：
+   写标记只允许出现在 execution 目录。
+2. **submit 结果三分类**（结构化，不做字符串猜测）：
+   - 4xx + 业务错误码（交易所已处理）⇒ `ExecutionRequestRejected` ⇒ **CONFIRMED_REJECTED** ⇒ `OrderRejected`；
+   - 5xx / 429 / 408 / 不可解析 ⇒ `ExecutionOutcomeUnknown` ⇒ **UNKNOWN** ⇒ **返回空事件**（不生成 FAILED）；
+   - 传输/超时 ⇒ `TransportError` ⇒ **UNKNOWN**。
+   **UNKNOWN 绝不自动重试**；只允许用 `query_order(origClientOrderId)` 收敛（D-021 的延续）。
+3. **authority 紧邻写请求**：submit 前校验 TTL / scope / recovery_generation / market_generation / HWM / kill switch，
+   任一失效 ⇒ 本地拒单（`local_reject:<REASON>`）且**零 HTTP**；**cancel 不要求 LIVE_READY**（降险不可被锁死，延续 D-021 的 HALT_ALL 语义）。
+4. **clientOrderId 是幂等主键**：直接使用 `Order.client_order_id` 作为 `newClientOrderId`（不另生成），
+   与 P0001.9.3.1 的 ownership boundary（`probex-`）一致。
+5. **第一版订单范围固定**：LIMIT + GTX(post-only) + `positionSide=BOTH`；不自动 round（tick/step/min/notional 不合法即拒绝）；
+   MARKET / stop / hedge / IOC / FOK / GTD / modify / batch **均不实现**。
+6. **成交事实只来自 trade execution**：query 结果**不**生成 canonical Fill（无 trade_id / commission）；
+   既有 `OrderTracker` / `FillLedger` 继续负责去重与 late-fill 语义。
+7. **user stream 是主要异步事实源**：`bridge_user_event()` 把 `ORDER_TRADE_UPDATE` 转成既有 `ExecutionEvent`，
+   **不新建订单状态机**；与本地终态冲突的转换跳过并计数（冲突交由既有 reconciliation）。
+8. **RiskGate 不可绕过**：authority 只表示"该 runtime 有资格写"，每一笔仍走 fresh `RiskSnapshot` → `RiskGate`；
+   `valid authority ≠ order allowed`。
+9. **范围**：本阶段只验证 **Testnet 写链闭环**；主网写路径未验证，且受 readiness + 人类授权双重限制。
+10. **UNKNOWN ≠ EMPTY（implementation correction，2026-09-28 人类裁决）**：
+    `open_orders()` / `recent_fills()` 的空元组只能表示"交易所**确认**没有挂单/没有成交"。
+    provider 未注入 / 读取失败 / 解析失败 / 缺方法 ⇒ 抛 `ExternalFactsUnavailableError`，
+    **绝不**返回空集合；只有 provider 真实返回空时才允许 `()`。
+    provider 契约提升为 `ExternalFactsProvider` Protocol（产品不内置实现，由 live 编排层注入）。

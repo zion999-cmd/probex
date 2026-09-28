@@ -1111,3 +1111,46 @@ Binance ExecutionAdapter）**必须**由人类落盘新提案后再实施；不�
 **下一步**：`currentProposal = null`；等待人类落盘 `P0001.9.6（Binance ExecutionAdapter）` 或其他提案；
 不得自行启动。~~本轮改动尚未 commit / push~~ —— **superseded（2026-09-28）**：
 P0001.9.5 已作为 commit `a2ab8da` 提交并 push 到 `origin/master`（1631 passed）。
+
+## 2026-09-28：P0001.9.6 Binance USDⓈ-M ExecutionAdapter（已完成）
+
+**当前 Proposal**：P0001.9.6（完成后按 CLAUDE.md §5 回到 `null`）。
+
+**本次新增**
+
+- `connectors/binance/execution/{__init__,rest,parsing,adapter}.py`：写路径唯一 Owner（`/fapi/v1/order` POST/DELETE/GET）
+  + 结构化错误 + 严格解析 + `BinanceExecutionAdapter`。
+- 测试：`tests/execution_support_live.py`、`tests/unit/test_execution_adapter.py`（31）、
+  `tests/unit/test_execution_adapter_boundary.py`（6，静态边界）、`tests/fault/test_execution_adapter_faults.py`（10）、
+  `tests/integration/test_binance_execution_adapter.py`（8）。
+
+**本次修改**：`proposals/P0001.9.6-*.md`（§0/§1）；`context/*`（D-048、roadmap、current_state）。
+**未改动**：`connectors/binance/private/**`（仍只读）、`execution/**`（Engine/Manager/Tracker/RiskGate 全部沿用）、
+`risk/**`、`readiness/**`、`strategy/**`。
+
+**Acceptance 结果（SC-1 – SC-30 全 PASS；矩阵见提案 §1.2）**
+
+- **真实 Testnet 写链**：readiness `live_ready` → authority → 真实 submit `NEW`（orderId 28607085026）→ cancel `CANCELED`；
+  响应丢失注入 ⇒ UNKNOWN、**POST 仅 1 次**、query 收敛、**无重复单**；撤单响应丢失 ⇒ 空事件 → query 收敛 `OrderCanceled`；
+  最终 `position 0` / `our_open_orders 0`；8 条真实 `ORDER_TRADE_UPDATE` 桥接入 Tracker。
+- **authority 门**：4 类失效（缺 authority / 过期 / generation 变化 / kill switch）各断言**零 HTTP**；
+  cancel 在无 authority / HALT_ALL 下仍可用。
+- **不变量**：query 不造 Fill；重复 fill 只记 1 笔；late fill 不回退状态；RiskGate 被挡时零请求。
+- 观察（gate 正确）：首轮 readiness 因 `AVAILABLE_BALANCE_STALE`（31.5 s > 30 s）阻塞，harness 刷新快照后恢复。
+
+**测试结果**：unit 1057 / integration 260 / fault 296 / replay 49 passed；live 24 skipped；
+全量 **1686 passed / 0 failed / 24 skipped**；独立检出（`git archive HEAD` + 工作树叠加）同样全 PASS。
+
+**风险 / 已知问题**
+
+1. 主网写路径未验证（受 readiness `MAINNET_PRIVATE_NOT_VALIDATED` + 人类授权双限）。
+2. **correction（2026-09-28，人类裁决）**：`open_orders()/recent_fills()` 在 provider 未注入/读取失败时
+   **抛 `ExternalFactsUnavailableError`**（UNKNOWN ≠ EMPTY）；只有 provider 真实返回空元组才返回 `()`。
+   provider 契约 = `ExternalFactsProvider` Protocol（产品不内置实现，由 live 编排层注入）。
+3. adapter 同步接口 + `poll()` 队列（§18 明确不改成 async）；真实生命周期由 user stream 桥接承担。
+4. 只实现 LIMIT+GTX；MARKET/stop/hedge/IOC/FOK/GTD/modify/batch 均未实现（提案 NOT Included）。
+5. `bridge_user_event()` 对"与本地终态冲突"的转换跳过并计数：冲突本身仍由既有 reconciliation 报告（不在 adapter 里裁决）。
+
+**阻塞**：无。
+**下一步**：`currentProposal = null`；等待人类落盘下一提案（策略 live loop / 主网验证 / P0001.10 等）。
+本轮改动**尚未 commit / push**（未获授权）。

@@ -15,7 +15,7 @@ Provider identity 核实（决策 D，提案 §1.7）与授权探测 P1/P2（提
   P2 单条 `noul` 探针 → HTTP 200、604 ms、`answers.ok={type:noul,noul:0.99}`、cost 1.1634e-05。
 - **热路径 Jev 的真实目标应为 `/api/v1/systemone`**；实现 typed provider 需新提案（尚未授权、尚未改代码）。
 
-`context/status.json` 的 `currentProposal` 为 `null`（**P0001.9.5 已收口**，等待下一条正式 Proposal）。
+`context/status.json` 的 `currentProposal` 为 `null`（**P0001.9.6 已收口**，等待下一条正式 Proposal）。
 
 ## 已完成能力
 
@@ -329,6 +329,27 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 - **D-043 主要条款关闭**（§1.5）；未关闭项：activation/authority 的产品 CLI、主网验证记录自动化。
 - 全量测试 **1631 passed / 0 failed / 24 skipped**；`context/status.json.currentProposal` 回到 `null`。
 
+### P0001.9.6 — Binance USDⓈ-M ExecutionAdapter（已完成）
+
+- 新增 `connectors/binance/execution/`（**写边界**，与只读 private 层分离）：`rest.py`（POST/DELETE/GET `/fapi/v1/order`，
+  结构化错误：4xx 业务码 ⇒ `ExecutionRequestRejected`、5xx/429/408/不可解析 ⇒ `ExecutionOutcomeUnknown`）、
+  `parsing.py`（严格解析 + `SubmitClassification`）、`adapter.py`（`BinanceExecutionAdapter`）。
+- **第一版范围固定**：LIMIT + GTX(post-only) + `positionSide=BOTH`；`post_only=False` / 未知类型 / 步长价格不合法 **本地拒绝**，
+  **不自动 round**；`clientOrderId` 原样作为 `newClientOrderId`（幂等主键）。
+- **submit 三分类**：可解析 ACK ⇒ `OrderAccepted`；业务拒绝 ⇒ `OrderRejected`；其余 ⇒ **UNKNOWN ⇒ 空事件、绝不重试**，
+  只允许 `query_order(origClientOrderId)` 收敛；cancel 未确认绝不伪造 CANCELED。
+- **authority 紧邻写请求**（P0001.9.5）：TTL/scope/generation/HWM/kill switch 任一失效 ⇒ 本地拒单且**零 HTTP**；
+  **cancel 不要求 LIVE_READY**（降险不可被锁死）。RiskGate 仍逐单执行（未改 `execution/**`）。
+- **user stream 桥接**：`bridge_user_event()` 把真实 `ORDER_TRADE_UPDATE` 转成既有 `ExecutionEvent`；成交只来自 trade execution
+  （query 不造 Fill）；与本地终态冲突的转换跳过并计数。
+- **真实 Testnet 验收 PASS**：readiness `live_ready` ⇒ 签发 authority ⇒ 真实 submit（`NEW`，orderId 28607085026）→ cancel（`CANCELED`）；
+  响应丢失注入 ⇒ UNKNOWN 且 **POST 只发 1 次**、query 收敛、**无重复单**；撤单响应丢失 ⇒ 空事件后 query 收敛；
+  最终 `position 0` / `open orders 0`；全程 8 条真实 `ORDER_TRADE_UPDATE` 入既有 Tracker。
+- **implementation correction（2026-09-28，人类裁决）**：`open_orders()` / `recent_fills()` 在事实 provider
+  未注入/读取失败时**抛 `ExternalFactsUnavailableError`**，绝不返回空集合（**UNKNOWN ≠ EMPTY**）；
+  provider 契约 = `ExternalFactsProvider` Protocol。
+- 全量测试 **1693 passed / 0 failed / 24 skipped**；`context/status.json.currentProposal` 回到 `null`。
+
 ## 进行中能力
 
 无。
@@ -336,9 +357,9 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 
 ## 下一步
 
-- **无授权中的步骤**：P0001.9.3 – P0001.9.5 均已收口，`currentProposal = null`。
-  Testnet readiness blocker 集合为空且已有短时执行授权链；下一步（Binance ExecutionAdapter）**必须**由人类
-  落盘新提案后才可实施 —— 不得据此推断或启动；实现时仍须逐订单走 `RiskGate`。
+- **无授权中的步骤**：P0001.9.3 – P0001.9.6 均已收口，`currentProposal = null`。
+  产品现已具备 **Testnet 写执行能力**（LIMIT+GTX），但**主网写路径未验证**、也未获授权；
+  任何真实交易/策略 live loop 都必须由人类落盘新提案后才可实施 —— 不得据此推断或启动。
   真实下单能力（Binance ExecutionAdapter）**尚未授权**，且 readiness 目前必然 BLOCKED（历史风险未知），
   任何"进入真实交易"的下一步都必须由人类落盘新提案。下一阶段必须由人类/设计方落盘正式 Proposal，
   再由人类下达「读取 … 实施」指令后才可实现（不得从 roadmap / handoff 推断任务）。

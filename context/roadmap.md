@@ -29,7 +29,7 @@ P0001.9.4.1 Historical Risk Bootstrap              ← 已完成（income 恢复
 P0001.9.4.1.1 Full Testnet Readiness Integration Validation ← 已完成（唯一 blocker = HISTORICAL_DRAWDOWN_UNKNOWN）
 P0001.9.4.2 Persistent Equity High-Watermark      ← 已完成（Testnet 跨进程验收：readiness reasons = []）
 P0001.9.5 Execution Readiness Evidence Binding    ← 已完成（受控 evidence + 短时授权 + generation 失效链）
-P0001.9.6 Binance ExecutionAdapter                ← 未启动（待正式 Proposal；必须先经 authority + 逐单 RiskGate）
+P0001.9.6 Binance ExecutionAdapter                ← 已完成（Testnet 写链闭环：submit/cancel/UNKNOWN 收敛；product 首次具备写能力）
 P0001.10  Product API / UI / Reports       ← 未启动（待正式 Proposal）
 ```
 
@@ -70,5 +70,5 @@ P0001.10  Product API / UI / Reports       ← 未启动（待正式 Proposal）
 | P0001.9.4.1.1 | 已完成（真实集成验证：market_ready 由事实判定、corrected=raw+offset 成立、唯一 blocker = drawdown） |
 | P0001.9.4.2 | 已完成（durable HWM：activate→persist→restart→recovery→restore→readiness，Testnet `live_ready` / reasons `[]`） |
 | P0001.9.5 | 已完成（typed market/environment/HWM 绑定 + collector + authority TTL/generation 校验；Testnet 授权链验收 PASS） |
-| P0001.9.6 | 未启动（真实 ExecutionAdapter；无正式提案） |
+| P0001.9.6 | 已完成（LIMIT+GTX 写执行；三分类结果、clientOrderId 幂等、UNKNOWN 不重试；Testnet 验收 PASS） |
 | P0001.10 | 未开始（待正式提案落盘） |
