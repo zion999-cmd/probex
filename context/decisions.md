@@ -771,3 +771,26 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
    readiness policy 必须显式给出该阈值，且不得把"忽略 RTT"当作通过。
 5. **测试网写操作的授权边界**（延续 D-034，仅限本验证阶段）：仅 Testnet / 仅 BTCUSDT / notional ≤ 100 USDT /
    写操作仅存在于仓库外 harness / 最终必须 flat 且 0 挂单；**产品代码仍然没有任何 submit/cancel 能力**。
+
+## D-046 durable Equity High-Watermark：drawdown 自 trusted activation point 起（P0001.9.4.2）
+
+**日期**：2026-09-28
+**状态**：生效
+
+1. **语义**：`drawdown` = 自 **trusted activation point** 起、相对此后最高**可信**权益的回撤；
+   **不是**"账户历史最高权益"。`activation_ts` / `activation_equity` 必须随状态持久化（审计可追溯）。
+   历史 equity 重建**不做**（P0001.9.4.1.1 结论已证明唯一结构性缺口是 drawdown，而非历史账目）。
+2. **activation 必须显式且永不自动**：前置条件 = `RECOVERED` + flat + 0 挂单 + 无 unresolved + daily PnL known +
+   equity known + 快照新鲜 + 本地/交易所 equity 一致（显式 tolerance）。**删除状态文件不等于重置**
+   （文件缺失 ⇒ `UNINITIALIZED` ⇒ readiness BLOCKED，因为不会自动重新初始化）。
+3. **peak 单调 + durable-before-publish**：只有 `equity > peak` 才提升；提升前必须 `fsync + atomic replace` 成功，
+   否则**不发布**（内存保持旧 peak）。写失败 ⇒ readiness `HIGH_WATERMARK_STORE_FAILED`。
+4. **restart / crash / UTC midnight 都不重置**：新进程只从磁盘加载旧 peak 继续同一 epoch；
+   对 ACTIVE epoch 重复 `activate()` 直接被拒绝（否则"再来一次"就能洗掉 drawdown）。
+5. **外部资本流 `TRANSFER` ⇒ INVALIDATED**（`EXTERNAL_CAPITAL_FLOW_DETECTED`），要求显式 rebase；
+   本阶段**不**实现 cash-flow-adjusted NAV（deposit/withdraw 既不能被当作 trading peak，也不能被当作 trading drawdown）。
+6. **rebase = 新 epoch**：人类显式授权 + flat + 0 挂单 + RECOVERED + 新鲜快照 + daily PnL known +
+   新的 `activation_id` ⇒ `generation + 1`；旧状态以 `INVALIDATED + invalidation_kind + reason` 留在文件里（不原地抹掉）。
+7. **scope**：状态携带 `scope`（TESTNET/MAINNET）与 `deployment_id`；testnet/mainnet 状态不互载。
+8. **Paper / Replay 不变**：`high_watermark` 是可选注入；不传时完全沿用原 session-derived 峰值语义。
+9. **与 Daily Loss 的分工**：daily loss 是 UTC 日作用域；drawdown 是 activation epoch 作用域（D-039 的语义分离继续有效）。

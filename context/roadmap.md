@@ -27,7 +27,7 @@ P0001.9.3.2 Discontinuity Notification Reliability ← 已完成（observer 故�
 P0001.9.4 Live Readiness Gate                     ← 已完成（RECOVERED ≠ LIVE_READY；测试网 readonly 验收 PASS）
 P0001.9.4.1 Historical Risk Bootstrap              ← 已完成（income 恢复 daily PnL；drawdown 仍 UNKNOWN）
 P0001.9.4.1.1 Full Testnet Readiness Integration Validation ← 已完成（唯一 blocker = HISTORICAL_DRAWDOWN_UNKNOWN）
-P0001.9.4.2 Drawdown Continuity / Equity HWM      ← 未启动（是否必要由人根据 .1.1 结论决定）
+P0001.9.4.2 Persistent Equity High-Watermark      ← 已完成（Testnet 跨进程验收：readiness reasons = []）
 P0001.10  Product API / UI / Reports       ← 未启动（待正式 Proposal）
 ```
 
@@ -66,5 +66,5 @@ P0001.10  Product API / UI / Reports       ← 未启动（待正式 Proposal）
 | P0001.9.4 | 已完成（readiness gate + 交易所可用余额 + drawdown 事实链修正 + 时钟校正；测试网验收 BLOCKED 且可解释） |
 | P0001.9.4.1 | 已完成（真实 income 历史恢复 daily PnL：−1.27395553 USDT；drawdown/peak 仍 UNKNOWN ⇒ 仍 BLOCKED） |
 | P0001.9.4.1.1 | 已完成（真实集成验证：market_ready 由事实判定、corrected=raw+offset 成立、唯一 blocker = drawdown） |
-| P0001.9.4.2 | 未启动（是否必要待人类依据 `.1.1` 结论决定） |
+| P0001.9.4.2 | 已完成（durable HWM：activate→persist→restart→recovery→restore→readiness，Testnet `live_ready` / reasons `[]`） |
 | P0001.10 | 未开始（待正式提案落盘） |

@@ -7,6 +7,15 @@ Prediction / Jev / Strategy / Execution。
 from __future__ import annotations
 
 from risk.gate import RiskGate, classify_exposure
+from risk.high_watermark import (
+    ActivationPreconditions,
+    EquityHighWatermarkState,
+    HighWatermarkError,
+    HighWatermarkEvidence,
+    HighWatermarkScope,
+    HighWatermarkStatus,
+    HighWatermarkTracker,
+)
 from risk.history import BASELINE_SOURCE_BINANCE_INCOME, HistoricalRiskBaseline, HistoricalRiskError
 from risk.limits import RiskLimits
 from risk.snapshot import build_risk_snapshot, utc_day_start_ms
@@ -22,7 +31,14 @@ from risk.types import (
 )
 
 __all__ = [
+    "ActivationPreconditions",
     "BASELINE_SOURCE_BINANCE_INCOME",
+    "EquityHighWatermarkState",
+    "HighWatermarkError",
+    "HighWatermarkEvidence",
+    "HighWatermarkScope",
+    "HighWatermarkStatus",
+    "HighWatermarkTracker",
     "ExposureClass",
     "HistoricalRiskBaseline",
     "HistoricalRiskError",

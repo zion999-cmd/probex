@@ -34,6 +34,7 @@ from readiness import (
 )
 from risk.snapshot import build_risk_snapshot, utc_day_start_ms
 from risk.types import AvailableBalanceSource
+from tests.readiness_support import active_hwm, activated_tracker
 from tests.private_support import (
     SYMBOL,
     account_payload,
@@ -78,17 +79,21 @@ def _evidence(
     mainnet_private_validated: bool = False,
     environment: Environment = Environment.TESTNET,
     market_ready: bool = True,
+    high_watermark=None,
+    use_high_watermark_in_snapshot: bool = False,
 ) -> LiveReadinessEvidence:
     """用**真实对象**组装证据（telemetry / account snapshot / accounting → RiskSnapshot）。"""
     observation = parse_account_snapshot(
         account_payload(), symbol=SYMBOL, receive_ts=now_ms, process_ts=now_ms
     )
+    hwm = active_hwm() if high_watermark is None else high_watermark
     snapshot = build_risk_snapshot(
         accounting,
         symbol=SYMBOL,
         now_ms=now_ms,
         day_start_ts=day_start_ts,
         exchange_available_balance=exchange_available_balance(observation),
+        high_watermark=hwm if use_high_watermark_in_snapshot else None,
     )
     return LiveReadinessEvidence(
         now_ms=now_ms,
@@ -103,6 +108,7 @@ def _evidence(
         ),
         market_ready=market_ready,
         risk_policy=LIVE_RISK_POLICY,
+        high_watermark=hwm,
     ), snapshot
 
 
@@ -172,12 +178,15 @@ class RecoveryToReadinessTest(unittest.TestCase):
         runtime.pump_once(timeout_s=0.01)
 
         now = BASE_TS
+        tracker, _store = activated_tracker(equity=known.equity() or 0.0, ts=now)
         evidence, snapshot = _evidence(
             runtime=runtime,
             recovery_status=recovery.state,
             accounting=known,
             now_ms=now,
             day_start_ts=utc_day_start_ms(now),
+            high_watermark=tracker.evidence(),
+            use_high_watermark_in_snapshot=True,  # SC-18 / SC-19
         )
         result = LiveReadinessGate(policy=READINESS_POLICY).evaluate(evidence)
 

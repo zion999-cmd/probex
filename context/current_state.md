@@ -15,7 +15,7 @@ Provider identity 核实（决策 D，提案 §1.7）与授权探测 P1/P2（提
   P2 单条 `noul` 探针 → HTTP 200、604 ms、`answers.ok={type:noul,noul:0.99}`、cost 1.1634e-05。
 - **热路径 Jev 的真实目标应为 `/api/v1/systemone`**；实现 typed provider 需新提案（尚未授权、尚未改代码）。
 
-`context/status.json` 的 `currentProposal` 为 `null`（**P0001.9.4.1.1 已收口**，等待下一条正式 Proposal）。
+`context/status.json` 的 `currentProposal` 为 `null`（**P0001.9.4.2 已收口**，等待下一条正式 Proposal）。
 
 ## 已完成能力
 
@@ -293,6 +293,24 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 - `context/current_state.md` 版本表漂移修正（P0001.9.4 / .1 已为 `108ab49` 并 push）。
 - 全量测试 **1524 passed / 0 failed / 24 skipped**；`context/status.json.currentProposal` 回到 `null`。
 
+### P0001.9.4.2 — Persistent Equity High-Watermark（已完成）
+
+- 新增 `risk/high_watermark.py`（domain）+ `storage/high_watermark.py`（窄 durable store，`temp → flush → fsync →
+  atomic replace`）：`EquityHighWatermarkState` / `ActivationPreconditions` / `HighWatermarkEvidence` / `HighWatermarkTracker`。
+- **语义**：drawdown = 自 **trusted activation point** 起相对最高可信权益的回撤（非历史最高权益）；
+  activation 必须显式（RECOVERED / flat / 0 挂单 / 无 unresolved / daily PnL known / equity known / 快照新鲜 / equity 一致）。
+- **不变量**：peak 单调 + **durable-before-publish**（save 失败不发布）；restart / crash / UTC 午夜都不重置；
+  删除状态文件 ≠ 重置（缺失 ⇒ `UNINITIALIZED` ⇒ BLOCKED）；`TRANSFER` ⇒ `INVALIDATED`（要求显式 rebase，不做 cash-flow NAV）。
+- `risk/snapshot.py` 支持 `high_watermark=` 注入 ⇒ `peak_equity` / `drawdown` / `drawdown_pct` 来自 durable HWM
+  （Paper/Replay 不传即完全不变）；readiness 新增 5 个 reason code：
+  `HIGH_WATERMARK_NOT_INITIALIZED` / `HIGH_WATERMARK_INVALID` / `HIGH_WATERMARK_STORE_FAILED` /
+  `EXTERNAL_CAPITAL_FLOW_DETECTED` / `EQUITY_MISMATCH`。
+- **真实 Testnet 跨进程验收（SC-20）**：Phase A（进程 1）activation 前置条件全满足（local 与 exchange equity
+  diff 0.0）并持久化；Phase B（**新进程**）加载同一 activation、peak 未被重置，public market ready、
+  2 条业务事件、clock offset 270 / uncertainty 182 ms、income daily known、无新 TRANSFER、recovery RECOVERED、
+  最终 flat + 0 挂单 ⇒ **readiness = `live_ready`、scope `testnet_live_ready`、reasons = `[]`**。
+- 全量测试 **1584 passed / 0 failed / 24 skipped**；`context/status.json.currentProposal` 回到 `null`。
+
 ## 进行中能力
 
 无。
@@ -300,8 +318,9 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 
 ## 下一步
 
-- **无授权中的步骤**：P0001.9.3 – P0001.9.4.1.1 均已收口，`currentProposal = null`。
-  当前 readiness 唯一结构性 blocker = `HISTORICAL_DRAWDOWN_UNKNOWN`（真实集成验证结论，见 D-045）。
+- **无授权中的步骤**：P0001.9.3 – P0001.9.4.2 均已收口，`currentProposal = null`。
+  Testnet readiness 的 blocker 集合已为**空**（真实跨进程验收）；下一步（Execution Readiness / Binance
+  ExecutionAdapter）必须由人类落盘新提案后才可实施 —— 不得据此推断或启动。
   真实下单能力（Binance ExecutionAdapter）**尚未授权**，且 readiness 目前必然 BLOCKED（历史风险未知），
   任何"进入真实交易"的下一步都必须由人类落盘新提案。下一阶段必须由人类/设计方落盘正式 Proposal，
   再由人类下达「读取 … 实施」指令后才可实现（不得从 roadmap / handoff 推断任务）。

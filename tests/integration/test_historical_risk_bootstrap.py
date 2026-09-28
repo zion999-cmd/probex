@@ -39,6 +39,7 @@ from readiness import (
 )
 from risk.snapshot import build_risk_snapshot, utc_day_start_ms
 from risk.types import AvailableBalanceSource
+from tests.readiness_support import active_hwm
 from tests.private_support import FakeRestFetcher, credentials
 from tests.support import BASE_TS, SYMBOL, make_fill
 
@@ -268,6 +269,7 @@ class ReadinessIntegrationTest(unittest.TestCase):
             environment=EnvironmentEvidence(environment=Environment.TESTNET),
             market_ready=True,
             risk_policy=risk_policy,
+            high_watermark=active_hwm(),
         )
 
     def test_daily_pnl_unknown_is_lifted_but_drawdown_still_blocks(self) -> None:

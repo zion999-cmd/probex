@@ -12,6 +12,7 @@ import math
 from market.events.types import Milliseconds
 from portfolio.accounting import AccountingCore
 from portfolio.types import LiquidationInfo
+from risk.high_watermark import HighWatermarkEvidence
 from risk.history import HistoricalRiskBaseline
 from risk.types import AvailableBalanceSource, ExchangeAvailableBalance, RiskSnapshot
 
@@ -42,6 +43,7 @@ def build_risk_snapshot(
     day_start_ts: Milliseconds | None = None,
     exchange_available_balance: ExchangeAvailableBalance | None = None,
     historical_baseline: HistoricalRiskBaseline | None = None,
+    high_watermark: HighWatermarkEvidence | None = None,
 ) -> RiskSnapshot:
     """构建某个 symbol 的风险快照。
 
@@ -56,6 +58,11 @@ def build_risk_snapshot(
     `realized_pnl_today = baseline.daily_net_realized + local_net_realized_since(cutoff)`；
     缺任一段 ⇒ `None`（未知 ≠ 0）。**不**使用 baseline 推导 peak/drawdown（本阶段永远未知）。
     不传时完全沿用原来的 `day_start_ts` 本地路径（Paper / Replay 不变）。
+
+    `high_watermark`（P0001.9.4.2 §15）：传入**已确认**的 durable HWM 证据时，
+    `peak_equity` / `drawdown` / `drawdown_pct` 由 "自 activation 起的峰值 vs 当前 equity" 计算；
+    HWM 非 ACTIVE 或未提供时保持未知（`None`）⇒ 已配置限额时 `RiskGate: MISSING_DRAWDOWN`（fail closed）。
+    **Paper / Replay 路径不受影响**（不传该参数即完全保持原语义）。
     """
     _validate_inputs(
         symbol=symbol,
@@ -82,6 +89,7 @@ def build_risk_snapshot(
         day_start_ts=day_start_ts,
         exchange_available_balance=exchange_available_balance,
         historical_baseline=historical_baseline,
+        high_watermark=high_watermark,
     )
 
 
@@ -98,6 +106,7 @@ def _assemble_snapshot(
     day_start_ts: Milliseconds | None,
     exchange_available_balance: ExchangeAvailableBalance | None = None,
     historical_baseline: HistoricalRiskBaseline | None = None,
+    high_watermark: HighWatermarkEvidence | None = None,
 ) -> RiskSnapshot:
     """把 mutable accounting 事实转成不可变快照（字段逐个映射，不做判断）。"""
     mark_price = accounting.mark_price(symbol)
@@ -105,6 +114,11 @@ def _assemble_snapshot(
     mark_age_ms = None if mark_price is None or mark_timestamp is None else max(0, now_ms - mark_timestamp)
     position = accounting.position(symbol)
     drawdown, drawdown_pct, peak_equity = _derive_drawdown(accounting)
+    if high_watermark is not None:
+        # P0001.9.4.2：Live 路径使用 durable HWM（自 activation 起）覆盖 session 峰值语义
+        drawdown, drawdown_pct, peak_equity = _derive_durable_drawdown(
+            accounting, high_watermark=high_watermark
+        )
 
     return RiskSnapshot(
         symbol=symbol,
@@ -226,6 +240,24 @@ def _realized_pnl_today(
     if historical_baseline is None:
         return None if day_start_ts is None else accounting.net_realized_since(day_start_ts)
     return historical_baseline.compose_daily_pnl(accounting.net_realized_since(historical_baseline.cutoff_ts))
+
+
+def _derive_durable_drawdown(
+    accounting: AccountingCore, *, high_watermark: HighWatermarkEvidence
+) -> tuple[float | None, float | None, float | None]:
+    """用 durable HWM 计算 (drawdown, drawdown_pct, peak_equity)。
+
+    - HWM 非 ACTIVE / equity 未知 ⇒ 三者皆 `None`（未知 ≠ 0 ⇒ RiskGate fail closed）；
+    - 否则 `drawdown = max(0, peak - equity)`、`drawdown_pct = drawdown / peak`。
+    """
+    equity = accounting.equity()
+    observation = high_watermark.equity_observation()
+    if equity is None or observation is None:
+        return None, None, None
+    peak_equity, _peak_ts = observation
+    drawdown = max(0.0, peak_equity - equity)
+    drawdown_pct = 0.0 if peak_equity <= 0.0 else drawdown / peak_equity
+    return drawdown, drawdown_pct, peak_equity
 
 
 def _derive_drawdown(accounting: AccountingCore) -> tuple[float | None, float | None, float | None]:

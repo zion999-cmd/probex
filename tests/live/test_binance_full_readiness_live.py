@@ -104,7 +104,7 @@ def pump_market_window(runtime: LiveMarketDataRuntime, *, window_seconds: float)
     return pumped
 
 
-def run_full_chain(*, window_seconds: float, market_policy: MarketReadinessPolicy) -> tuple[dict, dict]:
+def run_full_chain(*, window_seconds: float, market_policy: MarketReadinessPolicy, high_watermark=None) -> tuple[dict, dict]:
     """完整链路：public → private → recovery → income → readiness（返回 report, facts）。"""
     from tests.live.test_binance_recovery_live import rest_base, ws_host
 
@@ -173,6 +173,7 @@ def run_full_chain(*, window_seconds: float, market_policy: MarketReadinessPolic
             market_ready=bool(report["public_market"]["ready"]),  # SC-2：来自真实 public 事实
             risk_policy=live_risk_policy_from_env(),
             historical_baseline=historic,
+            high_watermark=high_watermark,
         )
         result = LiveReadinessGate(policy=readiness_policy_from_env()).evaluate(readiness_evidence)
         report["private_stream"] = {

@@ -20,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from connectors.binance.private.recovery import RecoveryStatus
+from risk.high_watermark import HighWatermarkProblem, HighWatermarkStatus
 from readiness.types import (
     Environment,
     LiveReadinessEvidence,
@@ -65,6 +66,7 @@ class LiveReadinessGate:
         self._check_private_stream(evidence, fail)
         self._check_clock(evidence, fail)
         self._check_account(evidence, fail)
+        self._check_high_watermark(evidence, fail)
         self._check_historical_risk(evidence, fail)
         self._check_risk_policy(evidence, fail)
         self._check_environment(evidence, fail)
@@ -165,6 +167,34 @@ class LiveReadinessGate:
                 LiveReadinessReason.HISTORICAL_DRAWDOWN_UNKNOWN,
                 "historical peak equity / drawdown is unknown",
             )
+
+    def _check_high_watermark(self, evidence: LiveReadinessEvidence, fail: _Fail) -> None:
+        """P0001.9.4.2 §16：durable HWM 是 drawdown 的唯一可信来源。"""
+        hwm = evidence.high_watermark
+        problem = hwm.problem
+        if problem is HighWatermarkProblem.STORE_FAILED:
+            fail(LiveReadinessReason.HIGH_WATERMARK_STORE_FAILED, hwm.detail or "durable store failed")
+            return
+        if problem is HighWatermarkProblem.EQUITY_MISMATCH:
+            fail(LiveReadinessReason.EQUITY_MISMATCH, hwm.detail or "local/exchange equity mismatch")
+            return
+        if problem is HighWatermarkProblem.CAPITAL_FLOW:
+            fail(
+                LiveReadinessReason.EXTERNAL_CAPITAL_FLOW_DETECTED,
+                hwm.detail or "external capital flow detected; explicit rebase required",
+            )
+            return
+        if problem is HighWatermarkProblem.INVALID_OTHER:
+            fail(LiveReadinessReason.HIGH_WATERMARK_INVALID, hwm.detail or "high-watermark invalidated")
+            return
+        if hwm.status is HighWatermarkStatus.UNINITIALIZED:
+            fail(
+                LiveReadinessReason.HIGH_WATERMARK_NOT_INITIALIZED,
+                hwm.detail or "high-watermark has never been activated",
+            )
+            return
+        if hwm.status is HighWatermarkStatus.INVALIDATED:  # 防御：状态与 problem 不一致时也不放行
+            fail(LiveReadinessReason.HIGH_WATERMARK_INVALID, hwm.detail or "high-watermark invalidated")
 
     def _check_risk_policy(self, evidence: LiveReadinessEvidence, fail: _Fail) -> None:
         policy = evidence.risk_policy

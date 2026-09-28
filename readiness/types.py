@@ -10,10 +10,11 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from market.events.types import Milliseconds
+from risk.high_watermark import HighWatermarkEvidence
 from risk.limits import RiskLimits
 from risk.types import KillSwitchMode
 
@@ -64,6 +65,12 @@ class LiveReadinessReason(Enum):
     PRIVATE_LATENCY_TOO_HIGH = "PRIVATE_LATENCY_TOO_HIGH"
     MAINNET_PRIVATE_NOT_VALIDATED = "MAINNET_PRIVATE_NOT_VALIDATED"
     MARKET_NOT_READY = "MARKET_NOT_READY"
+    #: P0001.9.4.2：durable equity high-watermark 相关（drawdown 唯一可信来源）
+    HIGH_WATERMARK_NOT_INITIALIZED = "HIGH_WATERMARK_NOT_INITIALIZED"
+    HIGH_WATERMARK_INVALID = "HIGH_WATERMARK_INVALID"
+    HIGH_WATERMARK_STORE_FAILED = "HIGH_WATERMARK_STORE_FAILED"
+    EXTERNAL_CAPITAL_FLOW_DETECTED = "EXTERNAL_CAPITAL_FLOW_DETECTED"
+    EQUITY_MISMATCH = "EQUITY_MISMATCH"
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +213,8 @@ class LiveReadinessEvidence:
     environment: EnvironmentEvidence
     market_ready: bool
     risk_policy: LiveRiskPolicy | None
+    #: P0001.9.4.2 §16：durable HWM 证据（必须显式给出；`uninitialized()` 表示从未 activation）
+    high_watermark: HighWatermarkEvidence = field(default_factory=HighWatermarkEvidence.uninitialized)
 
     def __post_init__(self) -> None:
         if isinstance(self.now_ms, bool) or not isinstance(self.now_ms, int) or self.now_ms < 0:
@@ -214,6 +223,8 @@ class LiveReadinessEvidence:
             raise ReadinessError("LiveReadinessEvidence.recovery_status must be a RecoveryStatus")
         if not isinstance(self.market_ready, bool):
             raise ReadinessError("LiveReadinessEvidence.market_ready must be a bool")
+        if not isinstance(self.high_watermark, HighWatermarkEvidence):
+            raise ReadinessError("LiveReadinessEvidence.high_watermark must be a HighWatermarkEvidence")
 
 
 @dataclass(frozen=True, slots=True)

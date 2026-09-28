@@ -42,6 +42,7 @@ from readiness import (
     historical_risk_evidence_from_snapshot,
     private_stream_evidence,
 )
+from risk.high_watermark import HighWatermarkEvidence
 from risk.snapshot import build_risk_snapshot, utc_day_start_ms
 from tests.live.test_binance_recovery_live import build_live_recovery, rest_base, ws_host
 from tests.live_support import BINANCE_SYMBOL
@@ -95,6 +96,7 @@ def build_evidence(
     market_ready: bool,
     risk_policy: LiveRiskPolicy | None,
     historical_baseline=None,
+    high_watermark=None,
 ) -> tuple[LiveReadinessEvidence, dict]:
     """用真实对象组装证据并返回 `(evidence, facts)`；facts 供报告使用（无凭据）。"""
     observation = runtime.latest_snapshot
@@ -107,8 +109,10 @@ def build_evidence(
         now_ms=now_ms,
         day_start_ts=day_start_ts,
         exchange_available_balance=exchange_balance,
-        # P0001.9.4.1：注入受信历史 baseline ⇒ 当日 PnL 可知（drawdown/peak 仍未知）
+        # P0001.9.4.1：注入受信历史 baseline ⇒ 当日 PnL 可知
         historical_baseline=historical_baseline,
+        # P0001.9.4.2：注入已确认 durable HWM ⇒ drawdown/peak 可知（未提供 ⇒ 保持 UNKNOWN）
+        high_watermark=high_watermark,
     )
     evidence = LiveReadinessEvidence(
         now_ms=now_ms,
@@ -121,6 +125,11 @@ def build_evidence(
         environment=environment_evidence(environment=environment),
         market_ready=market_ready,
         risk_policy=risk_policy,
+        high_watermark=(
+            HighWatermarkEvidence.uninitialized()
+            if high_watermark is None
+            else high_watermark
+        ),
     )
     facts = {
         "account_can_trade": observation.can_trade,
@@ -135,6 +144,16 @@ def build_evidence(
             "drawdown_pct": snapshot.drawdown_pct,
             "realized_pnl_today": snapshot.realized_pnl_today,
             "position_qty": snapshot.position_qty,
+        },
+        "high_watermark": None
+        if high_watermark is None
+        else {
+            "status": high_watermark.status.value,
+            "peak_equity": high_watermark.peak_equity,
+            "activation_id": high_watermark.activation_id,
+            "activation_equity": high_watermark.activation_equity,
+            "generation": high_watermark.generation,
+            "detail": high_watermark.detail,
         },
         "historical_baseline": None
         if historical_baseline is None

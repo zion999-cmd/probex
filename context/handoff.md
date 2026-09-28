@@ -1002,3 +1002,52 @@ readiness reasons 不变：`PRIVATE_LATENCY_UNKNOWN` / `HISTORICAL_DRAWDOWN_UNKN
 **阻塞**：无。
 **下一步**：`currentProposal = null`；等待人类决定是否落盘 `P0001.9.4.2` 或转向其他能力。
 本轮改动**尚未 commit / push**（未获授权）。
+
+## 2026-09-28：P0001.9.4.2 Persistent Equity High-Watermark（已完成）
+
+**当前 Proposal**：P0001.9.4.2（完成后按 CLAUDE.md §5 回到 `null`）。
+
+**本次新增**
+
+- `risk/high_watermark.py`：`EquityHighWatermarkState` / `HighWatermarkStatus` / `HighWatermarkScope` /
+  `HighWatermarkInvalidation` / `HighWatermarkProblem` / `ActivationPreconditions` / `HighWatermarkEvidence` /
+  `HighWatermarkTracker`（peak 单调 + durable-before-publish）+ 严格序列化。
+- `storage/high_watermark.py`：`HighWatermarkStore`（窄接口）+ `JsonHighWatermarkStore`
+  （temp → flush → **fsync** → `os.replace` → fsync 目录；`SCHEMA_VERSION` + canonical JSON + fail-closed 读取）。
+- `tests/unit/test_high_watermark.py`（32）、`tests/fault/test_high_watermark_failures.py`（10）、
+  `tests/integration/test_high_watermark_wiring.py`（10）、`tests/readiness_support.py`。
+
+**本次修改**
+
+- `risk/snapshot.py`：`build_risk_snapshot(..., high_watermark=...)`（不传 ⇒ Paper/Replay 完全不变）。
+- `readiness/types.py` / `gate.py`：5 个新 reason code + `LiveReadinessEvidence.high_watermark` 显式输入 + 检查逻辑。
+- `risk/__init__.py` 导出；测试 helper（readiness 各测试 + live 测试）显式传 HWM。
+- `proposals/P0001.9.4.2-*.md`（§0 契约 + §1 结果）、`context/{decisions,current_state,roadmap}`。
+
+**本次删除**：无（未复用 `AccountingCore._historical_pnl_known` 承担 durable epoch）。
+
+**Acceptance 结果（SC-1 – SC-22 全 PASS；矩阵见提案 §1.2）**
+
+- **SC-20 真实 Testnet 跨进程验收**：Phase A 前置条件全满足（equity diff **0.0**）→ activation 持久化；
+  Phase B（**新进程**）→ 同一 activation、peak 未重置 → public ready（gap/resync 0）、2 条业务事件
+  （latency median 164 ms）、clock offset 270 / uncertainty 182 ms、income daily known、无新 TRANSFER、
+  recovery RECOVERED、flat + 0 挂单 ⇒ **readiness `live_ready` / scope `testnet_live_ready` / reasons `[]`**。
+- **SC-6/SC-7/SC-9**：save 失败不发布新 peak；crash 后从磁盘恢复全 peak（不低估 drawdown）。
+- **SC-17**：Paper/Replay 不传 HWM 时与旧路径逐字段相等。
+
+**测试结果**：unit 997 / integration 240 / fault 274 / replay 49 passed；live 24 skipped；
+全量 **1584 passed / 0 failed / 24 skipped**；独立检出（`git archive HEAD` + 工作树叠加）同样全 PASS。
+
+**风险 / 已知问题**
+
+1. **cash-flow-adjusted NAV 未实现**（提案明确不做）：`TRANSFER` ⇒ `INVALIDATED` + 显式 rebase；
+   deposit/withdraw 既不会被当成 trading peak，也不会被当成 trading drawdown。
+2. activation 目前由人类/harness 显式触发，产品尚无 activation CLI（需独立提案）。
+3. `HighWatermarkEvidence` 仍是调用方传入的证据（D-043 typed-evidence 收紧属执行阶段）。
+4. 本次 acceptance 中 drawdown = 0（账户自 activation 起未亏损）；**未**人为制造亏损（那需要真实资金损失，超出授权）；
+   drawdown 增长路径由单测/集成测试覆盖。
+
+**阻塞**：无。
+**下一步**：`currentProposal = null`。Testnet readiness 的 blocker 集合已为空 ⇒ 下一步（Execution Readiness /
+Binance ExecutionAdapter）**必须**由人类落盘新提案后再实施；不得自行启动。
+本轮改动**尚未 commit / push**（未获授权）。

@@ -23,7 +23,14 @@ from readiness import (
     ReadinessError,
     ReadinessPolicy,
 )
+from risk.high_watermark import (
+    HighWatermarkEvidence,
+    HighWatermarkInvalidation,
+    HighWatermarkScope,
+    HighWatermarkStatus,
+)
 from risk.types import KillSwitchMode
+from tests.readiness_support import active_hwm, activated_tracker, satisfied_preconditions
 from tests.support import BASE_TS
 
 NOW = BASE_TS + 1_000
@@ -80,6 +87,8 @@ def evidence(**overrides: object) -> LiveReadinessEvidence:
         "environment": EnvironmentEvidence(environment=Environment.TESTNET),
         "market_ready": True,
         "risk_policy": risk_policy(),
+        # P0001.9.4.2：默认给出**已确认**的 durable HWM（否则 drawdown 必然未知 ⇒ BLOCKED）
+        "high_watermark": active_hwm(),
     }
     values.update(overrides)
     return LiveReadinessEvidence(**values)  # type: ignore[arg-type]
@@ -387,6 +396,84 @@ class Sc9Sc10EnvironmentTest(unittest.TestCase):
             },
         )
         self.assertEqual(len(result.details), len(result.reasons))
+
+
+class HighWatermarkReasonTest(unittest.TestCase):
+    """P0001.9.4.2 §16 / SC-1 / SC-7 / SC-10 / SC-11 / SC-13：durable HWM 的精确原因码。"""
+
+    def setUp(self) -> None:
+        self.gate = LiveReadinessGate(policy=readiness_policy())
+
+    def test_sc1_uninitialized_blocks_with_precise_reason(self) -> None:
+        result = self.gate.evaluate(
+            evidence(high_watermark=HighWatermarkEvidence.uninitialized())
+        )
+
+        self.assertIn(LiveReadinessReason.HIGH_WATERMARK_NOT_INITIALIZED, result.reasons)
+        self.assertIs(result.status, LiveReadinessStatus.BLOCKED)
+
+    def test_store_failure_blocks(self) -> None:
+        result = self.gate.evaluate(
+            evidence(high_watermark=HighWatermarkEvidence.store_failed(detail="fsync failed"))
+        )
+
+        self.assertEqual(result.reasons, (LiveReadinessReason.HIGH_WATERMARK_STORE_FAILED,))
+
+    def test_equity_mismatch_blocks(self) -> None:
+        result = self.gate.evaluate(
+            evidence(high_watermark=HighWatermarkEvidence.equity_mismatch(detail="local 5000 vs exchange 4800"))
+        )
+
+        self.assertEqual(result.reasons, (LiveReadinessReason.EQUITY_MISMATCH,))
+
+    def test_capital_flow_blocks_with_dedicated_reason(self) -> None:
+        """SC-13：activation 后的 `TRANSFER` ⇒ INVALIDATED ⇒ EXTERNAL_CAPITAL_FLOW_DETECTED。"""
+        tracker, store = activated_tracker(equity=1_000.0)
+        tracker.invalidate_for_capital_flow(reason="TRANSFER detected", ts=BASE_TS + 1)
+
+        result = self.gate.evaluate(evidence(high_watermark=tracker.evidence()))
+
+        self.assertEqual(result.reasons, (LiveReadinessReason.EXTERNAL_CAPITAL_FLOW_DETECTED,))
+        self.assertEqual(store.save_count, 2)  # activate + invalidate 都已持久化
+
+    def test_other_invalidation_blocks_as_invalid(self) -> None:
+        tracker, _store = activated_tracker(equity=1_000.0)
+        tracker.invalidate_for_capital_flow(
+            reason="operator reset without rebase", ts=BASE_TS + 1, kind=HighWatermarkInvalidation.OTHER
+        )
+
+        result = self.gate.evaluate(evidence(high_watermark=tracker.evidence()))
+
+        self.assertEqual(result.reasons, (LiveReadinessReason.HIGH_WATERMARK_INVALID,))
+
+    def test_active_high_watermark_does_not_add_reasons(self) -> None:
+        result = self.gate.evaluate(evidence())
+
+        self.assertNotIn(LiveReadinessReason.HIGH_WATERMARK_NOT_INITIALIZED, result.reasons)
+        self.assertNotIn(LiveReadinessReason.HIGH_WATERMARK_INVALID, result.reasons)
+        self.assertIs(result.status, LiveReadinessStatus.LIVE_READY)
+
+    def test_invalidated_status_without_problem_is_still_blocked(self) -> None:
+        """防御：状态已是 INVALIDATED 时不因 problem 缺失而放行。"""
+        forged = HighWatermarkEvidence(
+            status=HighWatermarkStatus.INVALIDATED,
+            peak_equity=None,
+            peak_ts=None,
+            activation_id="act-1",
+            activation_ts=BASE_TS,
+            activation_equity=1_000.0,
+            generation=1,
+            scope=HighWatermarkScope.TESTNET,
+            detail="",
+        )
+
+        result = self.gate.evaluate(evidence(high_watermark=forged))
+
+        self.assertIn(LiveReadinessReason.HIGH_WATERMARK_INVALID, result.reasons)
+
+    def test_high_watermark_must_be_typed(self) -> None:
+        with self.assertRaises(ReadinessError):
+            evidence(high_watermark="active")  # type: ignore[arg-type]
 
 
 class Sc11PurityTest(unittest.TestCase):
