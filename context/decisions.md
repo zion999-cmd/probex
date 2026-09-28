@@ -794,3 +794,32 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
 7. **scope**：状态携带 `scope`（TESTNET/MAINNET）与 `deployment_id`；testnet/mainnet 状态不互载。
 8. **Paper / Replay 不变**：`high_watermark` 是可选注入；不传时完全沿用原 session-derived 峰值语义。
 9. **与 Daily Loss 的分工**：daily loss 是 UTC 日作用域；drawdown 是 activation epoch 作用域（D-039 的语义分离继续有效）。
+
+## D-047 Execution Readiness Evidence Binding：受控来源 + 版本绑定 + TTL（P0001.9.5）
+
+**日期**：2026-09-28
+**状态**：生效（**关闭 D-043 的主要条款**）
+
+1. **readiness 输入必须是 typed evidence**：
+   - `market` ⇒ 产品侧 `MarketReadinessEvidence`（真实事实：book_health / 锚定 / 窗口内 gap·resync·malformed /
+     mark·feed age / aggTrade 数量；带 `generation`）；
+   - environment ⇒ `EnvironmentValidationEvidence`（`VALIDATED` 需 id + account_scope + evidence_source + 时间）；
+   - HWM ⇒ **只能**经 `HighWatermarkTracker`（正式路径），gate 另加「声称 drawdown 已知但无确认 peak ⇒ fail closed」。
+   正式路径**不再接受**裸 `market_ready=True` / `mainnet_private_validated=True`。
+2. **受控 collector**：`ReadinessEvidenceCollector` 从真实 Owner 读取（recovery / private runtime / account snapshot /
+   RiskSnapshot / HWM tracker / market evidence / typed environment / risk policy），调用方不再逐字段拼装。
+3. **两代 epoch**：
+   - `RecoveryGeneration(discontinuity_count, invalidation_count)`：来自 runtime 的 discontinuity 事件与
+     `StartupRecovery.reason_log`（复用 D-041/§0.5 的既有机制，不新造状态机）；
+   - `market_generation`：market epoch，invalidate / resync / 重连时推进（唯一入口）。
+4. **`ExecutionReadinessAuthority` 是短时 capability**：仅 `LIVE_READY` + scope 匹配环境时可签发；
+   `authority_ttl_ms` 必须显式配置（**产品代码无任何默认值**；P0001.9.5 验收中使用的 **30 s 只是测试/验收参数**，
+   不得成为生产默认值）；绑定 recovery/market/HWM generation、risk policy 指纹与 evidence digest；
+   TTL 过期 / scope 不符 / 任一 generation 变化 / kill switch 非 NORMAL ⇒ 校验失败（各自 reason code）。
+5. **权限分层不变**：authority 只回答"这个 runtime 是否有资格进入 execution"；
+   每一笔订单**仍然**必须走 fresh `RiskSnapshot` → `RiskGate`；`valid authority ≠ order allowed`，
+   `RiskGate ALLOW ≠ authority valid`。
+6. **诚实边界**：进程内对象**没有**密码学防伪能力；本机制的价值是"受控来源 + 版本绑定 + TTL + 生命周期失效"，
+   不是防篡改凭证（提案明文不声称）。
+7. **D-043 状态**：主要条款已关闭（见 P0001.9.5 §1.5）；**未**关闭的是"activation/authority 的产品 CLI 入口"
+   与"主网验证记录的自动化"（需独立提案）。

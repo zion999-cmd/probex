@@ -163,12 +163,12 @@ class ReadinessDrawdownTest(unittest.TestCase):
         from readiness import (
             AccountEvidence,
             Environment,
-            EnvironmentEvidence,
             HistoricalRiskEvidence,
             LiveReadinessEvidence,
             LiveRiskPolicy,
             PrivateStreamEvidence,
         )
+        from tests.readiness_support import environment_evidence, market_evidence
         from risk.types import KillSwitchMode
 
         now = int(time.time() * 1000)
@@ -188,8 +188,8 @@ class ReadinessDrawdownTest(unittest.TestCase):
                 drawdown_known=snapshot.drawdown is not None,
                 peak_equity_known=snapshot.peak_equity is not None,
             ),
-            environment=EnvironmentEvidence(environment=Environment.TESTNET),
-            market_ready=True,
+            environment=environment_evidence(environment=Environment.TESTNET),
+            market=market_evidence(),
             risk_policy=LiveRiskPolicy(
                 max_position_qty=1.0,
                 max_order_notional=1_000.0,

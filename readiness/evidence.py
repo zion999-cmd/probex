@@ -19,6 +19,8 @@ from readiness.types import (
     AccountEvidence,
     Environment,
     EnvironmentEvidence,
+    EnvironmentValidationEvidence,
+    EnvironmentValidationStatus,
     HistoricalRiskEvidence,
     PrivateStreamEvidence,
     ReadinessError,
@@ -136,15 +138,33 @@ def historical_risk_baseline_from_income(
 
 
 def environment_evidence(
-    *, environment: Environment, mainnet_private_validated: bool = False
+    *,
+    environment: Environment,
+    validation_status: EnvironmentValidationStatus = EnvironmentValidationStatus.NOT_VALIDATED,
+    validated_at: Milliseconds | None = None,
+    validation_id: str | None = None,
+    account_scope: str | None = None,
+    evidence_source: str | None = None,
 ) -> EnvironmentEvidence:
-    """环境证据；`mainnet_private_validated` 必须来自真实的主网只读验收记录。"""
+    """**typed** 环境验收证据（P0001.9.5 §4：不再接受裸 `mainnet_private_validated=True`）。
+
+    `MAINNET_LIVE_READY` 需要 `validation_status == VALIDATED` 且 `validation_id` / `account_scope` /
+    `evidence_source` / `validated_at` 齐备（由 `EnvironmentValidationEvidence.mainnet_private_validated` 判定）。
+    """
     if not isinstance(environment, Environment):
         raise ReadinessError("environment_evidence requires an Environment")
-    if not isinstance(mainnet_private_validated, bool):
-        raise ReadinessError("mainnet_private_validated must be a bool")
+    if not isinstance(validation_status, EnvironmentValidationStatus):
+        raise ReadinessError("environment_evidence requires an EnvironmentValidationStatus")
     return EnvironmentEvidence(
-        environment=environment, mainnet_private_validated=mainnet_private_validated
+        environment=environment,
+        validation=EnvironmentValidationEvidence(
+            environment=environment,
+            validation_status=validation_status,
+            validated_at=validated_at,
+            validation_id=validation_id,
+            account_scope=account_scope,
+            evidence_source=evidence_source,
+        ),
     )
 
 

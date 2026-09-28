@@ -169,6 +169,8 @@ class LiveMarketDataTelemetry:
     event_lag_ms: int | None
     mark_age_ms: int | None
     server_time_offset_ms: int | None
+    #: P0001.9.5 §12：market epoch（invalidate / resync / 重连都会推进；旧执行授权据此失效）
+    market_generation: int
     last_error: str | None
 
 
@@ -254,6 +256,8 @@ class LiveMarketDataRuntime:
         self._last_resync_attempt_ms: Milliseconds | None = None
         self._next_request_id = 0
         self._next_connection = 0
+        self._market_generation = 0
+        self._market_generation_reason = "initial"
 
     # ------------------------------------------------------------------ 只读状态
 
@@ -272,6 +276,20 @@ class LiveMarketDataRuntime:
     @property
     def trading_rules(self) -> TradingRules | None:
         return self._trading_rules
+
+    @property
+    def market_generation(self) -> int:
+        """market epoch 计数（P0001.9.5 §12）：任何使盘口可信度改变的路径都会推进它。"""
+        return self._market_generation
+
+    @property
+    def market_generation_reason(self) -> str:
+        return self._market_generation_reason
+
+    def _bump_market_generation(self, reason: str) -> None:
+        """推进 market epoch（唯一入口；不得有多处各自 +1 的实现）。"""
+        self._market_generation += 1
+        self._market_generation_reason = reason
 
     @property
     def history(self) -> tuple[MarketState, ...]:
@@ -303,6 +321,7 @@ class LiveMarketDataRuntime:
             event_lag_ms=counters.event_lag_ms,
             mark_age_ms=None if mark is None else max(0, self._clock() - mark.receive_ts),
             server_time_offset_ms=counters.server_time_offset_ms,
+            market_generation=self._market_generation,
             last_error=counters.last_error,
         )
 
@@ -310,10 +329,12 @@ class LiveMarketDataRuntime:
 
     def connect(self) -> None:
         """建立两条 tier 连接并发送订阅。"""
+        self._bump_market_generation("connect")
         for connection in self._connections:
             connection.ws = self._open(connection)
 
     def close(self) -> None:
+        self._bump_market_generation("close")
         for connection in self._connections:
             if connection.ws is not None:
                 connection.ws.close()
@@ -442,6 +463,7 @@ class LiveMarketDataRuntime:
         if state.quality.book_health is BookHealth.STALE:
             self._counters.depth_gap_count += 1
             self._resync_needed = True
+            self._bump_market_generation("depth_gap")
             self._engine.request_resync()
         if self._resync_needed:
             self._fetch_and_apply_snapshot(builder)
@@ -481,6 +503,7 @@ class LiveMarketDataRuntime:
             return
         self._last_resync_attempt_ms = now
         self._counters.resync_count += 1
+        self._bump_market_generation("resync_applied")
         started = now
         try:
             event = self._snapshot_client.fetch()
@@ -521,6 +544,7 @@ class LiveMarketDataRuntime:
     def _after_transport_loss(self) -> None:
         """传输层丢失：盘口立即不可信，必须重新完成 snapshot + 对齐才恢复（SC-9）。"""
         self._engine.invalidate(TRANSPORT_LOST_REASON)
+        self._bump_market_generation("transport_lost")
         if self._engine.book_health is BookHealth.STALE:
             self._engine.request_resync()
         self._resync_needed = True

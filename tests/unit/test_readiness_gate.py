@@ -12,6 +12,8 @@ from readiness import (
     AccountEvidence,
     Environment,
     EnvironmentEvidence,
+    EnvironmentValidationEvidence,
+    EnvironmentValidationStatus,
     HistoricalRiskEvidence,
     LiveReadinessEvidence,
     LiveReadinessGate,
@@ -30,7 +32,13 @@ from risk.high_watermark import (
     HighWatermarkStatus,
 )
 from risk.types import KillSwitchMode
-from tests.readiness_support import active_hwm, activated_tracker, satisfied_preconditions
+from tests.readiness_support import (
+    active_hwm,
+    activated_tracker,
+    environment_evidence,
+    market_evidence,
+    satisfied_preconditions,
+)
 from tests.support import BASE_TS
 
 NOW = BASE_TS + 1_000
@@ -84,8 +92,8 @@ def evidence(**overrides: object) -> LiveReadinessEvidence:
         ),
         "account": AccountEvidence(can_trade=True, available_balance=1_000.0, available_balance_captured_at=NOW - 500),
         "historical_risk": HistoricalRiskEvidence(daily_pnl_known=True, drawdown_known=True, peak_equity_known=True),
-        "environment": EnvironmentEvidence(environment=Environment.TESTNET),
-        "market_ready": True,
+        "environment": environment_evidence(environment=Environment.TESTNET),
+        "market": market_evidence(),
         "risk_policy": risk_policy(),
         # P0001.9.4.2：默认给出**已确认**的 durable HWM（否则 drawdown 必然未知 ⇒ BLOCKED）
         "high_watermark": active_hwm(),
@@ -210,9 +218,10 @@ class RecoveryAndStreamTest(unittest.TestCase):
         self.assertEqual(result.reasons, (LiveReadinessReason.PRIVATE_LATENCY_TOO_HIGH,))
 
     def test_market_not_ready_blocks(self) -> None:
-        result = self.gate.evaluate(evidence(market_ready=False))
+        result = self.gate.evaluate(evidence(market=market_evidence(ready=False)))
 
         self.assertEqual(result.reasons, (LiveReadinessReason.MARKET_NOT_READY,))
+        self.assertIn("book_health=stale", result.details[0])
 
 
 class Sc8ClockTest(unittest.TestCase):
@@ -344,7 +353,7 @@ class Sc9Sc10EnvironmentTest(unittest.TestCase):
         self.gate = LiveReadinessGate(policy=readiness_policy())
 
     def test_mainnet_without_validation_is_blocked(self) -> None:
-        result = self.gate.evaluate(evidence(environment=EnvironmentEvidence(environment=Environment.MAINNET)))
+        result = self.gate.evaluate(evidence(environment=environment_evidence(environment=Environment.MAINNET)))
 
         self.assertIs(result.status, LiveReadinessStatus.BLOCKED)
         self.assertEqual(result.reasons, (LiveReadinessReason.MAINNET_PRIVATE_NOT_VALIDATED,))
@@ -358,7 +367,7 @@ class Sc9Sc10EnvironmentTest(unittest.TestCase):
 
     def test_mainnet_with_validation_can_be_ready_with_mainnet_scope(self) -> None:
         result = self.gate.evaluate(
-            evidence(environment=EnvironmentEvidence(environment=Environment.MAINNET, mainnet_private_validated=True))
+            evidence(environment=environment_evidence(environment=Environment.MAINNET, validated=True))
         )
 
         self.assertIs(result.status, LiveReadinessStatus.LIVE_READY)
@@ -371,8 +380,8 @@ class Sc9Sc10EnvironmentTest(unittest.TestCase):
                 private_stream=PrivateStreamEvidence("STOPPED", False, False, None, None),
                 account=AccountEvidence(can_trade=False, available_balance=None, available_balance_captured_at=None),
                 historical_risk=HistoricalRiskEvidence(False, False, False),
-                environment=EnvironmentEvidence(environment=Environment.MAINNET),
-                market_ready=False,
+                environment=environment_evidence(environment=Environment.MAINNET),
+                market=market_evidence(ready=False),
                 risk_policy=None,
             )
         )
@@ -490,7 +499,11 @@ class Sc11PurityTest(unittest.TestCase):
                     self.assertNotIn(marker, source)
 
     def test_imports_only_allowed_roots(self) -> None:
-        allowed = {"__future__", "collections", "dataclasses", "enum", "math", "market", "risk", "connectors", "readiness"}
+        # hashlib / json：canonical evidence digest（P0001.9.5 §9）所需；仍禁止一切网络与执行能力
+        allowed = {
+            "__future__", "collections", "dataclasses", "enum", "hashlib", "json", "math",
+            "market", "risk", "connectors", "readiness",
+        }
         for path in sorted(self.READINESS_DIR.glob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"))
             roots: set[str] = set()

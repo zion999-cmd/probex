@@ -122,9 +122,8 @@ def run_full_chain(*, window_seconds: float, market_policy: MarketReadinessPolic
         baseline = window_start(public)
         pump_market_window(public, window_seconds=window_seconds)
         now_ms = int(time.time() * 1000)
-        evidence = collect_market_evidence(public, baseline=baseline, now_ms=now_ms)
-        ready, problems = market_ready(evidence, policy=market_policy)
-        report["public_market"] = market_evidence_report(evidence, ready=ready, problems=problems)
+        market = collect_market_evidence(public, baseline=baseline, now_ms=now_ms, policy=market_policy)
+        report["public_market"] = market_evidence_report(market)
         report["public_market"]["healthy_after_anchor"] = healthy
     finally:
         public.close()
@@ -170,7 +169,7 @@ def run_full_chain(*, window_seconds: float, market_policy: MarketReadinessPolic
             now_ms=now_ms,
             day_start_ts=day_start,
             environment=Environment.TESTNET,
-            market_ready=bool(report["public_market"]["ready"]),  # SC-2：来自真实 public 事实
+            market=market,  # SC-2：由真实 public 事实推导（不再是裸 bool）
             risk_policy=live_risk_policy_from_env(),
             historical_baseline=historic,
             high_watermark=high_watermark,
@@ -223,6 +222,7 @@ def run_full_chain(*, window_seconds: float, market_policy: MarketReadinessPolic
     facts = {
         "recovery_status": report["recovery"]["status"],
         "market_ready": report["public_market"]["ready"],
+        "market_generation": report["public_market"]["generation"],
         "public_market": report["public_market"],
         "income": report["income"],
         "clock": report["clock"],

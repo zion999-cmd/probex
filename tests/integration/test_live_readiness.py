@@ -34,7 +34,7 @@ from readiness import (
 )
 from risk.snapshot import build_risk_snapshot, utc_day_start_ms
 from risk.types import AvailableBalanceSource
-from tests.readiness_support import active_hwm, activated_tracker
+from tests.readiness_support import active_hwm, activated_tracker, environment_evidence, market_evidence
 from tests.private_support import (
     SYMBOL,
     account_payload,
@@ -76,7 +76,7 @@ def _evidence(
     accounting: AccountingCore,
     now_ms: Milliseconds,
     day_start_ts: Milliseconds,
-    mainnet_private_validated: bool = False,
+    mainnet_validated: bool = False,
     environment: Environment = Environment.TESTNET,
     market_ready: bool = True,
     high_watermark=None,
@@ -103,10 +103,8 @@ def _evidence(
         ),
         account=account_evidence(observation),
         historical_risk=historical_risk_evidence_from_snapshot(snapshot),
-        environment=environment_evidence(
-            environment=environment, mainnet_private_validated=mainnet_private_validated
-        ),
-        market_ready=market_ready,
+        environment=environment_evidence(environment=environment, validated=mainnet_validated),
+        market=market_evidence(ready=market_ready),
         risk_policy=LIVE_RISK_POLICY,
         high_watermark=hwm,
     ), snapshot
@@ -245,14 +243,43 @@ class RecoveryToReadinessTest(unittest.TestCase):
 
 
 class EnvironmentEvidenceTest(unittest.TestCase):
-    def test_mainnet_flag_requires_real_evidence(self) -> None:
-        from readiness import historical_risk_evidence
+    def test_mainnet_validation_must_be_typed_and_complete(self) -> None:
+        """P0001.9.5 §4 / SC-3：主网验收不再由裸 bool 表达。"""
+        from readiness import (
+            EnvironmentValidationEvidence,
+            EnvironmentValidationStatus,
+            historical_risk_evidence,
+        )
 
         with self.assertRaises(Exception):
             environment_evidence(environment="mainnet")  # type: ignore[arg-type]
         with self.assertRaises(Exception):
             historical_risk_evidence(daily_pnl_known="yes", drawdown_known=True, peak_equity_known=True)  # type: ignore[arg-type]
-        self.assertFalse(EnvironmentEvidence(environment=Environment.MAINNET).mainnet_private_validated)
+
+        not_validated = EnvironmentEvidence.not_validated(environment=Environment.MAINNET)
+        self.assertFalse(not_validated.mainnet_private_validated)
+
+        # 状态 VALIDATED 但证据不完整（缺 validation_id / account_scope / evidence_source）⇒ 仍不算 validated
+        incomplete = EnvironmentValidationEvidence(
+            environment=Environment.MAINNET,
+            validation_status=EnvironmentValidationStatus.VALIDATED,
+            validated_at=BASE_TS,
+        )
+        self.assertFalse(incomplete.mainnet_private_validated)
+
+    def test_testnet_validation_never_counts_as_mainnet(self) -> None:
+        from readiness import EnvironmentValidationEvidence, EnvironmentValidationStatus
+
+        testnet_record = EnvironmentValidationEvidence(
+            environment=Environment.TESTNET,
+            validation_status=EnvironmentValidationStatus.VALIDATED,
+            validated_at=BASE_TS,
+            validation_id="testnet-validation",
+            account_scope="binance-usdm-testnet",
+            evidence_source="live-runner",
+        )
+
+        self.assertFalse(testnet_record.mainnet_private_validated)
 
 
 if __name__ == "__main__":

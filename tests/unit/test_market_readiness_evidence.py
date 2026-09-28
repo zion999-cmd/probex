@@ -9,12 +9,14 @@ from __future__ import annotations
 import unittest
 from dataclasses import replace
 
-from tests.live.market_readiness import (
+from market.readiness import (
+    MarketReadinessError,
     MarketReadinessEvidence,
     MarketReadinessPolicy,
-    market_evidence_report,
+    build_market_evidence,
     market_ready,
 )
+from tests.live.market_readiness import market_evidence_report
 
 
 def policy(**overrides: object) -> MarketReadinessPolicy:
@@ -25,19 +27,18 @@ def policy(**overrides: object) -> MarketReadinessPolicy:
 
 def healthy(**overrides: object) -> MarketReadinessEvidence:
     values: dict[str, object] = {
+        "ready": True,
+        "observed_at": 1_000,
+        "generation": 3,
         "book_health": "healthy",
-        "snapshot_total": 1,
-        "anchor_established": True,
-        "snapshot_count": 0,
-        "resync_count": 0,
-        "depth_gap_count": 0,
-        "malformed_message_count": 0,
-        "agg_trade_count": 120,
+        "anchored": True,
         "mark_age_ms": 250,
         "feed_age_ms": 120,
-        "event_lag_ms": -40,
-        "state_count": 500,
-        "last_error": None,
+        "depth_gap_count": 0,
+        "resync_count": 0,
+        "malformed_count": 0,
+        "agg_trade_count": 120,
+        "problems": (),
     }
     values.update(overrides)
     return MarketReadinessEvidence(**values)  # type: ignore[arg-type]
@@ -55,11 +56,10 @@ class MarketReadyMappingTest(unittest.TestCase):
             "book": {"book_health": "stale"},
             "awaiting": {"book_health": "awaiting_snapshot"},
             "resyncing": {"book_health": "resyncing"},
-            "snapshot": {"snapshot_total": 0},
-            "anchor": {"anchor_established": False},
+            "anchor": {"anchored": False},
             "resync": {"resync_count": 2},
             "gap": {"depth_gap_count": 1},
-            "malformed": {"malformed_message_count": 3},
+            "malformed": {"malformed_count": 3},
             "no_trades": {"agg_trade_count": 0},
             "mark_missing": {"mark_age_ms": None},
             "mark_stale": {"mark_age_ms": 5_001},
@@ -84,25 +84,40 @@ class MarketReadyMappingTest(unittest.TestCase):
             MarketReadinessPolicy()  # type: ignore[call-arg]
         for bad in ({"max_mark_age_ms": 0}, {"max_feed_age_ms": -1}, {"max_mark_age_ms": True}):
             with self.subTest(bad=bad):
-                with self.assertRaises(ValueError):
+                with self.assertRaises(MarketReadinessError):
                     policy(**bad)
 
     def test_report_lists_all_problems(self) -> None:
-        evidence = healthy(book_health="stale", depth_gap_count=1, agg_trade_count=0)
-        ready, problems = market_ready(evidence, policy=policy())
+        evidence = build_market_evidence(
+            observed_at=1_000,
+            generation=3,
+            book_health="stale",
+            anchored=True,
+            mark_age_ms=250,
+            feed_age_ms=120,
+            depth_gap_count=1,
+            resync_count=0,
+            malformed_count=0,
+            agg_trade_count=0,
+            policy=policy(),
+        )
 
-        report = market_evidence_report(evidence, ready=ready, problems=problems)
+        report = market_evidence_report(evidence)
 
         self.assertFalse(report["ready"])
         self.assertEqual(len(report["problems"]), 3)
         self.assertEqual(report["book_health"], "stale")
         self.assertEqual(report["depth_gap_count"], 1)
 
-    def test_negative_event_lag_is_a_fact_not_a_problem(self) -> None:
-        """event lag 可为负（交易所时钟快）——它与 `market_ready` 判定无关。"""
-        ready, _problems = market_ready(healthy(event_lag_ms=-137), policy=policy())
+    def test_builder_keeps_ready_and_problems_consistent(self) -> None:
+        evidence = build_market_evidence(
+            observed_at=1_000, generation=1, book_health="healthy", anchored=True,
+            mark_age_ms=1, feed_age_ms=1, depth_gap_count=0, resync_count=0, malformed_count=0,
+            agg_trade_count=5, policy=policy(),
+        )
 
-        self.assertTrue(ready)
+        self.assertTrue(evidence.ready)
+        self.assertEqual(evidence.problems, ())
 
     def test_replacement_can_build_new_facts(self) -> None:
         """事实对象是 frozen dataclass：只能构造新的，不能就地修改。"""

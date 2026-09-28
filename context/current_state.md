@@ -15,7 +15,7 @@ Provider identity 核实（决策 D，提案 §1.7）与授权探测 P1/P2（提
   P2 单条 `noul` 探针 → HTTP 200、604 ms、`answers.ok={type:noul,noul:0.99}`、cost 1.1634e-05。
 - **热路径 Jev 的真实目标应为 `/api/v1/systemone`**；实现 typed provider 需新提案（尚未授权、尚未改代码）。
 
-`context/status.json` 的 `currentProposal` 为 `null`（**P0001.9.4.2 已收口**，等待下一条正式 Proposal）。
+`context/status.json` 的 `currentProposal` 为 `null`（**P0001.9.5 已收口**，等待下一条正式 Proposal）。
 
 ## 已完成能力
 
@@ -311,6 +311,24 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
   最终 flat + 0 挂单 ⇒ **readiness = `live_ready`、scope `testnet_live_ready`、reasons = `[]`**。
 - 全量测试 **1584 passed / 0 failed / 24 skipped**；`context/status.json.currentProposal` 回到 `null`。
 
+### P0001.9.5 — Execution Readiness Evidence Binding（已完成）
+
+- 新增 `market/readiness.py`（产品侧 typed `MarketReadinessEvidence` + 纯映射，connector 侧只读事实）；
+  `readiness/collector.py`（`ReadinessEvidenceCollector` 从真实 Owner 读取 + `ReadinessProvenance` + digest）；
+  `readiness/authority.py`（`ExecutionReadinessAuthority` + `issue_authority` 仅 `LIVE_READY` 可签发 +
+  `ExecutionReadinessAuthorityValidator`：TTL / scope / recovery·market·HWM generation / kill switch）。
+- 契约升级：`LiveReadinessEvidence.market` 变为 typed evidence（**不再接受裸 `market_ready=True`**）；
+  `EnvironmentValidationEvidence` 取代裸 `mainnet_private_validated`（含 id/scope/source/时间，testnet ≠ mainnet）；
+  HWM 正式路径只经 `HighWatermarkTracker`；新增「声称 drawdown 已知但 HWM 无确认 peak ⇒ fail closed」一致性校验。
+- 两个 epoch：`RecoveryGeneration(discontinuity/invalidation)`、`market_generation`
+  （invalidate / resync / 重连推进；唯一入口）。
+- **真实 Testnet 授权链验收**：readiness `live_ready`（reasons `[]`、digest `sha256:5f5a…`、market generation 2）
+  ⇒ 签发 `testnet_live_ready` 授权（TTL 30 s）⇒ 校验 **valid**；
+  真实 private discontinuity ⇒ 同一授权 **invalid（RECOVERY_GENERATION_CHANGED）**；
+  market generation 推进 ⇒ **invalid（MARKET_GENERATION_CHANGED）**；请求 Mainnet ⇒ **invalid（SCOPE_MISMATCH）**。
+- **D-043 主要条款关闭**（§1.5）；未关闭项：activation/authority 的产品 CLI、主网验证记录自动化。
+- 全量测试 **1631 passed / 0 failed / 24 skipped**；`context/status.json.currentProposal` 回到 `null`。
+
 ## 进行中能力
 
 无。
@@ -318,9 +336,9 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 
 ## 下一步
 
-- **无授权中的步骤**：P0001.9.3 – P0001.9.4.2 均已收口，`currentProposal = null`。
-  Testnet readiness 的 blocker 集合已为**空**（真实跨进程验收）；下一步（Execution Readiness / Binance
-  ExecutionAdapter）必须由人类落盘新提案后才可实施 —— 不得据此推断或启动。
+- **无授权中的步骤**：P0001.9.3 – P0001.9.5 均已收口，`currentProposal = null`。
+  Testnet readiness blocker 集合为空且已有短时执行授权链；下一步（Binance ExecutionAdapter）**必须**由人类
+  落盘新提案后才可实施 —— 不得据此推断或启动；实现时仍须逐订单走 `RiskGate`。
   真实下单能力（Binance ExecutionAdapter）**尚未授权**，且 readiness 目前必然 BLOCKED（历史风险未知），
   任何"进入真实交易"的下一步都必须由人类落盘新提案。下一阶段必须由人类/设计方落盘正式 Proposal，
   再由人类下达「读取 … 实施」指令后才可实现（不得从 roadmap / handoff 推断任务）。

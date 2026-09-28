@@ -39,7 +39,7 @@ from readiness import (
 )
 from risk.snapshot import build_risk_snapshot, utc_day_start_ms
 from risk.types import AvailableBalanceSource
-from tests.readiness_support import active_hwm
+from tests.readiness_support import active_hwm, environment_evidence, market_evidence
 from tests.private_support import FakeRestFetcher, credentials
 from tests.support import BASE_TS, SYMBOL, make_fill
 
@@ -266,8 +266,8 @@ class ReadinessIntegrationTest(unittest.TestCase):
             ),
             account=AccountEvidence(can_trade=True, available_balance=1_000.0, available_balance_captured_at=BASE_TS),
             historical_risk=historical_risk_evidence_from_snapshot(snapshot),
-            environment=EnvironmentEvidence(environment=Environment.TESTNET),
-            market_ready=True,
+            environment=environment_evidence(environment=Environment.TESTNET),
+            market=market_evidence(),
             risk_policy=risk_policy,
             high_watermark=active_hwm(),
         )

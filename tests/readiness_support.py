@@ -7,6 +7,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from market.readiness import MarketReadinessEvidence
+from readiness.types import (
+    Environment,
+    EnvironmentEvidence,
+    EnvironmentValidationEvidence,
+    EnvironmentValidationStatus,
+)
 from risk.high_watermark import (
     ActivationPreconditions,
     EquityHighWatermarkState,
@@ -60,6 +67,46 @@ def satisfied_preconditions(**overrides: object) -> ActivationPreconditions:
     return ActivationPreconditions(**values)  # type: ignore[arg-type]
 
 
+def market_evidence(*, ready: bool = True, generation: int = 7, observed_at: int = BASE_TS, **overrides: object):
+    """测试用 market evidence（`ready` 与 `problems` 自洽）。"""
+    values: dict[str, object] = {
+        "ready": ready,
+        "observed_at": observed_at,
+        "generation": generation,
+        "book_health": "healthy" if ready else "stale",
+        "anchored": True,
+        "mark_age_ms": 100,
+        "feed_age_ms": 100,
+        "depth_gap_count": 0,
+        "resync_count": 0,
+        "malformed_count": 0,
+        "agg_trade_count": 50,
+        "problems": () if ready else ("book_health=stale",),
+    }
+    values.update(overrides)
+    return MarketReadinessEvidence(**values)  # type: ignore[arg-type]
+
+
+def environment_evidence(*, environment: Environment = Environment.TESTNET, validated: bool = False,
+                         validated_at: int = BASE_TS, validation_id: str = "validation-1",
+                         account_scope: str = "binance-usdm-mainnet-account",
+                         evidence_source: str = "live-readiness-runner"):
+    """测试用 environment evidence（默认 NOT_VALIDATED ⇒ 主网仍 BLOCKED，SC-23）。"""
+    if not validated:
+        return EnvironmentEvidence.not_validated(environment=environment)
+    return EnvironmentEvidence(
+        environment=environment,
+        validation=EnvironmentValidationEvidence(
+            environment=environment,
+            validation_status=EnvironmentValidationStatus.VALIDATED,
+            validated_at=validated_at,
+            validation_id=validation_id,
+            account_scope=account_scope,
+            evidence_source=evidence_source,
+        ),
+    )
+
+
 def activated_state(*, equity: float = 1_000.0, ts: int = BASE_TS, activation_id: str = "act-1") -> EquityHighWatermarkState:
     """直接构造一个 ACTIVE 状态（不经过 tracker，单测更直观）。"""
     return EquityHighWatermarkState(
@@ -104,6 +151,8 @@ __all__ = [
     "activated_state",
     "activated_tracker",
     "active_hwm",
+    "environment_evidence",
+    "market_evidence",
     "satisfied_preconditions",
     "with_peak",
 ]

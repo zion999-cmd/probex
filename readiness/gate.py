@@ -70,8 +70,11 @@ class LiveReadinessGate:
         self._check_historical_risk(evidence, fail)
         self._check_risk_policy(evidence, fail)
         self._check_environment(evidence, fail)
-        if not evidence.market_ready:
-            fail(LiveReadinessReason.MARKET_NOT_READY, "market data / feature engine is not healthy")
+        if not evidence.market.ready:
+            fail(
+                LiveReadinessReason.MARKET_NOT_READY,
+                "; ".join(evidence.market.problems) or "market data / feature engine is not healthy",
+            )
 
         if reasons:
             return LiveReadinessResult(
@@ -195,6 +198,16 @@ class LiveReadinessGate:
             return
         if hwm.status is HighWatermarkStatus.INVALIDATED:  # 防御：状态与 problem 不一致时也不放行
             fail(LiveReadinessReason.HIGH_WATERMARK_INVALID, hwm.detail or "high-watermark invalidated")
+            return
+        # P0001.9.5 §5 / SC-17：drawdown 的**权威来源**是 durable HWM。
+        # 若调用方声称 drawdown 已知，但 HWM 没有可用的已确认 peak ⇒ 事实自相矛盾 ⇒ fail closed。
+        claimed_known = evidence.historical_risk.drawdown_known and evidence.historical_risk.peak_equity_known
+        if claimed_known and not hwm.drawdown_known:
+            fail(
+                LiveReadinessReason.HIGH_WATERMARK_INVALID,
+                "drawdown is claimed known but the high-watermark has no confirmed peak "
+                "(authority must come from HighWatermarkTracker)",
+            )
 
     def _check_risk_policy(self, evidence: LiveReadinessEvidence, fail: _Fail) -> None:
         policy = evidence.risk_policy
@@ -212,10 +225,11 @@ class LiveReadinessGate:
 
     def _check_environment(self, evidence: LiveReadinessEvidence, fail: _Fail) -> None:
         environment = evidence.environment
-        if environment.environment is Environment.MAINNET and not environment.mainnet_private_validated:
+        validation = environment.validation
+        if environment.environment is Environment.MAINNET and not validation.mainnet_private_validated:
             fail(
                 LiveReadinessReason.MAINNET_PRIVATE_NOT_VALIDATED,
-                "mainnet private link has no recorded read-only validation "
+                f"mainnet private link validation status is {validation.validation_status.value} "
                 "(TESTNET_PRIVATE_VALIDATED does not transfer)",
             )
 

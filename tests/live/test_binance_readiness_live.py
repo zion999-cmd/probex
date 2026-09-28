@@ -42,6 +42,7 @@ from readiness import (
     historical_risk_evidence_from_snapshot,
     private_stream_evidence,
 )
+from market.readiness import MarketReadinessEvidence
 from risk.high_watermark import HighWatermarkEvidence
 from risk.snapshot import build_risk_snapshot, utc_day_start_ms
 from tests.live.test_binance_recovery_live import build_live_recovery, rest_base, ws_host
@@ -93,7 +94,7 @@ def build_evidence(
     now_ms: Milliseconds,
     day_start_ts: Milliseconds,
     environment: Environment,
-    market_ready: bool,
+    market: MarketReadinessEvidence,
     risk_policy: LiveRiskPolicy | None,
     historical_baseline=None,
     high_watermark=None,
@@ -123,7 +124,7 @@ def build_evidence(
         account=account_evidence(observation),
         historical_risk=historical_risk_evidence_from_snapshot(snapshot),
         environment=environment_evidence(environment=environment),
-        market_ready=market_ready,
+        market=market,
         risk_policy=risk_policy,
         high_watermark=(
             HighWatermarkEvidence.uninitialized()
@@ -259,7 +260,7 @@ class BinanceReadinessLiveTest(unittest.TestCase):
                 day_start_ts=utc_day_start_ms(now_ms),
                 environment=Environment.TESTNET,
                 # 本 harness 不运行 public market-data 链（它有自己的验收 P0001.9.1）⇒ 不伪造 green
-                market_ready=False,
+                market=not_ready_market_evidence(),
                 risk_policy=risk_policy,
             )
             result = LiveReadinessGate(policy=policy).evaluate(evidence)

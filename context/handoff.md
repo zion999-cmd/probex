@@ -1056,3 +1056,57 @@ readiness reasons 不变：`PRIVATE_LATENCY_UNKNOWN` / `HISTORICAL_DRAWDOWN_UNKN
 Binance ExecutionAdapter）**必须**由人类落盘新提案后再实施；不得自行启动。
 ~~本轮改动尚未 commit / push~~ —— **superseded（2026-09-28）**：该阶段改动已提交并 push 到 `origin/master`
 （P0001.9.4 + P0001.9.4.1 = `108ab49`；P0001.9.4.1.1 = `e600e84`；P0001.9.4.2 = `2543eea`）。
+
+## 2026-09-28：P0001.9.5 Execution Readiness Evidence Binding（已完成）
+
+**当前 Proposal**：P0001.9.5（完成后按 CLAUDE.md §5 回到 `null`）。
+
+**本次新增**
+
+- `market/readiness.py`：产品侧 `MarketReadinessEvidence` / `MarketReadinessPolicy` / `build_market_evidence` / `market_ready`。
+- `readiness/collector.py`：`ReadinessEvidenceCollector`（受控来源）+ `ReadinessProvenance` + `recovery_generation()`。
+- `readiness/authority.py`：`ExecutionReadinessAuthority` / `issue_authority()` / `ExecutionReadinessAuthorityValidator`
+  / `AuthorityInvalidReason` / `evidence_digest()` / `risk_policy_fingerprint()`。
+- 测试：`tests/unit/test_readiness_authority.py`（23）、`tests/fault/test_readiness_authority_faults.py`（12）、
+  `tests/integration/test_readiness_collector.py`（11）。
+
+**本次修改**
+
+- `readiness/types.py`：`EnvironmentValidationEvidence` / `EnvironmentValidationStatus` / `RecoveryGeneration`；
+  `market` 改为 typed evidence；逐字段类型校验。
+- `readiness/gate.py`：typed market/environment 检查 + 「drawdown 声称已知但 HWM 无 peak」一致性 fail closed。
+- `readiness/evidence.py`：`environment_evidence(...)` 构造 typed validation。
+- `connectors/binance/market_data/runtime.py`：`market_generation`（唯一入口推进 + telemetry 暴露）。
+- `tests/live/market_readiness.py`：映射**委托**产品模块（单一来源）。
+- 既有 readiness / harness 测试升级到 typed 契约；`proposals/P0001.9.5-*.md`（§0/§1）；`context/*`（D-047）。
+
+**本次删除**：无（`EnvironmentEvidence.mainnet_private_validated` 由裸 bool 改为**派生判定**，构造入口改为 typed validation）。
+
+**Acceptance 结果（SC-1 – SC-25 全 PASS；矩阵见提案 §1.2）**
+
+- **SC-20 – SC-23 真实 Testnet 授权链**：readiness `live_ready`（reasons `[]`、digest `sha256:5f5a792c…`、
+  market generation 2、HWM `testnet-act-1/1`）⇒ 签发 `testnet_live_ready` 授权（TTL 30 s）⇒ **valid**；
+  真实 `runtime.stop()` ⇒ 同一授权 **invalid（RECOVERY_GENERATION_CHANGED）**；
+  market generation +1 ⇒ **invalid（MARKET_GENERATION_CHANGED）**；请求 Mainnet ⇒ **invalid（SCOPE_MISMATCH）**。
+  活动：notional 81.31 USDT、最终 flat + 0 挂单、2 条 `ORDER_TRADE_UPDATE`。
+- **SC-1/SC-3/SC-4**：裸 `market_ready=True` 被契约拒绝；主网 validation 必须 typed 且完整（testnet 记录不转移）；
+  HWM 只能来自 tracker（每次 collect 取当前证据 ⇒ digest 随 HWM 变化）。
+- **SC-6**：6 类阻塞逐条证明"绝不签发授权"；**SC-18/19**：授权无任何执行能力、无 RiskGate 句柄。
+
+**测试结果**：unit 1020 / integration 252 / fault 286 / replay 49 passed；live 24 skipped；
+全量 **1631 passed / 0 failed / 24 skipped**；独立检出（`git archive HEAD` + 工作树叠加）同样全 PASS。
+
+**风险 / 已知问题**
+
+1. 进程内对象**没有**密码学防伪（提案明文）；机制价值是"受控来源 + 版本绑定 + TTL + 生命周期失效"。
+   **TTL 无生产默认值**：`issue_authority` 的 `authority_ttl_ms` 必填；验收用的 30 s 只是测试参数
+   （仓库外 harness 已改为显式必需该环境变量）。
+2. activation / authority 尚无产品 CLI 入口（目前由 harness 显式触发）；主网验证记录仍靠人工/runbook。
+3. `market_generation` 的推进点在 market runtime 内（connect/close/gap/resync/transport-lost）；
+   若未来新增使盘口可信度变化的路径，必须复用 `_bump_market_generation`（唯一入口）。
+4. 真实 ExecutionAdapter 仍未实现；实现时必须：先校验 authority（TTL + generation + scope + kill switch），
+   再对每一笔订单走 fresh `RiskSnapshot` → `RiskGate`。
+
+**阻塞**：无。
+**下一步**：`currentProposal = null`；等待人类落盘 `P0001.9.6（Binance ExecutionAdapter）` 或其他提案；
+不得自行启动。本轮改动**尚未 commit / push**（未获授权）。

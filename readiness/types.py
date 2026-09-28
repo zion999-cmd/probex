@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from market.events.types import Milliseconds
+from market.readiness import MarketReadinessEvidence
 from risk.high_watermark import HighWatermarkEvidence
 from risk.limits import RiskLimits
 from risk.types import KillSwitchMode
@@ -193,12 +194,115 @@ class HistoricalRiskEvidence:
     peak_equity_known: bool
 
 
+class EnvironmentValidationStatus(Enum):
+    """主网私有链路验收状态（P0001.9.5 §4）。"""
+
+    NOT_VALIDATED = "NOT_VALIDATED"
+    VALIDATED = "VALIDATED"
+    #: 曾经验证过，但记录已过期 / 与当前部署/账户范围不匹配
+    STALE = "STALE"
+
+
 @dataclass(frozen=True, slots=True)
-class EnvironmentEvidence:
-    """环境证据：`mainnet_private_validated` 必须来自真实的主网只读验收事实。"""
+class EnvironmentValidationEvidence:
+    """**typed** 环境验收证据（不再允许裸 `mainnet_private_validated=True`）。
+
+    `MAINNET_LIVE_READY` 必须同时满足：`environment == MAINNET`、`validation_status == VALIDATED`、
+    且验证记录与当前部署匹配（`account_scope` / `evidence_source` 非空、`validation_id` 存在）。
+    """
 
     environment: Environment
-    mainnet_private_validated: bool = False
+    validation_status: EnvironmentValidationStatus = EnvironmentValidationStatus.NOT_VALIDATED
+    validated_at: Milliseconds | None = None
+    validation_id: str | None = None
+    account_scope: str | None = None
+    evidence_source: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.environment, Environment):
+            raise ReadinessError("EnvironmentValidationEvidence.environment must be an Environment")
+        if not isinstance(self.validation_status, EnvironmentValidationStatus):
+            raise ReadinessError(
+                "EnvironmentValidationEvidence.validation_status must be an EnvironmentValidationStatus"
+            )
+        if self.validated_at is not None and (
+            isinstance(self.validated_at, bool) or not isinstance(self.validated_at, int) or self.validated_at < 0
+        ):
+            raise ReadinessError("EnvironmentValidationEvidence.validated_at must be a non-negative int or None")
+        for name in ("validation_id", "account_scope", "evidence_source"):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ReadinessError(f"EnvironmentValidationEvidence.{name} must be a non-empty string or None")
+
+    @classmethod
+    def not_validated(cls, *, environment: Environment) -> "EnvironmentValidationEvidence":
+        return cls(environment=environment)
+
+    @property
+    def mainnet_private_validated(self) -> bool:
+        """便捷判定：仅当环境是主网、状态 VALIDATED 且证据自洽时为 True。"""
+        return (
+            self.environment is Environment.MAINNET
+            and self.validation_status is EnvironmentValidationStatus.VALIDATED
+            and self.validated_at is not None
+            and bool(self.validation_id)
+            and bool(self.account_scope)
+            and bool(self.evidence_source)
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EnvironmentEvidence:
+    """环境证据（P0001.9.5 §4：由 typed validation 承载）。"""
+
+    environment: Environment
+    validation: EnvironmentValidationEvidence
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.environment, Environment):
+            raise ReadinessError("EnvironmentEvidence.environment must be an Environment")
+        if not isinstance(self.validation, EnvironmentValidationEvidence):
+            raise ReadinessError("EnvironmentEvidence.validation must be an EnvironmentValidationEvidence")
+        if self.validation.environment is not self.environment:
+            raise ReadinessError("EnvironmentEvidence.validation.environment must match environment")
+
+    @classmethod
+    def not_validated(cls, *, environment: Environment) -> "EnvironmentEvidence":
+        return cls(
+            environment=environment,
+            validation=EnvironmentValidationEvidence.not_validated(environment=environment),
+        )
+
+    @property
+    def mainnet_private_validated(self) -> bool:
+        return self.validation.mainnet_private_validated
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryGeneration:
+    """recovery epoch 的**显式**表示（P0001.9.5 §6）。
+
+    - `discontinuity_count`：private runtime 观测到的连续性丢失次数
+      （`PrivateAccountRuntime.discontinuity_events`）；
+    - `invalidation_count`：`StartupRecovery` 被失效的次数（`reason_log`）。
+
+    任一变化都意味着"旧的执行授权不能继续使用"。
+    """
+
+    discontinuity_count: int
+    invalidation_count: int
+
+    def __post_init__(self) -> None:
+        for name in ("discontinuity_count", "invalidation_count"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ReadinessError(f"RecoveryGeneration.{name} must be a non-negative int")
+
+    def matches(self, other: "RecoveryGeneration") -> bool:
+        return (
+            self.discontinuity_count == other.discontinuity_count
+            and self.invalidation_count == other.invalidation_count
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,7 +315,8 @@ class LiveReadinessEvidence:
     account: AccountEvidence
     historical_risk: HistoricalRiskEvidence
     environment: EnvironmentEvidence
-    market_ready: bool
+    #: P0001.9.5 §3：typed market evidence（正式路径不再接受裸 `market_ready=True`）
+    market: MarketReadinessEvidence
     risk_policy: LiveRiskPolicy | None
     #: P0001.9.4.2 §16：durable HWM 证据（必须显式给出；`uninitialized()` 表示从未 activation）
     high_watermark: HighWatermarkEvidence = field(default_factory=HighWatermarkEvidence.uninitialized)
@@ -221,8 +326,20 @@ class LiveReadinessEvidence:
             raise ReadinessError("LiveReadinessEvidence.now_ms must be a non-negative int")
         if not isinstance(self.recovery_status, RecoveryStatus):
             raise ReadinessError("LiveReadinessEvidence.recovery_status must be a RecoveryStatus")
-        if not isinstance(self.market_ready, bool):
-            raise ReadinessError("LiveReadinessEvidence.market_ready must be a bool")
+        if not isinstance(self.market, MarketReadinessEvidence):
+            raise ReadinessError("LiveReadinessEvidence.market must be a MarketReadinessEvidence")
+        for name, expected in (
+            ("private_stream", PrivateStreamEvidence),
+            ("account", AccountEvidence),
+            ("historical_risk", HistoricalRiskEvidence),
+            ("environment", EnvironmentEvidence),
+            ("high_watermark", HighWatermarkEvidence),
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, expected):
+                raise ReadinessError(f"LiveReadinessEvidence.{name} must be a {expected.__name__}")
+        if self.risk_policy is not None and not isinstance(self.risk_policy, LiveRiskPolicy):
+            raise ReadinessError("LiveReadinessEvidence.risk_policy must be a LiveRiskPolicy or None")
         if not isinstance(self.high_watermark, HighWatermarkEvidence):
             raise ReadinessError("LiveReadinessEvidence.high_watermark must be a HighWatermarkEvidence")
 
@@ -247,6 +364,9 @@ class LiveReadinessResult:
 
 __all__ = [
     "AccountEvidence",
+    "EnvironmentValidationEvidence",
+    "EnvironmentValidationStatus",
+    "RecoveryGeneration",
     "Environment",
     "EnvironmentEvidence",
     "HistoricalRiskEvidence",
