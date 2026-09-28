@@ -16,7 +16,7 @@ from market.events.types import Milliseconds
 from connectors.binance.market_data.parsing import (
     require_decimal,
     require_field,
-    require_int,
+    require_int_like,
     require_mapping,
     require_optional_int,
     require_optional_str,
@@ -50,7 +50,8 @@ class PositionObservation:
     leverage: int
     margin_type: str
     position_side: str
-    margin_asset: str
+    #: 保证金资产；payload 未提供时为 None（见 `parse_position_entry` 的 USDT-M 确认规则）。
+    margin_asset: str | None
     update_time_ms: Milliseconds | None
     receive_ts: Milliseconds
     process_ts: Milliseconds
@@ -76,14 +77,18 @@ class PositionObservation:
         return abs(self.position_amt) * self.mark_price
 
 
-def require_one_way_mode(*, position_side: str, margin_asset: str, symbol: str) -> AccountMode:
-    """校验 one-way + USDT-M；不满足即 fail closed（不自动兼容）。"""
+def require_one_way_mode(*, position_side: str, margin_asset: str | None, symbol: str) -> AccountMode:
+    """校验 one-way（+ 尽力校验 USDT-M）；不满足即 fail closed（不自动兼容）。
+
+    `margin_asset` 为 None 表示 payload 未提供该字段（真实测试网即如此）：
+    此时 USDT-M 由端点语义（fapi = USDⓈ-M）与账户资产列表（运行时要求存在 USDT 条目）共同确认。
+    """
     if position_side != ONE_WAY_POSITION_SIDE:
         raise UnsupportedAccountModeError(
             f"{symbol}: positionSide={position_side!r} indicates hedge mode; "
             "P0001.9.2 only supports one-way mode (fail closed, no auto-adaptation)"
         )
-    if margin_asset != SUPPORTED_MARGIN_ASSET:
+    if margin_asset is not None and margin_asset != SUPPORTED_MARGIN_ASSET:
         raise UnsupportedAccountModeError(
             f"{symbol}: margin asset {margin_asset!r} is not USDT-M; unsupported in this phase"
         )
@@ -122,20 +127,22 @@ def parse_position_entry(
     mark_price = require_decimal(require_field(entry, "markPrice", path=path), path=f"{path}.markPrice")
     unrealized = require_decimal(require_field(entry, "unRealizedProfit", path=path), path=f"{path}.unRealizedProfit")
     liquidation = require_decimal(require_field(entry, "liquidationPrice", path=path), path=f"{path}.liquidationPrice")
-    leverage = require_int(require_field(entry, "leverage", path=path), path=f"{path}.leverage")
+    leverage = require_int_like(require_field(entry, "leverage", path=path), path=f"{path}.leverage")
     margin_type = require_str(require_field(entry, "marginType", path=path), path=f"{path}.marginType")
     position_side = require_str(require_field(entry, "positionSide", path=path), path=f"{path}.positionSide")
+    # 真实测试网 payload **没有** marginAsset/asset ⇒ 允许缺失（USDT-M 由端点 + 账户资产确认）
     margin_asset = require_optional_str(entry.get("marginAsset"), path=f"{path}.marginAsset") or require_optional_str(
         entry.get("asset"), path=f"{path}.asset"
     )
-    if margin_asset is None:
-        raise PrivateFormatError(f"{path}: missing marginAsset/asset (cannot confirm USDT-M)")
 
     for name, value in (("entryPrice", entry_price), ("markPrice", mark_price), ("liquidationPrice", liquidation)):
         if not math.isfinite(value) or value < 0.0:
             raise PrivateFormatError(f"{path}.{name} must be a non-negative finite number, got {value!r}")
-    if mark_price <= 0.0:
-        raise PrivateFormatError(f"{path}.markPrice must be > 0, got {mark_price!r}")
+    if mark_price <= 0.0 and position_amt != 0.0:
+        # 空仓时 Binance 会给出 markPrice="0"（真实测试网实测）；有仓却没有正 mark price 才是不可用
+        raise PrivateFormatError(
+            f"{path}.markPrice must be > 0 for an open position, got {mark_price!r} (positionAmt={position_amt!r})"
+        )
     if leverage < 1:
         raise PrivateFormatError(f"{path}.leverage must be >= 1, got {leverage!r}")
     require_one_way_mode(position_side=position_side, margin_asset=margin_asset, symbol=symbol)

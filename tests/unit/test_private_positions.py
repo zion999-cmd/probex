@@ -6,7 +6,7 @@ import unittest
 
 from connectors.binance.private.errors import PrivateFormatError, UnsupportedAccountModeError
 from connectors.binance.private.positions import AccountMode, parse_position_entry, parse_position_risk
-from tests.private_support import SYMBOL, position_risk_payload
+from tests.private_support import SYMBOL, position_risk_payload, testnet_position_risk_payload
 
 
 class PositionRiskTest(unittest.TestCase):
@@ -57,12 +57,48 @@ class PositionRiskTest(unittest.TestCase):
                 position_risk_payload(margin_asset="BUSD"), symbol=SYMBOL, receive_ts=1, process_ts=1
             )
 
-    def test_missing_margin_asset_fails_closed(self) -> None:
+    def test_missing_margin_asset_is_allowed_with_none(self) -> None:
+        """真实测试网 payload 没有 marginAsset/asset ⇒ 允许缺失，记录为 None（USDT-M 由端点+账户资产确认）。"""
         entry = position_risk_payload()[0]
         del entry["marginAsset"]
 
+        position = parse_position_entry(entry, receive_ts=1, process_ts=1)
+
+        self.assertIsNone(position.margin_asset)
+        self.assertIs(position.account_mode, AccountMode.ONE_WAY)
+
+    def test_real_testnet_shape_parses(self) -> None:
+        """测试网形态：字符串 leverage + 无 marginAsset + 空仓 markPrice="0"。"""
+        position = parse_position_risk(
+            testnet_position_risk_payload(), symbol=SYMBOL, receive_ts=1, process_ts=1
+        )
+
+        self.assertEqual(position.leverage, 20)
+        self.assertIsNone(position.margin_asset)
+        self.assertEqual(position.mark_price, 0.0)
+        self.assertTrue(position.is_flat)
+        self.assertEqual(position.notional, 0.0)
+
+    def test_string_leverage_is_accepted(self) -> None:
+        position = parse_position_risk(
+            position_risk_payload(leverage="5"), symbol=SYMBOL, receive_ts=1, process_ts=1
+        )
+
+        self.assertEqual(position.leverage, 5)
+
+    def test_zero_mark_price_on_open_position_fails_closed(self) -> None:
         with self.assertRaises(PrivateFormatError):
-            parse_position_entry(entry, receive_ts=1, process_ts=1)
+            parse_position_risk(
+                position_risk_payload(position_amt="0.5", mark_price="0"), symbol=SYMBOL, receive_ts=1, process_ts=1
+            )
+
+    def test_invalid_string_leverage_fails_closed(self) -> None:
+        for value in ("abc", "2.5", "", True, "1e2"):
+            with self.subTest(value=value):
+                with self.assertRaises(PrivateFormatError):
+                    parse_position_risk(
+                        position_risk_payload(leverage=value), symbol=SYMBOL, receive_ts=1, process_ts=1  # type: ignore[arg-type]
+                    )
 
     def test_symbol_must_be_present_in_response(self) -> None:
         with self.assertRaises(PrivateFormatError):

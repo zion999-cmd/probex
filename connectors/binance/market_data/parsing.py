@@ -98,6 +98,23 @@ def require_optional_str(value: object, *, path: str) -> str | None:
     return require_str(value, path=path)
 
 
+def require_int_like(value: object, *, path: str) -> int:
+    """整数语义字段：接受 `int` 或**十进制字符串**（Binance 常把整数当字符串传，例如 `leverage`）。
+
+    拒绝 bool / float / 非整数字符串（fail closed）。
+    """
+    if isinstance(value, bool):
+        raise MarketDataFormatError(f"{path}: expected an integer, got bool")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if text and (text.isdigit() or (text.startswith("-") and text[1:].isdigit())):
+            return int(text)
+        raise MarketDataFormatError(f"{path}: expected an integer, got {value!r}")
+    raise MarketDataFormatError(f"{path}: expected an integer, got {type(value).__name__}")
+
+
 def require_bool(value: object, *, path: str) -> bool:
     """布尔字段窄化：拒绝整数冒充布尔（Binance 用真布尔）。"""
     if not isinstance(value, bool):
@@ -113,6 +130,7 @@ __all__ = [
     "require_decimal",
     "require_field",
     "require_int",
+    "require_int_like",
     "require_levels",
     "require_mapping",
     "require_str",

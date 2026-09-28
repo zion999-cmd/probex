@@ -159,9 +159,13 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
   非 one-way/USDT-M fail closed；重连后 `continuity_assumed=False`。
 - 本机无凭据 ⇒ 认证 smoke NOT RUN（运行即抛 `CredentialsError ... refusing to start`，即 SC-1 的真实证据）。
 - 已提交并推送：`c97d2eb`（远端 `origin/master`）。
-- **未完成的真实项（门控）**：SC-4 真实 account/position snapshot、SC-6 真实 user stream、
-  SC-12 private stream latency、SC-13 latency gate。在这些项通过前 **P0001.9.2 = In Progress**，
-  **P0001.9.3 不启动**（人类 2026-09-28 指示）。
+- **真实测试网 Acceptance（2026-09-28，人类裁决用测试网）**：签名 REST（account + positionRisk）真实通过；
+  `listenKey ACTIVE`；user stream 真实连接并保持；真实发生 1–3 次断开 → 重连 + `continuity_assumed=False`（SC-10 实测）；
+  `private_lag_ms` 无样本 ⇒ 以 `path_rtt`（884–1139 ms < 2000 ms 阈值）为标注基准。
+  真实 payload 驱动三处解析修正：`leverage` 字符串、`marginAsset` 可缺失（改由端点+USDT 资产确认）、空仓允许 `markPrice=0`（D-033）。
+- **仍未具备真实证据**：① 业务事件（需账户活动；本阶段禁止我们下单 ⇒ 建议人类在测试网 UI 手动下一笔并撤销，我们仍只读）；
+  ② 心跳 ping（分钟级周期，需 ≥5 分钟窗口）；③ 主网（REST 被出口 IP 封禁 418/-1003）。
+  在这些项补齐前 **P0001.9.2 = In Progress**，**P0001.9.3 不启动**（人类 2026-09-28 指示）。
 
 ### P0001.9.2.1 — Private Connectivity Contract Audit & CCXT Fit（已完成；裁决 KEEP_NATIVE_PRIVATE）
 

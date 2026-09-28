@@ -154,7 +154,8 @@ def _build_report(runtime: PrivateAccountRuntime, *, boundary, events: int) -> d
         "continuity_assumed": telemetry.continuity_assumed,
         "counts": {
             "messages": telemetry.message_count,
-            "heartbeats_or_timeouts": telemetry.timeout_count,
+            "heartbeat_pings": telemetry.heartbeat_count,
+            "pump_timeouts": telemetry.timeout_count,
             "account_updates": telemetry.account_update_count,
             "order_updates": telemetry.order_update_count,
             "fills": telemetry.fill_observation_count,

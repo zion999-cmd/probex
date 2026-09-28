@@ -36,6 +36,7 @@ from connectors.binance.private.errors import (
     PrivateFormatError,
     PrivateStreamError,
     ReconnectExhaustedError,
+    UnsupportedAccountModeError,
 )
 from connectors.binance.private.events import (
     AccountUpdateObservation,
@@ -257,6 +258,12 @@ class PrivateAccountRuntime:
         snapshot = parse_account_snapshot(
             account_raw, symbol=self.config.symbol, receive_ts=account_received, process_ts=position_received
         )
+        if snapshot.settlement_balance is None:
+            # 账户资产列表里没有 USDT 条目 ⇒ 无法确认 USDT-M（fail closed，不自动兼容）
+            raise UnsupportedAccountModeError(
+                f"{self.config.symbol}: account has no USDT asset entry; "
+                "P0001.9.2 only supports USDT-margined accounts"
+            )
         position = parse_position_risk(
             position_raw, symbol=self.config.symbol, receive_ts=position_received, process_ts=int(self.clock())
         )
@@ -367,9 +374,15 @@ class PrivateAccountRuntime:
         builder.errors.append(f"listenKey recreated: {reason}")
         self._create_listen_key_and_connect()
 
+    def _sync_heartbeats(self) -> None:
+        """把传输层观测到的 ping 数同步到 telemetry（SC-6 的心跳证据）。"""
+        if self._ws is not None:
+            self.counters.heartbeat_count = self._ws.ping_count
+
     def _pump_one(self, builder: "_BatchBuilder", *, timeout_s: float) -> bool:
         if self._ws is None:
             raise PrivateStreamError("user data stream is not connected; call start() first")
+        self._sync_heartbeats()
         try:
             text = self._ws.recv_text(timeout_s=timeout_s)
         except WebSocketTimeout:

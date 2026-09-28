@@ -514,3 +514,21 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
    user data **无连续性证据** ⇒ 换 transport 仍要保留 Probex 自己的归一化与 continuity 管理，
    却额外承担依赖、升级与许可成本。
 4. 与 transport 选择无关的约束不变：`continuity_assumed` 与 P0001.9.3 reconciliation 都不可省。
+
+## D-033 真实 payload 驱动的 private 解析契约修正（P0001.9.2 测试网验收）
+
+**日期**：2026-09-28
+**状态**：生效
+
+**决策（三条，均由真实测试网 payload 证据驱动）**：
+
+1. **整数语义字段接受字符串**：Binance 会把整数当字符串传（实测 `positionRisk.leverage = "20"`）⇒
+   新增 `require_int_like`（int 或十进制字符串；拒绝 float/bool/非法串），`leverage` 改用它。
+2. **`marginAsset` / `asset` 允许缺失**：测试网 `positionRisk` 与 `account.positions[]` 均无该字段 ⇒
+   缺失时记录 `margin_asset = None`；**USDT-M 的确认改由两层显式证据**：端点语义（fapi = USDⓈ-M）
+   + 账户资产列表必须含 `USDT` 条目（运行时校验，缺失即 `UnsupportedAccountModeError`，仍 fail closed）。
+3. **空仓允许 `markPrice = 0`**：实测空仓返回 `"0"`；仅空仓允许 0，**有仓却非正 mark price 仍 fail closed**
+   （避免用 0 伪造名义价值）。
+
+**附带（telemetry，纯追加）**：传输层新增 `ping_count` / `pong_count`，private runtime 将其同步为
+`heartbeat_count` ⇒ 用户数据流的「心跳证据」可观测（SC-6），业务消息之外的链路健康有据可查。

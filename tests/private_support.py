@@ -88,26 +88,40 @@ def position_risk_payload(
     mark_price: str = "60100.00",
     unrealized_profit: str = "49.95",
     liquidation_price: str = "55000.00",
-    leverage: int = 10,
+    leverage: int | str = 10,
     margin_type: str = "cross",
     position_side: str = "BOTH",
-    margin_asset: str = "USDT",
+    margin_asset: str | None = "USDT",
 ) -> list[dict]:
-    return [
-        {
-            "symbol": symbol,
-            "positionAmt": position_amt,
-            "entryPrice": entry_price,
-            "markPrice": mark_price,
-            "unRealizedProfit": unrealized_profit,
-            "liquidationPrice": liquidation_price,
-            "leverage": leverage,
-            "marginType": margin_type,
-            "positionSide": position_side,
-            "marginAsset": margin_asset,
-            "updateTime": BASE_TS,
-        }
-    ]
+    """positionRisk 条目。
+
+    `margin_asset=None` 与 `leverage="20"`（字符串）以及空仓 `mark_price="0"` 都是**真实测试网**形态
+    （2026-09-28 实测：payload 没有 marginAsset/asset，整数以字符串传输，空仓 markPrice 为 "0"）。
+    """
+    entry: dict[str, object] = {
+        "symbol": symbol,
+        "positionAmt": position_amt,
+        "entryPrice": entry_price,
+        "markPrice": mark_price,
+        "unRealizedProfit": unrealized_profit,
+        "liquidationPrice": liquidation_price,
+        "leverage": leverage,
+        "marginType": margin_type,
+        "positionSide": position_side,
+        "updateTime": BASE_TS,
+    }
+    if margin_asset is not None:
+        entry["marginAsset"] = margin_asset
+    return [entry]
+
+
+def testnet_position_risk_payload(
+    *, symbol: str = SYMBOL, position_amt: str = "0", mark_price: str = "0", leverage: str = "20"
+) -> list[dict]:
+    """真实测试网形态的 positionRisk（字符串整数 + 无 marginAsset）。"""
+    return position_risk_payload(
+        symbol=symbol, position_amt=position_amt, mark_price=mark_price, leverage=leverage, margin_asset=None
+    )
 
 
 def account_update_message(
@@ -230,6 +244,8 @@ class FakeConnection:
     sent: list[str] = field(default_factory=list)
     closed: bool = False
     dropped: bool = False
+    #: 模拟传输层观测到的心跳（SC-6 证据用）。
+    ping_count: int = 0
 
     def send_text(self, text: str) -> None:
         if self.closed or self.dropped:
@@ -310,5 +326,6 @@ __all__ = [
     "listen_key_expired_message",
     "order_update_message",
     "position_risk_payload",
+    "testnet_position_risk_payload",
     "private_config",
 ]

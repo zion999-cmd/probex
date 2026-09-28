@@ -174,6 +174,17 @@ class ConnectionTest(unittest.TestCase):
         self.assertTrue(sock.closed)
         self.assertEqual(len([frame for frame in sock.sent if frame[0] == 0x88]), 1)
 
+    def test_ping_and_pong_frames_are_counted(self) -> None:
+        """心跳帧计数：user data stream 的健康证据（pong 由客户端自动应答）。"""
+        conn, sock = self._connection(
+            [_server_frame(b"p1", opcode=0x9), _server_frame(b"pong", opcode=0xA), _server_frame(b"x")]
+        )
+
+        self.assertEqual(conn.recv_text(timeout_s=1), "x")  # ping/pong 被内部消费
+        self.assertEqual(conn.ping_count, 1)
+        self.assertEqual(conn.pong_count, 1)
+        self.assertTrue(any(frame[0] == 0x8A for frame in sock.sent))  # 已应答
+
     def test_pong_and_close_encoders(self) -> None:
         self.assertEqual(encode_pong_frame(b"x", mask_key=b"\x01\x02\x03\x04")[0], 0x8A)
         self.assertEqual(encode_close_frame(mask_key=b"\x01\x02\x03\x04")[0], 0x88)

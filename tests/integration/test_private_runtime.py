@@ -90,6 +90,29 @@ class StartupTest(unittest.TestCase):
         with self.assertRaises(PrivateStreamError):
             runtime.refresh_snapshot()
 
+    def test_account_without_usdt_asset_fails_closed(self) -> None:
+        """payload 未提供 marginAsset 时，USDT-M 由账户资产列表核对；没有 USDT 条目 ⇒ fail closed。"""
+        from connectors.binance.private.errors import UnsupportedAccountModeError
+        from tests.private_support import account_payload
+
+        runtime, fetcher, _ = build_runtime()
+        payload = account_payload()
+        payload["assets"] = [
+            {
+                "asset": "FDUSD",
+                "walletBalance": "10.0",
+                "availableBalance": "10.0",
+                "marginBalance": "10.0",
+                "unrealizedProfit": "0.0",
+                "maxWithdrawAmount": "10.0",
+                "updateTime": BASE_TS,
+            }
+        ]
+        fetcher.responses["/fapi/v2/account"] = payload
+
+        with self.assertRaises(UnsupportedAccountModeError):
+            runtime.start()
+
     def test_server_time_offset_is_recorded(self) -> None:
         runtime, _, _ = build_runtime()
 
@@ -171,6 +194,14 @@ class EventConsumerTest(unittest.TestCase):
 
         self.assertEqual(len(batch.events), 3)
         self.assertEqual(runtime.telemetry.order_update_count, 3)
+
+    def test_heartbeat_count_is_reported_from_the_transport(self) -> None:
+        runtime, _, factory = self._started()
+        factory.connection.ping_count = 3
+
+        runtime.pump_once(timeout_s=0.01)
+
+        self.assertEqual(runtime.telemetry.heartbeat_count, 3)
 
     def test_stop_closes_stream_and_listen_key(self) -> None:
         runtime, fetcher, factory = self._started()

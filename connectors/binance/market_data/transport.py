@@ -212,6 +212,9 @@ class WebSocketConnection:
         self._buffer = bytearray(initial_bytes)
         self._closed = False
         self._closed_explicitly = False
+        #: 收到的心跳帧计数（Binance 用户数据流的心跳只能这样观测；业务消息之外的健康证据）。
+        self._ping_count = 0
+        self._pong_count = 0
 
     @property
     def host(self) -> str:
@@ -225,6 +228,16 @@ class WebSocketConnection:
     def closed(self) -> bool:
         """对端是否已关闭连接（收到 close 帧或 socket 返回空）。"""
         return self._closed
+
+    @property
+    def ping_count(self) -> int:
+        """已收到并已应答的 ping 帧数（心跳证据）。"""
+        return self._ping_count
+
+    @property
+    def pong_count(self) -> int:
+        """已收到的 pong 帧数。"""
+        return self._pong_count
 
     def send_text(self, text: str) -> None:
         if self._closed:
@@ -290,9 +303,11 @@ class WebSocketConnection:
             self._closed = True
             return (True, None)
         if frame.opcode == _OPCODE_PING:
+            self._ping_count += 1
             self._socket.sendall(encode_pong_frame(frame.payload, mask_key=_new_mask_key()))
             return (False, None)
         if frame.opcode == _OPCODE_PONG:
+            self._pong_count += 1
             return (False, None)
         if frame.opcode == _OPCODE_BINARY:
             raise WebSocketProtocolError("unexpected binary frame (Binance streams are text)")

@@ -521,6 +521,60 @@ D 非阻塞快照抓取（仅缓解新鲜度）。
 - CCXT Pro：`watch_orders/watch_my_trades/watch_balance/watch_positions` 齐备，`info` 保留原始 payload（Probex raw 字段可取）；
   但 `parse_position` NotSupported、归一化不足需读 `info`、**user data 无连续性证据**；
 - ccxt 对 futures **orderbook** 的判据包含 `pu == nonce` —— 独立佐证了 P0001.9.1.1 的修正 ✓。
+- 补充（人类指路 `~/Workspace/ccxt`）：该本地 checkout 是 **v4.4.92（2026 迁移前）** —— private URL 仍是 legacy
+  `/ws/<listenKey>`、无 tier 分层、无 WS API `userDataStream.*`；新版 4.5.84 才与我们的 URL 形态一致。
+  两版本都含 `pu == nonce` 判据（佐证 P0001.9.1.1）。本地 checkout 与 pypi 版都**未**成为项目依赖。
 
 **下一步**：人类在提案 §4 两个候选中裁决；随后要么继续 Native（直接进入 P0001.9.3），
 要么按 §16 授权引入 ccxt 依赖并改造 private transport。
+
+## 环境事实更新（2026-09-28）：出口与代理
+
+- **本机有公网出口，但只能经代理**：`127.0.0.1:7890`（Clash）在听；`7893/7891/7897` 已关闭。
+  出口**不稳定**：`/fapi/v1/time` 曾出现 HTTP **418（IP 限流/封禁）**、10s 超时与变慢；WS（经 relay）仍可收到真实行情。
+- `ccxt_demo` **不是**"能取数据"的证据：`data/*.parquet` 全是 2025-08-16 的**历史缓存**，
+  且它硬编码的代理端口 **7893 已关闭**；ccxt 4.5.84 在当前 shell `fetch_time()` 实测失败。
+- 差异根因：native transport 是**裸 socket（不认代理）**；P0001.9.1 的真实验收靠
+  `/tmp/probex_live/proxy_relay.py`（harness 旁路，不入仓库）跑通。ccxt 只是显式传了 `proxies`。
+- 待裁决（提案 P0001.9.2.1 §3.2）：是否给 native transport **显式**加代理配置（新契约，不得静默 fallback）。
+- **人类确认（2026-09-28）：代理已迁移到 `7890`**（`7893` 退役）⇒ `ccxt_demo` 里硬编码的 7893 配置已失效，
+  本机一切真人网流量应走 `127.0.0.1:7890`；native 侧继续用 `/tmp/probex_live/proxy_relay.py` 旁路（不入仓库）。
+
+## 人类裁决（2026-09-28）：P0001.9.2 真实 Acceptance 用**测试网**
+
+- 裁决：private 真实验收改用 **Binance USDⓈ-M Futures Testnet**（零资金风险；REST `https://demo-fapi.binance.com`，
+  WS `wss://fstream.binancefuture.com`；两者都经用户代理 7890 实测可达）。
+- 实测（无凭据）：测试网 `/fapi/v1/time` 200、`/exchangeInfo` 741 symbols（BTCUSDT=TRADING）、
+  `/public/stream?streams=btcusdt@depth` 收到真实消息；私有端点 `/fapi/v2/account`、`/fapi/v2/positionRisk`、
+  `/fapi/v1/listenKey` 在无 Key 时返回 **401 = -2014（端点存在，凭证被拒）** ⇒ 测试网私有路径已就绪。
+- 对照：**主网 REST 当前被 IP 封禁**（经 7890 出口 `203.10.99.11`：`418 / -1003 Way too many requests … banned until …`），
+  WS 仍可用 ⇒ 主网 REST 侧的验收暂时不可行，测试网是当下正确选择。
+- runner（仓库外，不改产品代码）：`/tmp/probex_live/run_private_testnet.py`
+  - 用**同一套** private 代码 + 仓库 live smoke 的 `_collect` / `_build_report` / `_assert_sc13`（报告格式一致）；
+  - 只改 REST base 与 WS host 指向测试网（产品端本就是可注入配置）；
+  - 凭据来源：env 或 `.env` 风格文件路径（**只读入本进程环境，绝不打印/落盘**）；无凭据时 fail closed。
+- **待人类提供测试网只读 Key**（`testnet.binancefuture.com` 注册 → API Key，无需入金；只需读权限）。
+  拿到后我执行：`BINANCE_API_KEY=… BINANCE_API_SECRET=… python3 /tmp/probex_live/run_private_testnet.py`
+  并回传 `PROBEX PRIVATE LIVE SMOKE REPORT (TESTNET)`。
+- 注意（如实记录）：测试网验收证明**契约/签名/权限/生命周期**在真实 Binance 基础设施上成立；
+  主网特有账户数据与主网私有链路延迟仍属未验证项（如需要，等主网 IP 封禁解除后再补一次）。
+
+## P0001.9.2 真实测试网 Acceptance（2026-09-28，已执行）
+
+- **凭据位置**：`~/.probex/testnet.env`（`600`，**仓库外**，仅本进程读取；值从未打印/提交）。**用完建议轮换**。
+- **runner（仓库外）**：`/tmp/probex_live/run_private_testnet.py`（复用仓库 live smoke 的报告与断言；只把 REST/WS 指向测试网）。
+- **结果**：签名 REST（account + positionRisk）真实通过；`server_time_offset` 185–259ms；`listenKey ACTIVE`；
+  user stream 连接保持；真实 1–3 次断开 → 重连成功且 `continuity_assumed=False`（SC-10 实测）；
+  `lag_basis=path_rtt`（884–1139ms < 2000ms）；malformed/duplicate/out_of_order 全 0；业务事件与心跳 ping 未出现（空账户）。
+- **真实 payload 驱动的三处修正（D-033）**：`leverage` 为字符串、`marginAsset` 缺失（改由端点 + 账户 USDT 条目确认）、
+  空仓 `markPrice="0"` 允许。附：传输层新增 `ping_count` → `heartbeat_count` telemetry。
+- **环境发现（harness 侧）**：`/tmp` relay 之前保留 15s 空闲超时 ⇒ 静默期被 shutdown（表现为 peer closed + 频繁重连）；
+  修正为隧道建立后 `settimeout(None)` 后四种 private URL 形态均可长期保持打开。
+- **测试**：1325 passed / 0 failed / 17 skipped。
+
+**要继续补真实证据（仍不改本阶段边界）**：
+
+1. 人类在**测试网 UI** 手动下一笔小额单并撤销（我们仍只读、不下单）→ 重跑 runner 即可拿到
+   `ORDER_TRADE_UPDATE` / `ACCOUNT_UPDATE` / 成交的真实事件链（SC-7/8/11/12 的真实证据）。
+2. 心跳：用 `PROBEX_LIVE_SMOKE_SECONDS=360` 跑一次长窗口（ping 周期为分钟级），观察 `counts.heartbeat_pings > 0`。
+3. 主网：等出口 IP 封禁（418/-1003）解除后再补一次；主网私有链路延迟与账户数据仍未验证。
