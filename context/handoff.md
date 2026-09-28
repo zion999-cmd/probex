@@ -1109,4 +1109,5 @@ Binance ExecutionAdapter）**必须**由人类落盘新提案后再实施；不�
 
 **阻塞**：无。
 **下一步**：`currentProposal = null`；等待人类落盘 `P0001.9.6（Binance ExecutionAdapter）` 或其他提案；
-不得自行启动。本轮改动**尚未 commit / push**（未获授权）。
+不得自行启动。~~本轮改动尚未 commit / push~~ —— **superseded（2026-09-28）**：
+P0001.9.5 已作为 commit `a2ab8da` 提交并 push 到 `origin/master`（1631 passed）。
