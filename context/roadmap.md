@@ -9,7 +9,7 @@ P0001.1   Market Event + L2 Book + BookHealth   ← 已完成
 P0001.2   Event Store + Deterministic Replay    ← 已完成
 P0001.3   Feature / MarketState                 ← 已完成
 P0001.4   Jev Prediction Runtime                ← 已完成
-P0001.4.1 Real Jev Transport Validation         ← 实现中（SC-3/4/6 已验收；SC-1/2/5 待真实凭证）
+P0001.4.1 Real Jev Transport Validation         ← 已完成（CONTRACT_MISMATCH / PROVIDER_UNSUITABLE）
 P0001.5   Accounting + Risk
 P0001.6   Paper Execution + Order Lifecycle
 P0001.7   Market Making
@@ -28,5 +28,5 @@ P0001.10  Product API / UI / Reports
 | P0001.2 | 已完成（2026-09-28，全部 Success Criteria PASS） |
 | P0001.3 | 已完成（2026-09-28，全部 Success Criteria PASS） |
 | P0001.4 | 已完成（2026-09-28，全部 Success Criteria PASS） |
-| P0001.4.1 | 实现中（OpenRouter transport 已实现并通过离线验收；SC-1/2/5 待 `OPENROUTER_API_KEY`） |
+| P0001.4.1 | 已完成（结论：`OpenRouterTransport` VALIDATED；`typesafe/jev-router` REJECTED_FOR_NOW） |
 | P0001.5 – P0001.10 | 未开始（待各自独立子提案落盘） |

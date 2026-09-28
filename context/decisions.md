@@ -158,3 +158,21 @@
 - `OpenRouterTransport(request) -> str` 返回 `choices[0].message.content`，即 strict parser 的输入。
 - `PredictionRecord.raw_response` 记录 **Jev content**（不是 OpenRouter 外层）；OpenRouter 外层与 HTTP 证据保存在 transport 的 telemetry（`OpenRouterCall`），二者不混淆。
 - 旧 `fmz_v3(1).js` 的 `market_*` / `toxicity_*` / `fill_*` 只作领域参考；真实响应与 `jev-market-v1` 不一致时报告 `CONTRACT_MISMATCH`，不静默 normalize、不模糊兼容。
+
+## D-017 OpenRouter transport 通过验证；`typesafe/jev-router` 暂不采用为热路径 JevProvider
+
+**日期**：2026-09-28
+**状态**：生效（人类 2026-09-28 决策）
+**决策**：
+- `OpenRouterTransport`：**VALIDATED** —— 外层契约（chat completions + Bearer + `choices[0].message.content`）、HTTP 状态映射、timeout、telemetry、Key 隔离均成立。
+- `OpenRouter typesafe/jev-router` 作为热路径 Jev Provider：**REJECTED_FOR_NOW**。
+  Reason: unstable model identity（实测解析为 `stealth/space-bunny-alpha` / provider `Stealth`）、
+  unstable output contract（自然语言 / 围栏 JSON / 裸 JSON 漂移，键名与额外字段随调用变化）、
+  4.9–19 s observed latency。
+- **不以** prompt 强制 JSON、schema 放宽或 adapter 模糊转换来掩盖该事实；`jev-market-v1` 保持不变。
+- P0001.4.1 以 `CONTRACT_MISMATCH` / `PROVIDER_UNSUITABLE` 作为**有效实验结论**关闭；SC-1 不要求通过。
+- 在 Provider identity 的五个问题全部回答前：不进入 P0001.5、不修改 `jev-market-v1`、不增加兼容 parser、不做 prompt engineering。
+**事后核实（决策 D，见提案 §1.7）**：旧 ~270 ms Jev 走的是同一 OpenRouter 平台的另一个 API 表面 ——
+`POST https://openrouter.ai/api/v1/systemone`、model `jev-1.13` → 解析为 `typesafe/jev-1.13-20260917`、provider `TypeSafe`、
+typed `answers.<id>.{noul|choice|score}`、不生成文本。与 `typesafe/jev-router` 属同一平台不同接口/上游。
+**影响**：Jev 接入路径的后续选择（恢复 typed 端点 / 等 `jev-router` 成熟 / 换 provider）需新的授权；可用性探测见提案 §1.8。

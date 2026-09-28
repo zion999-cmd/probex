@@ -7,7 +7,9 @@ P0001.4.1 — Real Jev Transport Validation：**实现中**。
 `context/status.json` 中 `currentProposal` 为 `"P0001.4.1"`。
 
 - SC-3 / SC-4 / SC-6：**PASS**（离线，stub server）。
-- SC-1 / SC-2 / SC-5：**NOT RUN** —— 本机环境无 `OPENROUTER_API_KEY`。
+- SC-5：**PASS**（真实调用实测 latency 已记录）。
+- SC-2：**PASS（走报告分支）** —— 真实响应无法无改动进入现有 strict parser，契约差异已逐条报告（提案 §1.6）。
+- SC-1：**FAIL / 阻塞** —— 未产出 `PredictionRecord`，待人类决策契约路径。
 
 前序：P0001.1（已提交 `282ea61`）、P0001.2 / P0001.3 / P0001.4（**均未提交**，工作树中交织）。
 
@@ -103,3 +105,55 @@ python3 -m unittest -v tests.live.test_openrouter_live
 - `CLAUDE.md` 与 `.gitignore` 被使用者全局 gitignore（`~/.gitignore_global`）排除，未纳入版本控制。
 - 未执行 `push`（未获授权）。
 - 若需要把 P0001.2 – P0001.4.1 拆成更细的 commit（例如按文件再分），当前历史即为最细的**按阶段**边界。
+
+## 2026-09-28 真实 Jev 调用结果（live test 已执行）
+
+人类提供了 OpenRouter Key 并指路 `/Users/bx/Workspace/activation-room-poc`（内含旧 Jev 集成参考）。
+用 `OPENROUTER_API_KEY=... JEV_LIVE_TEST=1 python3 -m unittest -v tests.live.test_openrouter_live` 共完成 10 次真实调用，
+另用两个只读探针（`/tmp/jev_probe.py`、`/tmp/jev_probe2.py`，均在仓库外）采集content 原文形态。
+
+结论摘要（完整证据表见提案 §1.6）：
+
+1. **外层契约成立**：chat completions + `Bearer` + `messages[0].content = canonical payload` → 200；`choices[0].message.content` 提取正常。
+2. **`typesafe/jev-router` 实际路由到 `stealth/space-bunny-alpha`（provider `Stealth`，cost 0）**，不是 TypeSafe 的 typed 端点。
+3. **content 形态不稳定**：10 次里 4 次纯自然语言、2 次围栏 JSON、4 次裸 JSON（其中 1 次围栏但整体不可解析）。
+4. **语义与结构脱节**：五分类 bucket 与 4 个 horizon 完全一致、样本内求和 = 1、`buy/sell_fill_probability` 命名一致，且模型确实读到了我们的 payload（回显 `market_state_hash` / OFI / microprice / spread）；
+   但分布键为 `future_return_distribution`，adverse-selection 键名在两次调用间漂移，`confidence` 是分类字符串（`"low"`），每次附带不同额外字段（`reasoning`/`caveat`/`limitations`/`signals`/…）。
+5. **latency 量级**：5–19 s（旧 typed `/v1/systemone` 在 `activation-room-poc/RESULTS-P3.md` 中记录为 ~270 ms/event，model `jev-1.13`，响应为 `answers.<id>.noul`）。
+6. **Key 安全**：Key 只经 shell 环境传入；已核查工作树与全部 commit 中均无该 Key（SC-4 的 live 断言亦通过）。Key 目前暴露在会话记录里，**建议轮换**。
+
+## 人类决策（2026-09-28）
+
+执行选项 **D（Provider identity verification）**；暂不实施 C / B / A。正式结论见 `context/decisions.md` D-017 与提案 §1.6/§1.7：
+
+- `OpenRouterTransport`: **VALIDATED**
+- `OpenRouter typesafe/jev-router as hot-path JevProvider`: **REJECTED_FOR_NOW**
+  （unstable model identity：实测解析为 `stealth/space-bunny-alpha`；unstable output contract：自然语言/围栏 JSON/裸 JSON 漂移；4.9–19 s latency）
+- P0001.4.1 以 `CONTRACT_MISMATCH` / `PROVIDER_UNSUITABLE` 作为**有效实验结论关闭**，SC-1 豁免；**不为取得 PredictionRecord 修改系统契约**。
+- 冻结（Provider identity 五问全部回答前）：不进入 P0001.5、不修改 `jev-market-v1`、不增加兼容 parser、不做 prompt engineering。
+
+## Provider identity 核实结果（决策 D，仅用代码/文档/历史，未使用旧凭证发起请求）
+
+来源：`/Users/bx/Workspace/activation-room-poc`（`src/gate/jev-gate.ts`、`src/config.ts`、`.env`、`README.md`、`RESULTS-P3.md`、`results/p3-jev-*.json`、`data/sessions/*.gate.jsonl`）。
+
+| 问题 | 结论 |
+| --- | --- |
+| Q1 旧 ~270 ms Jev 的 endpoint | `POST https://openrouter.ai/api/v1/systemone`（OpenRouter 上的 TypeSafe native typed 端点；非直连 TypeSafe 主机） |
+| Q2 provider / model | 请求 `jev-1.13` → 服务端解析 `typesafe/jev-1.13-20260917`，`provider: TypeSafe`；认证 = OpenRouter Key（`sk-or-v1-…`），成本 ~1.66e-05/次 |
+| Q3 现在是否仍可用 | **现有制品无法回答**（最后可证实使用为 2026-09-21/22）；需授权探测 |
+| Q4 是否提供结构化 answers 契约 | **是**：`{id, model, provider, answers:{<qid>:{type:noul|choice|score, noul?, confidence?}}, usage}`；`questions` 为 map，可一次请求 N 问；`noul` = P(yes)（无 confidence），Choice/Score 才带 confidence；旧实现记录标定探针 0.98/0.99/0.01 |
+| Q5 与 `typesafe/jev-router` 的关系 | 同一 OpenRouter 平台与同一类凭证，但**不同 API 表面 + 不同上游模型**（TypeSafe typed vs `stealth/space-bunny-alpha` 文本模型）；是否同一模型家族现有证据无法判定 |
+
+`fmz_v3(1).js` 在整个 `~/Workspace` 中不存在（已检索）；现存唯一 Jev 参考实现即 `activation-room-poc`。
+
+## 下一步（需人类授权）
+
+| 探测 | 内容 | 成本 | 回答 |
+| --- | --- | --- | --- |
+| P1 | `GET https://openrouter.ai/api/v1/models` 查 `typesafe/jev-1.13` / `typesafe/jev-router` 元数据 | 免费（只读） | Q3 部分 + Q5 |
+| P2 | 单条 `noul` 探针 `POST https://openrouter.ai/api/v1/systemone`（`model=jev-1.13`） | ~2e-05，~300–550 ms | Q3 完整 + Q4 现状复核 |
+
+两个探测都必须由人类明确授权；**不使用 `activation-room-poc/.env` 的凭证**，只使用本次会话人类提供的 OpenRouter Key。
+
+授权后可能的后续方向（本次不实施，仅备忘）：恢复 typed `/v1/systemone` 作为 Provider；或等待 `typesafe/jev-router` 稳定；
+或更换 Provider。任何方向都需要新的提案，并会决定 `jev-market-v1` 是否需要演化为 Choice/Noul 同构的 schema。
