@@ -749,3 +749,25 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
 7. **Paper / Replay 不变**：`historical_baseline` 是可选注入；不传时完全沿用原 `day_start_ts` 本地路径。
 8. **架构约束不被放松**：private 层仍不依赖 risk 领域 ⇒「Binance income 事实 → 领域 baseline」的映射
    放在 `readiness/evidence.py`（同时依赖两侧的既有模块），而不是塞进 connector。
+
+## D-045 完整 Testnet 集成验证结论：唯一结构性 blocker 是 drawdown（P0001.9.4.1.1）
+
+**日期**：2026-09-28
+**状态**：生效
+
+1. **结论（有真实证据）**：在 public market + private runtime + recovery + income + clock 全链同窗口运行、
+   并在授权边界内制造最小业务事件（NEW + CANCELED）后，readiness 的输出是
+   **`blocked`，唯一原因 `HISTORICAL_DRAWDOWN_UNKNOWN`**。
+   `PRIVATE_LATENCY_UNKNOWN`（改由真实业务事件样本消除）与 `MARKET_NOT_READY`（改由真实 public 事实判定）都不再出现。
+   ⇒ `P0001.9.4.2` 是否必要，应以该结论为依据，而不是提前假设。
+2. **market readiness 判定必须来自事实**（harness 侧实现，产品 gate 未改）：
+   `book_health=healthy` + 快照锚定已建立 + **窗口内** `depth_gap/resync/malformed = 0` +
+   `mark_age`/`feed_age` 在显式阈值内 + 窗口内有 aggTrade。
+3. **测量纪律（真实踩到的两个坑，必须避免复现）**：
+   ① 窗口起点必须在**初始锚定完成之后**（否则把启动对齐误报为连续性问题）；
+   ② 锚定证据用**绝对**事实（`snapshot_total` + `anchor_established`），不能用"窗口内 snapshot 数"。
+4. **clock uncertainty 是环境相关的真实量**：三轮真实运行 offset 203/421/261 ms、RTT 194/642/342 ms ⇒
+   uncertainty 会在代理拥塞时超阈值（实测 321 ms > 300 ms ⇒ `CLOCK_UNCERTAINTY_TOO_HIGH`，gate 如实 BLOCKED）。
+   readiness policy 必须显式给出该阈值，且不得把"忽略 RTT"当作通过。
+5. **测试网写操作的授权边界**（延续 D-034，仅限本验证阶段）：仅 Testnet / 仅 BTCUSDT / notional ≤ 100 USDT /
+   写操作仅存在于仓库外 harness / 最终必须 flat 且 0 挂单；**产品代码仍然没有任何 submit/cancel 能力**。

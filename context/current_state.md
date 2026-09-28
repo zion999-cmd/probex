@@ -15,7 +15,7 @@ Provider identity 核实（决策 D，提案 §1.7）与授权探测 P1/P2（提
   P2 单条 `noul` 探针 → HTTP 200、604 ms、`answers.ok={type:noul,noul:0.99}`、cost 1.1634e-05。
 - **热路径 Jev 的真实目标应为 `/api/v1/systemone`**；实现 typed provider 需新提案（尚未授权、尚未改代码）。
 
-`context/status.json` 的 `currentProposal` 为 `null`（**P0001.9.4.1 已收口**，等待下一条正式 Proposal）。
+`context/status.json` 的 `currentProposal` 为 `null`（**P0001.9.4.1.1 已收口**，等待下一条正式 Proposal）。
 
 ## 已完成能力
 
@@ -277,6 +277,22 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
   （`TRANSFER.tranId=0` 可多条共存，不影响 daily PnL）；incomeType 白名单**不扩展**（已知非交易只有 `TRANSFER`）。
 - 全量测试 **1515 passed / 0 failed / 22 skipped**；`context/status.json.currentProposal` 回到 `null`。
 
+### P0001.9.4.1.1 — Full Testnet Readiness Integration Validation（已完成）
+
+- 新增 harness 侧映射 `tests/live/market_readiness.py`：把**真实 public 事实**（`book_health` / 快照锚定 /
+  窗口内 gap·resync·malformed / mark age / feed age / aggTrade 数量）映射为 `market_ready`（**不再硬编码 bool**）+ 测量纪律
+  （窗口起点在初始锚定之后；锚定用绝对事实）。
+- 新增 opt-in 全链 live 测试与仓库外 runner（`/tmp/probex_live/{min_order_activity,run_full_readiness_testnet}.py`）：
+  public → private → income → recovery → **授权边界内的最小订单活动**（LIMIT GTX → NEW → 撤销 → CANCELED）→ 再 recovery → readiness。
+- **真实结果（同窗口全链）**：`market_ready=true`（锚定 ✅、窗口内 gap/resync 0、aggTrade 92、mark/feed 501 ms）；
+  corrected latency 样本 2 条（157/164/171 ms，raw −104/−97/−90，**corrected − raw = 261 = offset**）；
+  clock offset 261 / RTT 342 / uncertainty 171 ms；income complete + `daily_net_realized = −1.27395553 USDT`；
+  活动前后 recovery 均 `RECOVERED`；最终 position 0、open orders 0；
+  **readiness = `blocked`，唯一原因 `HISTORICAL_DRAWDOWN_UNKNOWN`**。
+- 三次运行如实记录（含两次测量纪律缺陷 + 一次真实的 `CLOCK_UNCERTAINTY_TOO_HIGH`）；修正后结论稳定。
+- `context/current_state.md` 版本表漂移修正（P0001.9.4 / .1 已为 `108ab49` 并 push）。
+- 全量测试 **1524 passed / 0 failed / 24 skipped**；`context/status.json.currentProposal` 回到 `null`。
+
 ## 进行中能力
 
 无。
@@ -284,7 +300,8 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 
 ## 下一步
 
-- **无授权中的步骤**：P0001.9.3 – P0001.9.4.1 均已收口，`currentProposal = null`。
+- **无授权中的步骤**：P0001.9.3 – P0001.9.4.1.1 均已收口，`currentProposal = null`。
+  当前 readiness 唯一结构性 blocker = `HISTORICAL_DRAWDOWN_UNKNOWN`（真实集成验证结论，见 D-045）。
   真实下单能力（Binance ExecutionAdapter）**尚未授权**，且 readiness 目前必然 BLOCKED（历史风险未知），
   任何"进入真实交易"的下一步都必须由人类落盘新提案。下一阶段必须由人类/设计方落盘正式 Proposal，
   再由人类下达「读取 … 实施」指令后才可实现（不得从 roadmap / handoff 推断任务）。
@@ -317,9 +334,9 @@ Git 仓库已初始化；P0001.1 – P0001.9.2.1 均已提交并推送（每个 
 | `1be451a` | **P0001.9.3** Startup Recovery + Account Reconciliation | 1387 passed（含 P0001.9.3.1 前的基线） |
 | `4b69a73` | **P0001.9.3.1** Recovery Contract Closure | 1405 passed（detached worktree 复核） |
 | `e5d6921` | **P0001.9.3.2** Discontinuity Notification Reliability | 1416 passed（detached worktree 复核） |
-| （未提交） | **P0001.9.4** Live Readiness Gate（含 D-036 符号修正） | 工作树 + 独立快照 1474 passed（见提案 §1.5） |
-| （未提交） | **P0001.9.4.1** Historical Risk Bootstrap（含审计身份修正） | 工作树 + 独立快照 1515 passed（见提案 §1.5） |
+| `108ab49` | **P0001.9.4** Live Readiness Gate（含 D-036 符号修正）+ **P0001.9.4.1** Historical Risk Bootstrap（含审计身份修正） | 1515 passed（detached worktree 复核） |
 
 `CLAUDE.md` 与 `.gitignore` 被使用者全局 gitignore（`~/.gitignore_global`）排除，未纳入版本控制。
 P0001.9.3（`1be451a`）与 P0001.9.3.1（`4b69a73`）均已提交并 **push 到 `origin/master`**；
-P0001.9.4 / P0001.9.4.1 的改动尚未提交（见「版本」表；当前工作树状态以 `git status` 为准）。
+P0001.9.4 与 P0001.9.4.1 已作为 commit `108ab49` 提交并 **push 到 `origin/master`**；
+P0001.9.4.1.1（集成验证）的改动状态见下方「版本」表（当前工作树状态以 `git status` 为准）。

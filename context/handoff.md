@@ -959,3 +959,46 @@ readiness reasons 不变：`PRIVATE_LATENCY_UNKNOWN` / `HISTORICAL_DRAWDOWN_UNKN
 
 **测试结果**：全量 **1515 passed / 0 failed / 22 skipped**；独立检出（`git archive HEAD` + 工作树叠加）同样全 PASS。
 **未 commit / push**（未获授权）。
+
+## 2026-09-28：P0001.9.4.1.1 Full Testnet Readiness Integration Validation（已完成）
+
+**当前 Proposal**：P0001.9.4.1.1（完成后按 CLAUDE.md §5 回到 `null`）。
+
+**本次新增**
+
+- `tests/live/market_readiness.py`：public 事实 → `market_ready` 的 harness 侧映射 + `wait_for_healthy()`（测量纪律）。
+- `tests/live/test_binance_full_readiness_live.py`（opt-in，只读）：完整链路 + SC 断言。
+- `tests/unit/test_market_readiness_evidence.py`（7 条：12 种缺失事实全部 BLOCKED、阈值边界、报告完整性）。
+- 仓库外：`/tmp/probex_live/min_order_activity.py`（LIMIT GTX 探测 + 自动数量选择 + cleanup）、
+  `/tmp/probex_live/run_full_readiness_testnet.py`（全链 runner + SC 判定）。
+
+**本次修改**：`context/current_state.md`（版本表漂移修正 SC-13）；`proposals/P0001.9.4.1.1`（§0/§1）、`context/decisions.md`（D-045）、`context/roadmap.md`。
+
+**本次删除**：无。**未改动**：`connectors/**`、`risk/**`、`readiness/**`（不重构 D-043 的裸输入问题）。
+
+**Acceptance 结果（SC-1 – SC-14 全 PASS）**
+
+- **最终一次真实运行（同窗口全链）**：public `market_ready=true`（锚定 ✅、窗口内 gap/resync/malformed 0、
+  aggTrade 92、state 193、mark/feed 501 ms）；private 事件 2 条 → corrected latency **157/164/171 ms**，
+  raw **−104/−97/−90 ms**，**corrected − raw = 261 = offset** ✅；clock offset **261 ms** / RTT **342 ms** /
+  uncertainty **171 ms**；income coverage complete + `daily_net_realized = −1.27395553 USDT`；
+  活动前后 recovery 均 **RECOVERED**；最终 **position 0 / open orders 0**（errors 空）；
+  **readiness = `blocked`，唯一原因 `HISTORICAL_DRAWDOWN_UNKNOWN`**。
+- 三个运行如实记录：① 测量纪律缺陷（窗口起点早于锚定）② 测量纪律缺陷（窗口内 snapshot 恒为 0）+ 一次真实
+  `CLOCK_UNCERTAINTY_TOO_HIGH`（uncertainty 321 > policy 300）③ 修正后只剩 drawdown。
+- 授权边界遵守：仅 Testnet / 仅 BTCUSDT / notional 81.06 USDT ≤ 100 / 写操作仅在仓库外 / 未制造成交 /
+  最终 flat + 0 挂单；**产品代码仍无 submit/cancel**（SC-12 由隔离测试 + 全仓 grep 固定）。
+
+**测试结果**：unit 957 / integration 230 / fault 264 / replay 49 passed；live 24 skipped；
+全量 **1524 passed / 0 failed / 24 skipped**；独立检出（`git archive HEAD` + 工作树叠加）同样全 PASS。
+
+**风险 / 已知问题**
+
+1. **唯一结构性 blocker = `HISTORICAL_DRAWDOWN_UNKNOWN`**；`P0001.9.4.2` 是否必要由人类依据本结论决定
+   （两条路线：持久化 high-watermark vs 历史 equity reconstruction）。
+2. `market_ready` 仍是 readiness 的裸 bool（D-043 约束执行阶段收紧）。
+3. clock uncertainty 环境相关（实测 97–321 ms，随代理 RTT 波动）⇒ 阈值必须显式配置，且不应把"忽略 RTT"当通过。
+
+**阻塞**：无。
+**下一步**：`currentProposal = null`；等待人类决定是否落盘 `P0001.9.4.2` 或转向其他能力。
+本轮改动**尚未 commit / push**（未获授权）。
