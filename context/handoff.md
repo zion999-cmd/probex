@@ -1152,5 +1152,8 @@ P0001.9.5 已作为 commit `a2ab8da` 提交并 push 到 `origin/master`（1631 p
 5. `bridge_user_event()` 对"与本地终态冲突"的转换跳过并计数：冲突本身仍由既有 reconciliation 报告（不在 adapter 里裁决）。
 
 **阻塞**：无。
-**下一步**：`currentProposal = null`；等待人类落盘下一提案（策略 live loop / 主网验证 / P0001.10 等）。
-本轮改动**尚未 commit / push**（未获授权）。
+**下一步**：`currentProposal = null`；等待人类落盘下一提案（**P0001.9.7 Live Execution Orchestration**：
+把 MakerPolicy 的 PLACE/KEEP/CANCEL/REPLACE 串到 fresh RiskGate → authority → BinanceExecutionAdapter，
+并在 Testnet 连续运行；**仍不等于 Mainnet 实盘**）。
+~~本轮改动尚未 commit / push~~ —— **superseded（2026-09-28）**：
+P0001.9.6 已作为 commit `afc0196` 提交并 push 到 `origin/master`（1693 passed）。
