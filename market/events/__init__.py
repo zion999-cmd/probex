@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 from market.events.errors import InvalidEventError, InvalidPayloadError, MarketEventError
-from market.events.payloads import BookDeltaPayload, BookSnapshotPayload, PriceLevel
+from market.events.payloads import (
+    AggressorSide,
+    BookDeltaPayload,
+    BookSnapshotPayload,
+    PriceLevel,
+    TradePayload,
+)
 from market.events.types import (
     SEQUENCED_EVENT_TYPES,
     EventType,
@@ -16,6 +22,7 @@ from market.events.types import (
 
 __all__ = [
     "SEQUENCED_EVENT_TYPES",
+    "AggressorSide",
     "BookDeltaPayload",
     "BookSnapshotPayload",
     "EventType",
@@ -26,6 +33,7 @@ __all__ = [
     "MarketPayload",
     "Milliseconds",
     "PriceLevel",
+    "TradePayload",
     "Venue",
     "event_type_for",
 ]

@@ -119,6 +119,17 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 - 观察项（未实施，待裁决）：`UNKNOWN_EXPOSURE` 与 `adverse_selection_block` 对 reduce-only 的处理、中断期 REPLACE churn。
 - 策略层不修改 Accounting / Execution 状态机 / Prediction Runtime（SC-13 由依赖扫描测试固定）。
 
+### P0001.8 — Event-level Fill Simulation（已完成）
+
+- 新增 `execution/simulation/`：`types`（QueueState / FillInferenceState / FillReason / Liquidity / SimulatedFill /
+  RestingOrderView）、`queue`（队列近似）、`latency`（submit / cancel 延迟）、`fees`（显式 FeeSchedule）、
+  `venue.SimulatedVenue`（实现 `ExecutionAdapter`，消费真实 Replay 市场事件）。
+- `market/events` 新增 `TradePayload` + `AggressorSide`（`EventType.TRADE` 的载荷），Event Store codec 支持其编解码；
+  **未**改动 `MarketBook` / Feature Engine / `market-state-v1`（`TradeFeatures` 仍 unavailable）。
+- 成交证据模型：`L2 变化 ≠ 成交证据`；只有对手方向 aggressor trade 推进队列 → `QUEUE_CONSUMED` / `TRADE_THROUGH`；
+  `UNKNOWN` 队列绝不产生推测性成交；盘口不可信时挂起并作废队列，恢复后必须重建。
+- `PaperBroker`、Strategy、Prediction、Risk、Accounting 均未改动。
+
 ## 进行中能力
 
 无。

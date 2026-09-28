@@ -15,8 +15,8 @@ from pathlib import Path
 
 from connectors.binance.market_data import parse_depth_diff, parse_depth_snapshot
 from market.book.market_book import BookUpdate, BookView, MarketBook
-from market.events.payloads import PriceLevel
-from market.events.types import MarketEvent, Venue
+from market.events.payloads import AggressorSide, PriceLevel, TradePayload
+from market.events.types import EventType, MarketEvent, Venue
 from market.features.engine import FeatureEngine
 from market.health.state import BookHealth, HealthTransition
 from market.state.types import MarketState
@@ -78,6 +78,38 @@ def depth_diff_event(
         "a": _levels(asks),
     }
     return parse_depth_diff(raw, receive_ts=receive_ts, process_ts=process_ts)
+
+
+def trade_event(
+    aggregate_trade_id: int,
+    *,
+    price: float,
+    quantity: float,
+    aggressor: AggressorSide,
+    symbol: str = SYMBOL,
+    exchange_ts: int = BASE_TS,
+    receive_ts: int | None = None,
+    process_ts: int | None = None,
+) -> MarketEvent:
+    """构造一条聚合成交事件（P0001.8 的成交证据）。
+
+    默认 `receive_ts` / `process_ts` 与 `exchange_ts` 相同，便于按时间精确驱动模拟器。
+    """
+    return MarketEvent(
+        venue=Venue.BINANCE,
+        symbol=symbol,
+        event_type=EventType.TRADE,
+        exchange_ts=exchange_ts,
+        receive_ts=exchange_ts if receive_ts is None else receive_ts,
+        process_ts=exchange_ts if process_ts is None else process_ts,
+        sequence=None,
+        payload=TradePayload(
+            aggregate_trade_id=aggregate_trade_id,
+            price=price,
+            quantity=quantity,
+            aggressor=aggressor,
+        ),
+    )
 
 
 def book_view(

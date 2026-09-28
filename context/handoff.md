@@ -1,9 +1,9 @@
 ## 当前 Proposal
 
-P0001.7（Market Making Policy）+ P0001.7.1（Prediction Outage Reduce-only Continuity）：**已完成**。
+P0001.8 — Event-level Fill Simulation：**已完成**。
 `context/status.json` 中 `currentProposal` 为 `null`（无切换授权，等待人类指定下一 Proposal）。
 
-**Git**：P0001.6.1 = `d510684`；P0001.7 + P0001.7.1 = 见下文本轮提交（一个 commit）。
+**Git**：`d510684`（P0001.6.1）、`6e8d035`（P0001.7 + P0001.7.1）；**P0001.8 未提交**（本轮未获提交授权）。
 
 ## 本次新增
 
@@ -303,3 +303,28 @@ python3 -m unittest -v tests.live.test_openrouter_live
 3. 中断期 reduce-only 挂单可能因 SIZE_DRIFT 被 REPLACE（confidence factor 取下界所致）→ 撤单窗口内暂时没有出口报价。
 
 **下一步**：等待人类指定 Proposal（路线下一阶段 P0001.8 Event-level Fill Simulation，需先落盘独立提案）。
+
+
+## P0001.8 交付摘要（2026-09-28）
+
+**新增**
+- `execution/simulation/`：`types.py`、`queue.py`、`latency.py`、`fees.py`、`venue.py`（`SimulatedVenue`）
+- `market/events/payloads.py`：`TradePayload` + `AggressorSide`；`market/events/types.py` 注册；`storage/events/codec.py` 支持 TRADE 编解码
+- `tests/support.py`：`trade_event(...)`；`tests/sim_support.py`：`SimStack` + 事件构造器
+- 测试 90 条：unit（`test_sim_queue` 12 / `test_sim_latency` 4 / `test_sim_fee` 5）、
+  integration（`test_simulated_venue` 26 / `test_sim_execution_accounting` 7 / `test_maker_simulated_execution` 5）、
+  fault（`test_sim_book_gap` 6 / `test_sim_queue_unknown` 7 / `test_sim_cancel_race` 7）、
+  replay（`test_fill_sim_determinism` 6 / `test_fill_sim_no_future` 5）
+
+**未改动**：`strategy/`、`prediction/`、`portfolio/`、`risk/`、`execution/adapters`（PaperBroker）、
+execution 核心（types/tracker/manager/engine/events）、`market/book`、`market/features`。
+
+**Acceptance**：SC-1 – SC-19 全部 PASS（见提案 §0.6 / §1）。
+
+**测试**：`python3 -m unittest discover -s tests -t .` → **1104 passed / 0 failed / 12 skipped**
+（unit 689、integration 141、fault 213、replay 49、live 12 skipped）。
+
+**已知限制**：队列模型是 L2 近似（不声称真实 queue position）；`TRADE_THROUGH` 对多张同侧挂单各自生效；
+真实 `aggTrade` 归一化与 `TradeFeatures` 接线不在本阶段。
+
+**下一步**：等待人类指定 Proposal（路线下一阶段 P0001.9 Binance Live / P0001.10 Product API，需先落盘独立提案）。

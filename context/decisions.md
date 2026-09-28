@@ -322,3 +322,28 @@ cost ≈1.1e-04/call、五分类求和 = 1、Noul 无 confidence（详见提案 
 
 **影响**：MakerPolicy 的 `PREDICTION_STALE` 分支 `allow_new_reducing=True`；观察项（`UNKNOWN_EXPOSURE` 与 `adverse_selection_block`
 对 reduce-only 的处理、中断期的 replace churn）记录在提案 P0001.7 §2，需人类裁决后才能变更。
+
+## D-025 Event-level Fill Simulation 的成交证据模型（P0001.8）
+
+**日期**：2026-09-28
+**状态**：生效
+
+**决策**：
+
+- **aggressor trade 是唯一成交证据**：`TradePayload`（`aggregate_trade_id` / `price` / `quantity` / `aggressor`）
+  是市场事件词表中 `EventType.TRADE` 的载荷（P0001.1 早已保留该取值）。**L2 quantity 下降不是成交证据**
+  （可能来自 cancel / modify / hidden liquidity / feed artifact），既不推进队列也不产生成交。
+- **队列近似**：订单生效时 `queue_ahead = 该价位可见数量`；之后只由对手方向 aggressor trade 推进
+  （先扣队列，剩余才是我们的成交）。`QueueState.UNKNOWN`（不可观察 / 盘口不可信 / gap 后未重建）时
+  `queue_ahead is None`，**不得**产生推测性成交。
+- **成交规则**：`trade price == limit` → `QUEUE_CONSUMED`；穿过限价 → `TRADE_THROUGH`（队列视为清空，
+  量 = `min(剩余, aggressor 量)`）。成交价一律用订单限价；流动性一律 maker；手续费来自显式 `FeeSchedule`。
+- **时间语义**：模拟时钟只由市场事件的 `process_ts` 推进（无 wall clock）；`submit_latency` 决定进入时刻、
+  `cancel_latency` 决定撤单生效时刻（同刻撤单优先）；Replay 顺序 = Event Store recorded ordinal。
+- **盘口不可信即挂起**：`BookHealth != HEALTHY` → `FILL_INFERENCE_SUSPENDED` + 队列作废；恢复后必须重建
+  （`queue_rebuild_count` 留痕）或保持 `UNKNOWN`，绝不无声续算。
+- **范围纪律**：`PaperBroker` 保持原职责（可控单元 / 故障测试）；`MarketBook` / Feature Engine / `market-state-v1` /
+  Strategy / Prediction / Risk / Accounting **未改动**；真实 `aggTrade` 归一化与 `TradeFeatures` 接线留待后续阶段。
+
+**影响**：Backtest 与真实 Live 之间的成交推断层落地，且每条模拟成交都带
+`fill_reason` / `queue_state` / `event_ordinal` / `aggregate_trade_id` 证据，便于日后区分「高可信模拟」与「信息不足」。

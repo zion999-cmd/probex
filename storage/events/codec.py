@@ -26,7 +26,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from market.events.errors import MarketEventError
-from market.events.payloads import BookDeltaPayload, BookSnapshotPayload, PriceLevel
+from market.events.payloads import AggressorSide, BookDeltaPayload, BookSnapshotPayload, PriceLevel, TradePayload
 from market.events.types import EventType, MarketEvent, Milliseconds, Venue
 
 from storage.events.errors import (
@@ -189,7 +189,7 @@ def decode_event(raw: object) -> MarketEvent:
         raise EventStoreFormatError(f"record.event: {exc}") from exc
 
 
-def _encode_payload(payload: BookSnapshotPayload | BookDeltaPayload) -> dict[str, object]:
+def _encode_payload(payload: BookSnapshotPayload | BookDeltaPayload | TradePayload) -> dict[str, object]:
     if isinstance(payload, BookSnapshotPayload):
         return {
             "kind": EventType.BOOK_SNAPSHOT.value,
@@ -205,6 +205,14 @@ def _encode_payload(payload: BookSnapshotPayload | BookDeltaPayload) -> dict[str
             "bids": _encode_levels(payload.bids),
             "asks": _encode_levels(payload.asks),
         }
+    if isinstance(payload, TradePayload):
+        return {
+            "kind": EventType.TRADE.value,
+            "aggregate_trade_id": payload.aggregate_trade_id,
+            "price": payload.price,
+            "quantity": payload.quantity,
+            "aggressor": payload.aggressor.value,
+        }
     raise EventStoreFormatError(f"unsupported payload type: {type(payload).__name__}")
 
 
@@ -212,9 +220,25 @@ def _encode_levels(levels: Sequence[PriceLevel]) -> list[list[float]]:
     return [[level.price, level.size] for level in levels]
 
 
-def _decode_payload(raw: object, *, path: str) -> BookSnapshotPayload | BookDeltaPayload:
+def _decode_payload(raw: object, *, path: str) -> BookSnapshotPayload | BookDeltaPayload | TradePayload:
     message = _require_object(raw, path=path)
     kind = _require_str(_require_field(message, "kind", path=path), path=f"{path}.kind")
+
+    if kind == EventType.TRADE.value:
+        aggregate_trade_id = _require_int(
+            _require_field(message, "aggregate_trade_id", path=path), path=f"{path}.aggregate_trade_id"
+        )
+        price = _require_number(_require_field(message, "price", path=path), path=f"{path}.price")
+        quantity = _require_number(_require_field(message, "quantity", path=path), path=f"{path}.quantity")
+        aggressor = _decode_aggressor(
+            _require_field(message, "aggressor", path=path), path=f"{path}.aggressor"
+        )
+        try:
+            return TradePayload(
+                aggregate_trade_id=aggregate_trade_id, price=price, quantity=quantity, aggressor=aggressor
+            )
+        except MarketEventError as exc:
+            raise EventStoreFormatError(f"{path}: {exc}") from exc
 
     if kind == EventType.BOOK_SNAPSHOT.value:
         last_update_id = _require_int(
@@ -323,6 +347,14 @@ def _decode_venue(value: object, *, path: str) -> Venue:
         return _VENUES_BY_VALUE[text]
     except KeyError:
         raise EventStoreFormatError(f"{path}: unknown venue {text!r}") from None
+
+
+def _decode_aggressor(value: object, *, path: str) -> AggressorSide:
+    text = _require_str(value, path=path)
+    try:
+        return AggressorSide(text)
+    except ValueError:
+        raise EventStoreFormatError(f"{path}: unknown aggressor side {text!r}") from None
 
 
 def _decode_event_type(value: object, *, path: str) -> EventType:

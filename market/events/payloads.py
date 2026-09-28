@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from enum import Enum
 
 from market.events.errors import InvalidPayloadError
 
@@ -98,3 +99,58 @@ class BookDeltaPayload:
             )
         object.__setattr__(self, "bids", _require_levels(self.bids, field="bids", allow_zero_size=True))
         object.__setattr__(self, "asks", _require_levels(self.asks, field="asks", allow_zero_size=True))
+
+
+class AggressorSide(Enum):
+    """主动方方向（taker 侧）。
+
+    定义在 market 层：`portfolio.Side` 依赖 market（`portfolio.types` 已 import 本模块），
+    因此 market **不能**反向依赖 portfolio（CLAUDE.md §14 单一 Owner / 无环依赖）。
+    """
+
+    BUY = "buy"
+    SELL = "sell"
+
+    @property
+    def opposite(self) -> AggressorSide:
+        return AggressorSide.SELL if self is AggressorSide.BUY else AggressorSide.BUY
+
+
+@dataclass(frozen=True, slots=True)
+class TradePayload:
+    """聚合成交（aggressor trade）事件载荷。
+
+    P0001.8 的最小成交证据：**只有**这种事件可以推进 Maker 队列或产生成交
+    （L2 quantity 下降不算成交证据，见 proposals/P0001.8 §4）。
+
+    字段：
+
+    - `aggregate_trade_id`：交易所聚合成交 id（同 symbol 内唯一、单调），用于**去重**；
+    - `price` / `quantity`：该次聚合成交的价格与数量；
+    - `aggressor`：主动方（吃单方）方向 —— 与我们的挂单方向相反时才消耗队列。
+    """
+
+    aggregate_trade_id: int
+    price: float
+    quantity: float
+    aggressor: AggressorSide
+
+    def __post_init__(self) -> None:
+        if isinstance(self.aggregate_trade_id, bool) or not isinstance(self.aggregate_trade_id, int):
+            raise InvalidPayloadError("TradePayload.aggregate_trade_id must be an int")
+        if self.aggregate_trade_id < 0:
+            raise InvalidPayloadError(
+                f"TradePayload.aggregate_trade_id must be >= 0, got {self.aggregate_trade_id}"
+            )
+        price = _require_finite_number(self.price, field="TradePayload.price")
+        quantity = _require_finite_number(self.quantity, field="TradePayload.quantity")
+        if price <= 0.0:
+            raise InvalidPayloadError(f"TradePayload.price must be positive, got {price!r}")
+        if quantity <= 0.0:
+            raise InvalidPayloadError(f"TradePayload.quantity must be positive, got {quantity!r}")
+        if not isinstance(self.aggressor, AggressorSide):
+            raise InvalidPayloadError(
+                f"TradePayload.aggressor must be an AggressorSide, got {type(self.aggressor).__name__}"
+            )
+        object.__setattr__(self, "price", price)
+        object.__setattr__(self, "quantity", quantity)
