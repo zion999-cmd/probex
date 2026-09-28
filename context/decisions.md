@@ -532,3 +532,47 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
 
 **附带（telemetry，纯追加）**：传输层新增 `ping_count` / `pong_count`，private runtime 将其同步为
 `heartbeat_count` ⇒ 用户数据流的「心跳证据」可观测（SC-6），业务消息之外的链路健康有据可查。
+
+## D-034 人类授权：测试网订单活动由实现方代为制造（仅用于 P0001.9.2 验收）
+
+**日期**：2026-09-28
+**状态**：生效（**受限例外**，不改变产品边界）
+
+> **授权来源更正（2026-09-28，人类明确要求）**：本条授权的来源是**人类在当前会话中的明确决策**
+> （我提问「你是否可以自己操作?」后得到的确认），**不得**归因于人类此前的任何指令。
+> 此前一轮人类指令只授权「人类自己在测试网 UI 手工成交、且**不新增下单代码**」，
+> **并不包含**由实现方编写或运行仓库外的自动下单 harness。
+> 实现方是在本条决策之后才执行该 harness 的；证据按本条授权有效（限制见下），但归因必须如实。
+
+- 授权内容：实现方可在**测试网**（demo-fapi / fstream.binancefuture）以**只读之外的写操作**（下单/撤单）
+  制造一次订单活动，用于让 user data stream 产生真实的 `ORDER_TRADE_UPDATE` / `ACCOUNT_UPDATE` 事件。
+- 限制：仅测试网、仅 BTCUSDT、notional ≤ 200 USDT、必须满足 exchangeInfo filters、挂单必撤（finally）。
+- 不改变的事实：产品代码**仍无**任何下单/撤单端点（SC-14 静态测试继续生效）；
+  下单/撤单逻辑只存在于仓库外 harness（`/tmp/probex_live/`），不入库、不成为工程能力。
+- 依据：CLAUDE.md §7.1（人类**当前会话**明确指令优先），已同步记录在提案 P0001.9.2 §0.0。
+
+## D-035 订单事件去重键必须包含执行类型/状态/事件时间（真实数据驱动）
+
+**日期**：2026-09-28
+**状态**：生效
+
+- 问题（真实测试网实测）：同一订单的 `NEW` 与 `CANCELED` 事件里 `z`（累计成交量）与 `t`（trade id）**都是 0**，
+  仅按 `(z, t)` 判重会把合法的状态变化丢成"重复"，导致 `CANCELED` 等事件被静默丢弃。
+- 规则：重复键 = `(cumulative_fill_quantity, trade_id, execution_type, order_status, event_ts)`；
+  **乱序**仍按「累计成交量回退」判定（策略与 D-030 一致，未放松）。
+- 依据：P0001.9.2 §1.2 的真实事件链（NEW → CANCELED → TRADE×2 + ACCOUNT_UPDATE×2），
+  修正后同一轮采集 `duplicate=0 / out_of_order=0` 且事件零丢失。
+
+## D-036 延迟指标必须做时钟校正（真实测试网发现 → 后续 live gate 要求）
+
+**日期**：2026-09-28
+**状态**：生效（风险/要求记录；**本阶段不阻塞关闭**）
+
+- 真实测试网采集到的 event lag（`receive_ts − event_ts`）落在 **−30 ms ~ +2 ms**：负值**不是"负延迟"**，
+  而是**本地接收时钟与交易所事件时钟存在几十毫秒量级的偏差**（同一轮 REST 测得的 server-time offset 为 170–259 ms，
+  其中含代理往返；两者不是同一测量口径）。
+- 因此 **raw event lag 不能直接用于跨环境/跨时间的性能比较**。后续 live deployment gate 必须要求：
+  `event_lag_corrected = receive_ts − event_ts − clock_offset`，其中 `clock_offset` 由 server-time 测量在**同一时刻**给出，
+  并**必须同时记录其不确定度**；至少也要显式记录 clock-offset uncertainty。
+- 本阶段证据（测试网 event lag median −8 ms / p95 +2 ms / max +2 ms）在**标注了该偏差**的前提下有效；
+  该要求已写入提案 P0001.9.2 §1.2 的 risk 与 handoff 的「后续 live gate」。

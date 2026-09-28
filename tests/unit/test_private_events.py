@@ -172,6 +172,32 @@ class OrderingTest(unittest.TestCase):
         self.assertEqual(ordering.out_of_order_count, 1)
         self.assertEqual(ordering.tracked_orders, 1)
 
+    def test_status_only_updates_are_not_deduplicated(self) -> None:
+        """真实测试网：NEW → CANCELED 的 z/t 都是 0，不能被误判为重复（D-035）。"""
+        ordering = UserEventOrdering()
+        new_event = parse_user_event(
+            json.loads(order_update_message(execution_type="NEW", order_status="NEW",
+                                            last_fill_quantity="0", cumulative_fill_quantity="0", trade_id=0)),
+            receive_ts=1, process_ts=1,
+        )
+        canceled_event = parse_user_event(
+            json.loads(order_update_message(execution_type="CANCELED", order_status="CANCELED",
+                                            last_fill_quantity="0", cumulative_fill_quantity="0", trade_id=0)),
+            receive_ts=2, process_ts=2,
+        )
+
+        self.assertTrue(ordering.accept(new_event))
+        self.assertTrue(ordering.accept(canceled_event))  # 关键：不能判重复
+        self.assertEqual(ordering.duplicate_count, 0)
+
+    def test_identical_event_delivery_is_still_deduplicated(self) -> None:
+        ordering = UserEventOrdering()
+        event = self._order_event(cumulative="0", trade_id=0)
+
+        self.assertTrue(ordering.accept(event))
+        self.assertFalse(ordering.accept(event))
+        self.assertEqual(ordering.duplicate_count, 1)
+
     def test_monotonic_progress_is_accepted(self) -> None:
         ordering = UserEventOrdering()
 

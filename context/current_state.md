@@ -15,7 +15,7 @@ Provider identity 核实（决策 D，提案 §1.7）与授权探测 P1/P2（提
   P2 单条 `noul` 探针 → HTTP 200、604 ms、`answers.ok={type:noul,noul:0.99}`、cost 1.1634e-05。
 - **热路径 Jev 的真实目标应为 `/api/v1/systemone`**；实现 typed provider 需新提案（尚未授权、尚未改代码）。
 
-`context/status.json` 的 `currentProposal` 为 `P0001.9.2`（真实凭据 Acceptance 未完成，仍未关闭）。
+`context/status.json` 的 `currentProposal` 为 `null`（P0001.9.2 已收口，等待下一条正式 Proposal）。
 
 ## 已完成能力
 
@@ -163,9 +163,15 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
   `listenKey ACTIVE`；user stream 真实连接并保持；真实发生 1–3 次断开 → 重连 + `continuity_assumed=False`（SC-10 实测）；
   `private_lag_ms` 无样本 ⇒ 以 `path_rtt`（884–1139 ms < 2000 ms 阈值）为标注基准。
   真实 payload 驱动三处解析修正：`leverage` 字符串、`marginAsset` 可缺失（改由端点+USDT 资产确认）、空仓允许 `markPrice=0`（D-033）。
-- **仍未具备真实证据**：① 业务事件（需账户活动；本阶段禁止我们下单 ⇒ 建议人类在测试网 UI 手动下一笔并撤销，我们仍只读）；
-  ② 心跳 ping（分钟级周期，需 ≥5 分钟窗口）；③ 主网（REST 被出口 IP 封禁 418/-1003）。
-  在这些项补齐前 **P0001.9.2 = In Progress**，**P0001.9.3 不启动**（人类 2026-09-28 指示）。
+- **真实事件链已采集（2026-09-28，D-034 授权由实现方在测试网制造活动）**：8 条真实业务事件
+  （限价 NEW → CANCELED，市价 TRADE×2 + ACCOUNT_UPDATE×2，含 commission / trade_id / reduceOnly / cumulative fill）；
+  延迟 median −8 ms / p95 +2 ms / max +2 ms；`heartbeats=1`；`duplicate/out_of_order/malformed=0`；结束时空仓且 0 挂单。
+  ⇒ SC-4/6/7/8/10/11/12/13 均取得**真实测试网证据**；并由此修掉第二批真实缺陷（去重键 D-035、harness 静默吞错）。
+- **仍未验证**：主网（出口 IP 曾封禁 418/-1003；主网私有链路延迟与账户数据未取样）⇒ 状态串
+  `TESTNET_PRIVATE_VALIDATED / MAINNET_PRIVATE_NOT_YET_VALIDATED`。
+- **Risk（后续 live gate，D-036）**：raw event lag 出现 −30 ms（区间 −30 ~ +2 ms）⇒ 本地与交易所时钟有几十毫秒偏差，
+  主网验收必须用 `event_lag_corrected = receive_ts − event_ts − clock_offset` 并记录不确定度。
+- `status.json.currentProposal` = `null`；**P0001.9.3 不启动**，等待下一条正式 Proposal（人类 2026-09-28 指示）。
 
 ### P0001.9.2.1 — Private Connectivity Contract Audit & CCXT Fit（已完成；裁决 KEEP_NATIVE_PRIVATE）
 

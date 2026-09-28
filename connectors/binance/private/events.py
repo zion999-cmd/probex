@@ -257,23 +257,40 @@ class UserEventOrdering:
 
     duplicate_count: int = 0
     out_of_order_count: int = 0
-    _order_watermark: dict[str, tuple[float, int]] = field(default_factory=dict)
+    _order_watermark: dict[str, float] = field(default_factory=dict)
+    _order_event_key: dict[str, tuple[float, int, str, str, int]] = field(default_factory=dict)
     _account_watermark: tuple[int, int] | None = None
 
-    def accept_order_update(self, *, client_order_id: str, cumulative_fill_quantity: float, trade_id: int) -> bool:
-        """单调量回退 ⇒ 乱序；与前一条完全相同（量 + trade id）⇒ 重复。"""
+    def accept_order_update(
+        self,
+        *,
+        client_order_id: str,
+        cumulative_fill_quantity: float,
+        trade_id: int,
+        execution_type: str,
+        order_status: str,
+        event_ts: int,
+    ) -> bool:
+        """判定订单事件是否应被消费。
+
+        - **重复**：与上一条**完全相同**的事件（累计量 + trade id + execution type + 状态 + 事件时间）。
+          注意不能只用（累计量, trade id）：真实 Binance 的 `NEW` → `CANCELED` 等**非成交**更新里
+          两者都是 0 ⇒ 只看它们会把合法的状态变化误判成重复（测试网实测）。
+        - **乱序**：累计成交量**回退**（单调量变小）⇒ 旧事件。
+        """
         if not isinstance(client_order_id, str) or not client_order_id:
             raise PrivateFormatError("client_order_id must be a non-empty string")
-        previous = self._order_watermark.get(client_order_id)
-        if previous is not None:
-            previous_qty, previous_trade = previous
+        key = (cumulative_fill_quantity, trade_id, execution_type, order_status, event_ts)
+        previous_qty = self._order_watermark.get(client_order_id)
+        if previous_qty is not None:
             if cumulative_fill_quantity < previous_qty:
                 self.out_of_order_count += 1
                 return False
-            if cumulative_fill_quantity == previous_qty and trade_id == previous_trade:
+            if self._order_event_key.get(client_order_id) == key:
                 self.duplicate_count += 1
                 return False
-        self._order_watermark[client_order_id] = (cumulative_fill_quantity, trade_id)
+        self._order_watermark[client_order_id] = cumulative_fill_quantity
+        self._order_event_key[client_order_id] = key
         return True
 
     def accept_account_update(self, *, transaction_ts: int, event_ts: int) -> bool:
@@ -299,6 +316,9 @@ class UserEventOrdering:
                 client_order_id=observation.client_order_id,
                 cumulative_fill_quantity=observation.cumulative_fill_quantity,
                 trade_id=observation.trade_id,
+                execution_type=observation.execution_type,
+                order_status=observation.order_status,
+                event_ts=observation.event_ts,
             )
         if event.event_type is UserEventType.ACCOUNT_UPDATE and isinstance(event.observation, AccountUpdateObservation):
             return self.accept_account_update(

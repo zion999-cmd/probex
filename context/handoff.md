@@ -1,9 +1,10 @@
 ## 当前 Proposal
 
-**P0001.9.2 — Private Account + User Stream Validation：实现中（In Progress，未关闭）。**
+**P0001.9.2 — Private Account + User Stream Validation：已完成（2026-09-28）。**
+验收结论：**`TESTNET_PRIVATE_VALIDATED` / `MAINNET_PRIVATE_NOT_YET_VALIDATED`**；`status.json.currentProposal` 为 `null`；**P0001.9.3 不启动**（等待下一条正式 Proposal）。
 
-人类 2026-09-28 裁决：**`KEEP_NATIVE_PRIVATE`**（不引入 ccxt / ccxt.pro，不改 public market data），
-P0001.9.2.1 因此**已完成**（见 D-032）。
+人类 2026-09-28 裁决：**`KEEP_NATIVE_PRIVATE`**（不引入 ccxt / ccxt.pro，不改 public market data），P0001.9.2.1 因此**已完成**（D-032）。
+**授权归因更正（人类要求）**：测试网自动下单 harness 的授权来源是**人类当前会话的明确决策（D-034）**，**不得**归因于此前的「手工成交、不新增下单代码」指令 —— 该 harness 是在本决策之后才执行的。
 
 **门控（在这些真实项通过前，P0001.9.3 不启动）**：
 
@@ -578,3 +579,68 @@ D 非阻塞快照抓取（仅缓解新鲜度）。
    `ORDER_TRADE_UPDATE` / `ACCOUNT_UPDATE` / 成交的真实事件链（SC-7/8/11/12 的真实证据）。
 2. 心跳：用 `PROBEX_LIVE_SMOKE_SECONDS=360` 跑一次长窗口（ping 周期为分钟级），观察 `counts.heartbeat_pings > 0`。
 3. 主网：等出口 IP 封禁（418/-1003）解除后再补一次；主网私有链路延迟与账户数据仍未验证。
+
+## 测试网验收进展（2026-09-28）：人类的活动是 **Demo SPOT**，与本阶段范围（USDⓈ-M Futures）不同
+
+**更正**：此前记录的「不在该 key 所属账户」判断**有误**。实测同一把 key 在 `https://demo-api.binance.com`（Demo **Spot**）上有效，
+且账户里确实有人类的活动：
+
+| 探测（同一把 key，只读） | 结果 |
+| --- | --- |
+| `https://demo-api.binance.com/api/v3/account` | `canTrade=true`；非零余额 `BTC 0.00000788`、`USDT 4997.711`、`USDC 5000.000` |
+| `https://demo-api.binance.com/api/v3/myTrades?symbol=BTCUSDT` | **3 条成交**（最新 `isBuyer=false qty=0.0121 price=83000`，time≈几分钟前） |
+| `https://demo-fapi.binance.com` / `https://testnet.binancefuture.com` 的 `/fapi/v2/account` | key 有效但 **wallet=0.00000000**、持仓/挂单/历史订单全 0 |
+| `https://testnet.binance.vision`（spot testnet） | 401（与 demo 环境不同，不适用） |
+
+⇒ 结论：人类的"模拟交易"发生在 **Demo Spot（现货）**；**Demo Spot 与 Demo USDⓈ-M Futures 是两套独立钱包/端点/事件 schema**。
+P0001.9.2 的契约是 **futures**（`/fapi/v1/listenKey`、`ORDER_TRADE_UPDATE`、`ACCOUNT_UPDATE`），
+故 spot 活动**无法**用来验收本阶段；spot 的事件名为 `executionReport`（`/api/v3/userDataStream`），属**另一个契约**（需独立提案，本阶段不实现）。
+
+**要验收本阶段（二选一或都做）**：
+
+1. **在 futures demo 里制造活动**（推荐；仍是 UI 操作，我们保持只读）：
+   `demo.binance.com` → 切到「合约 / Futures」→ 把 USDT 从现货 demo 钱包划转到合约 demo 钱包 → 下小额 BTCUSDT 永续单并撤销。
+   然后让我**先开 5 分钟窗口**再操作（user stream 不回溯）。
+2. **若希望 Probex 支持现货**：那是新契约（spot 账户快照 + `executionReport` 归一化 + spot listenKey），
+   需人类落盘独立提案后再实施（不属 P0001.9.2，本阶段不扩范围）。
+
+## 2026-09-28：Demo 合约活动已确认（人类已在合约 demo 交易）
+
+只读核查 `https://demo-fapi.binance.com`（同一把 key）：
+
+| 项 | 值 |
+| --- | --- |
+| 合约 wallet | **4999.45778319**（available 同额，unrealized 0） |
+| 非零资产 | `BTC 0.01`、`USDT 4999.45778319`、`USDC 5000` |
+| 历史订单 | **3 笔 BTCUSDT MARKET**（16:04:32 SELL 0.01 FILLED、16:05:31 SELL 0.01 FILLED、16:23:02 BUY 0.02 FILLED） |
+| 成交（BTCUSDT） | 3 条；最新 BUY 0.02 @82993.90，`realizedPnl=0.786`、`commission=0.66395` |
+| 当前持仓 / 挂单 | 空仓 / 0 挂单（已全平） |
+
+⇒ **SC-4 的真实数据从全 0 变为真实非零账户与成交历史**（重跑 runner 即可作为证据）。
+注意：这些成交发生在任何 user stream 连接**之前** ⇒ **流事件不回溯**，SC-7/8/11/12 仍需在**流连接期间**发生订单活动。
+
+**协议（为拿到真实流事件）**：人类在**我本次会话开启的窗口内**在期货 demo 挂一笔限价单并撤销（或成交），
+我们保持只读；窗口结束后我报告 `ORDER_TRADE_UPDATE`/`ACCOUNT_UPDATE` 的字段级证据与 `private_lag_ms` 分布。
+
+## 2026-09-28：真实事件链采集完成（实现方操作，D-034 授权）
+
+- **harness**：`/tmp/probex_live/order_activity.py`（仓库外；单进程完成 stream 连接 + 下单 + 撤单 + 成交 + 采集 + 清理）。
+- **动作**（测试网 BTCUSDT，全部小额、已撤净、结束空仓 0 挂单）：限价 BUY 0.002@80391.90 → CANCELED；
+  市价 BUY 0.0008（≈66 USDT，满足 MIN_NOTIONAL）→ reduceOnly 市价 SELL 平仓。
+- **采集**：8 条业务事件（`ORDER_TRADE_UPDATE` NEW/CANCELED/TRADE×2、`ACCOUNT_UPDATE`×2）；
+  `commission=0.02652128/0.02652105 USDT`、`trade_id=541925860/541925876`、`reduce_only=true`（平仓单）、
+  `positions` 从 `0.0008 @82879` 回到 `0.0`。
+- **延迟**：samples 8 / min −30 ms / median −8 ms / p95 +2 ms / max +2 ms（`lag_basis=business_event`，阈值内）。
+- **计数**：account_updates 2、order_updates 6、fills 2、duplicate 0、out_of_order 0、malformed 0、heartbeats 1、reconnects 0。
+- **由真实数据修掉的两个缺陷**：① 去重键必须含 `execution_type/order_status/event_ts`（NEW→CANCELED 的 z/t 都是 0，旧规则会误判重复，D-035）；
+  ② harness 数量需满足 `MIN_NOTIONAL`（50）且错误必须可见（之前静默吞掉 -1013 类错误）。
+- **状态**：`currentProposal` 仍为 `P0001.9.2`（人类指示未获确认前不关闭）；本阶段 SC 除**主网**外均有真实证据。
+- **已提交**：去重修正（`connectors/binance/private/events.py`）+ 相关测试 + 本轮记录。
+
+## 后续 live deployment gate（D-036，必须遵守）
+
+- **延迟必须做时钟校正**：真实测试网 raw event lag 出现 **−30 ms**（区间 −30 ~ +2 ms）⇒ 本地接收时钟与交易所事件时钟
+  存在几十毫秒偏差，不是"负延迟"。主网验收必须使用 `event_lag_corrected = receive_ts − event_ts − clock_offset`
+  （`clock_offset` 取同一时刻的 server-time 测量），并**记录其不确定度**；否则跨环境/跨时间比较会有系统性偏差。
+- **主网私有链路仍未验证**（`MAINNET_PRIVATE_NOT_YET_VALIDATED`）：需在出口可用（此前 IP 被 418 封禁）时补一次
+  只读 private smoke，并对 event lag 使用上述校正口径。

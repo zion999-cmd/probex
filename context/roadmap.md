@@ -19,9 +19,9 @@ P0001.7.1 Prediction Outage Reduce-only Continuity ← 已完成
 P0001.8   Event-level Fill Simulation            ← 已完成
 P0001.9.1 Public Market Data Live                ← 已完成（真实公网验收通过）
 P0001.9.1.1 Futures Depth Continuity Verification ← 已完成（pu 判据修正）
-P0001.9.2 Private Account + User Stream Validation ← 实现中（离线全通过；真实凭据 smoke 待执行；已提交 c97d2eb）
+P0001.9.2 Private Account + User Stream Validation ← 已完成（TESTNET_PRIVATE_VALIDATED / MAINNET_PRIVATE_NOT_YET_VALIDATED）
 P0001.9.2.1 Private Connectivity Contract Audit & CCXT Fit ← 已完成（裁决 KEEP_NATIVE_PRIVATE）
-P0001.9.3 Startup Recovery + Account Reconciliation ← 未启动（门控：P0001.9.2 的真实凭据 Acceptance 通过后才开始）
+P0001.9.3 Startup Recovery + Account Reconciliation ← 未启动（等待下一条正式 Proposal；人类 2026-09-28 指示）
 P0001.5   Accounting + Risk
 P0001.6   Paper Execution + Order Lifecycle
 P0001.7   Market Making
@@ -36,7 +36,8 @@ P0001.10  Product API / UI / Reports
 > 该层第一次接触真实外部状态，先把公网行情链单独验证，不与真实下单混在一起；
 > 且 Binance 2026 年调整了 USDⓈ-M WebSocket 入口（见 handoff「待核实的外部事实」）。
 > 提案落盘情况：**P0001.9.1 + P0001.9.1.1 均已完成**（真实公网验收通过）。
-> P0001.9.2 / P0001.9.3 **未落盘**。实现 Agent 不得从本行推断任务（`status.json.currentProposal` 为 `null`）。
+> P0001.9.2 已完成（测试网已验证、主网未验证）；**P0001.9.3 尚未落盘提案**，
+> 实现 Agent 不得从本行推断任务（`status.json.currentProposal` 为 `null`）。
 
 依赖：阶段顺序为串行依赖，前一阶段验收完成后才进入下一阶段。P0001.1 – P0001.4 完全不碰交易。
 
