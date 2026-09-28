@@ -812,7 +812,8 @@ P0001.9.3.1 已作为 commit `4b69a73` 提交并 push 到 `origin/master`。
 
 **阻塞**：无。
 **下一步**：`currentProposal = null`；等待人类/设计方落盘下一条正式 Proposal。
-本轮改动**尚未 commit / push**（未获授权）。
+~~本轮改动尚未 commit / push~~ —— **superseded（2026-09-28）**：该阶段改动已提交并 push 到 `origin/master`
+（P0001.9.4 + P0001.9.4.1 = `108ab49`；P0001.9.4.1.1 = `e600e84`；P0001.9.4.2 = `2543eea`）。
 
 ## 2026-09-28：P0001.9.4 Live Readiness Gate（已完成）
 
@@ -863,7 +864,8 @@ P0001.9.3.1 已作为 commit `4b69a73` 提交并 push 到 `origin/master`。
 
 **阻塞**：无。
 **下一步**：`currentProposal = null`；等待人类/设计方落盘下一条正式 Proposal。
-本轮改动**尚未 commit / push**（未获授权）。
+~~本轮改动尚未 commit / push~~ —— **superseded（2026-09-28）**：该阶段改动已提交并 push 到 `origin/master`
+（P0001.9.4 + P0001.9.4.1 = `108ab49`；P0001.9.4.1.1 = `e600e84`；P0001.9.4.2 = `2543eea`）。
 
 ## 2026-09-28：D-036 时钟校正公式符号更正（P0001.9.4 implementation correction，窄修）
 
@@ -939,7 +941,8 @@ P0001.9.3.1 已作为 commit `4b69a73` 提交并 push 到 `origin/master`。
 
 **阻塞**：无。
 **下一步**：`currentProposal = null`；等待人类/设计方落盘下一条正式 Proposal。
-本轮改动**尚未 commit / push**（未获授权）。
+~~本轮改动尚未 commit / push~~ —— **superseded（2026-09-28）**：该阶段改动已提交并 push 到 `origin/master`
+（P0001.9.4 + P0001.9.4.1 = `108ab49`；P0001.9.4.1.1 = `e600e84`；P0001.9.4.2 = `2543eea`）。
 
 ## 2026-09-28：P0001.9.4.1 implementation correction（人类裁决，窄修）
 
@@ -1001,7 +1004,8 @@ readiness reasons 不变：`PRIVATE_LATENCY_UNKNOWN` / `HISTORICAL_DRAWDOWN_UNKN
 
 **阻塞**：无。
 **下一步**：`currentProposal = null`；等待人类决定是否落盘 `P0001.9.4.2` 或转向其他能力。
-本轮改动**尚未 commit / push**（未获授权）。
+~~本轮改动尚未 commit / push~~ —— **superseded（2026-09-28）**：该阶段改动已提交并 push 到 `origin/master`
+（P0001.9.4 + P0001.9.4.1 = `108ab49`；P0001.9.4.1.1 = `e600e84`；P0001.9.4.2 = `2543eea`）。
 
 ## 2026-09-28：P0001.9.4.2 Persistent Equity High-Watermark（已完成）
 
@@ -1050,4 +1054,5 @@ readiness reasons 不变：`PRIVATE_LATENCY_UNKNOWN` / `HISTORICAL_DRAWDOWN_UNKN
 **阻塞**：无。
 **下一步**：`currentProposal = null`。Testnet readiness 的 blocker 集合已为空 ⇒ 下一步（Execution Readiness /
 Binance ExecutionAdapter）**必须**由人类落盘新提案后再实施；不得自行启动。
-本轮改动**尚未 commit / push**（未获授权）。
+~~本轮改动尚未 commit / push~~ —— **superseded（2026-09-28）**：该阶段改动已提交并 push 到 `origin/master`
+（P0001.9.4 + P0001.9.4.1 = `108ab49`；P0001.9.4.1.1 = `e600e84`；P0001.9.4.2 = `2543eea`）。

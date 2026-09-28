@@ -354,8 +354,11 @@ Git 仓库已初始化；P0001.1 – P0001.9.2.1 均已提交并推送（每个 
 | `4b69a73` | **P0001.9.3.1** Recovery Contract Closure | 1405 passed（detached worktree 复核） |
 | `e5d6921` | **P0001.9.3.2** Discontinuity Notification Reliability | 1416 passed（detached worktree 复核） |
 | `108ab49` | **P0001.9.4** Live Readiness Gate（含 D-036 符号修正）+ **P0001.9.4.1** Historical Risk Bootstrap（含审计身份修正） | 1515 passed（detached worktree 复核） |
+| `e600e84` | **P0001.9.4.1.1** Full Testnet Readiness Integration Validation | 1524 passed（detached worktree 复核） |
+| `2543eea` | **P0001.9.4.2** Persistent Equity High-Watermark | 1584 passed（detached worktree 复核） |
 
 `CLAUDE.md` 与 `.gitignore` 被使用者全局 gitignore（`~/.gitignore_global`）排除，未纳入版本控制。
 P0001.9.3（`1be451a`）与 P0001.9.3.1（`4b69a73`）均已提交并 **push 到 `origin/master`**；
-P0001.9.4 与 P0001.9.4.1 已作为 commit `108ab49` 提交并 **push 到 `origin/master`**；
-P0001.9.4.1.1（集成验证）的改动状态见下方「版本」表（当前工作树状态以 `git status` 为准）。
+P0001.9.4 与 P0001.9.4.1 已作为 commit `108ab49`（1515 passed）、
+P0001.9.4.1.1 已作为 `e600e84`（1524 passed）、P0001.9.4.2 已作为 `2543eea`（1584 passed）
+依次提交并 **push 到 `origin/master`**；当前工作树状态以 `git status` 为准。
