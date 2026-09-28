@@ -21,6 +21,7 @@ from typing import Mapping, Protocol
 from connectors.binance.market_data.endpoints import (
     ACCOUNT_PATH,
     ALL_ORDERS_PATH,
+    INCOME_PATH,
     LISTEN_KEY_PATH,
     OPEN_ORDERS_PATH,
     POSITION_RISK_PATH,
@@ -29,7 +30,7 @@ from connectors.binance.market_data.endpoints import (
     USER_TRADES_PATH,
 )
 from connectors.binance.market_data.errors import TransportError
-from connectors.binance.private.auth import ApiCredentials, ServerTimeOffset, build_signed_request, wall_clock_ms
+from connectors.binance.private.auth import ApiCredentials, ClockCalibration, ServerTimeOffset, build_signed_request, wall_clock_ms
 from connectors.binance.private.errors import PrivateFormatError, PrivateResponseError
 
 #: 认证头（值只在内存中传递，绝不打印）。
@@ -96,6 +97,29 @@ class PrivateRestClient:
 
     # ------------------------------------------------------------------ 公开端点
 
+    def measure_clock(self) -> "ClockCalibration":
+        """测量并返回完整 `ClockCalibration`（偏移 / RTT / 不确定度 / 测量时刻）。
+
+        P0001.9.4 §6：readiness 需要不确定度与新鲜度，不能只有一个 offset 数字。
+        """
+        started = int(self.clock())  # type: ignore[operator]
+        raw = self.fetcher.send(
+            method="GET", url=self._url(SERVER_TIME_PATH), headers={"Accept": "application/json"}, timeout_s=self.timeout_s
+        )
+        local_receive = int(self.clock())  # type: ignore[operator]
+        if not isinstance(raw, dict) or "serverTime" not in raw:
+            raise PrivateFormatError("server time response must be an object with 'serverTime'")
+        value = raw["serverTime"]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise PrivateFormatError(f"serverTime must be a positive int, got {value!r}")
+        self.offset.measure(
+            server_time_ms=value, local_receive_ms=local_receive, round_trip_ms=max(0, local_receive - started)
+        )
+        calibration = self.offset.calibration
+        if calibration is None:  # pragma: no cover —— measure() 必然写入
+            raise PrivateFormatError("clock calibration was not recorded")
+        return calibration
+
     def measure_server_time(self) -> int:
         """测量 `server_time - local_time` 并记录到 `offset`。"""
         started = int(self.clock())  # type: ignore[operator]
@@ -133,6 +157,30 @@ class PrivateRestClient:
     def user_trades(self, symbol: str, *, limit: int) -> object:
         """`GET /fapi/v1/userTrades` —— 账户成交（只读）。"""
         return self._signed_get(USER_TRADES_PATH, {"symbol": _require_symbol(symbol), "limit": _require_limit(limit)})
+
+    # ------------------------------------------------------------------ 历史风险（只读，P0001.9.4.1）
+
+    def income_history(
+        self, *, start_time: int, end_time: int, page: int, limit: int
+    ) -> object:
+        """`GET /fapi/v1/income` —— 账户级收入历史（只读；**不传 symbol**）。
+
+        - 账户级而非单 symbol：同一合约账户的其他交易对损益同样影响账户风险；
+        - `page`（1 起）与 `limit`（<= 1000）由调用方显式给出（分页必须能被完整驱动）。
+        """
+        for name, value in (("start_time", start_time), ("end_time", end_time)):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise PrivateFormatError(f"income_history {name} must be a non-negative int")
+        if start_time > end_time:
+            raise PrivateFormatError("income_history start_time must be <= end_time")
+        if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+            raise PrivateFormatError("income_history page must be an int >= 1")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise PrivateFormatError("income_history limit must be in [1, 1000]")
+        return self._signed_get(
+            INCOME_PATH,
+            {"startTime": start_time, "endTime": end_time, "page": page, "limit": limit},
+        )
 
     def _signed_get(self, path: str, params: Mapping[str, object]) -> object:
         signed = build_signed_request(

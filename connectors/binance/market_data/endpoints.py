@@ -39,6 +39,8 @@ LISTEN_KEY_PATH = "/fapi/v1/listenKey"
 OPEN_ORDERS_PATH = "/fapi/v1/openOrders"
 ALL_ORDERS_PATH = "/fapi/v1/allOrders"
 USER_TRADES_PATH = "/fapi/v1/userTrades"
+#: 账户级收入/现金流历史（P0001.9.4.1；**不传 symbol**：daily loss 是账户级风险）
+INCOME_PATH = "/fapi/v1/income"
 
 #: WS 主机（tier 只是路径前缀）。
 WS_HOST = "wss://fstream.binance.com"
@@ -99,6 +101,7 @@ __all__ = [
     "LISTEN_KEY_PATH",
     "OPEN_ORDERS_PATH",
     "USER_TRADES_PATH",
+    "INCOME_PATH",
     "POSITION_RISK_PATH",
     "REST_BASE_URL",
     "SERVER_TIME_PATH",

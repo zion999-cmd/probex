@@ -572,8 +572,14 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
   而是**本地接收时钟与交易所事件时钟存在几十毫秒量级的偏差**（同一轮 REST 测得的 server-time offset 为 170–259 ms，
   其中含代理往返；两者不是同一测量口径）。
 - 因此 **raw event lag 不能直接用于跨环境/跨时间的性能比较**。后续 live deployment gate 必须要求：
-  `event_lag_corrected = receive_ts − event_ts − clock_offset`，其中 `clock_offset` 由 server-time 测量在**同一时刻**给出，
-  并**必须同时记录其不确定度**；至少也要显式记录 clock-offset uncertainty。
+  `event_lag_corrected = receive_ts − event_ts **+** clock_offset`，其中 `clock_offset` 由 server-time 测量在**同一时刻**给出
+  （语义 = **交易所时钟 − 本地时钟**），并**必须同时记录其不确定度**；至少也要显式记录 clock-offset uncertainty。
+
+  > **公式符号更正（2026-09-28，人类裁决）**：本条最初写作 `− clock_offset`，**符号反了**。
+  > `offset = 交易所时钟 − 本地时钟` ⇒ 把本地接收时刻换算到交易所时钟域是 `receive_ts + offset`，
+  > 所以正确公式是 `receive_ts − event_ts + offset`（= `raw_lag + offset`）。
+  > 反例：交易所快 200 ms、真实延迟 20 ms ⇒ raw = −180 ⇒ corrected 应为 **+20**（不是 −380）。
+  > 已同步修正实现（`ClockCalibration.corrected_lag_ms`）与 P0001.9.4 文档。
 - 本阶段证据（测试网 event lag median −8 ms / p95 +2 ms / max +2 ms）在**标注了该偏差**的前提下有效；
   该要求已写入提案 P0001.9.2 §1.2 的 risk 与 handoff 的「后续 live gate」。
 
@@ -673,3 +679,73 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
   **只记录异常类型名，不记录消息 / 参数 / 堆栈**——telemetry 不得成为敏感内容的旁路。
 - 通用原则（延续 D-014 / D-030）：**任何 observer / 回调边界都不得改变被观察对象的控制流**；
   未来新增订阅点必须复用同一隔离模式，而不是各自实现。
+
+## D-042 Live Readiness 契约（P0001.9.4）
+
+**日期**：2026-09-28
+**状态**：生效
+
+1. **`RECOVERED` ≠ `LIVE_READY`（与 D-039 一致，且现在有机器可判定的实现）**：
+   `LiveReadinessGate` 是独立于 `RecoveryStatus` 与逐订单 `RiskGate` 的 **session/deployment 前置条件**判定；
+   `RECOVERED` 只是它的一个输入。`LIVE_READY` 不得绕过 `RiskGate`，`RiskGate ALLOW` 也不代表 `LIVE_READY`。
+2. **作用域**：`LIVE_READY` 必须带 `LiveReadinessScope`；testnet 只能得到 `TESTNET_LIVE_READY`，
+   主网需要显式的主网只读验收证据，否则 `MAINNET_PRIVATE_NOT_VALIDATED` ⇒ BLOCKED（testnet 证据不可转移）。
+3. **历史峰值未知绝不能被"当前 equity"补上**：`AccountingCore.peak_equity is None` ⇒
+   `RiskSnapshot.{peak_equity, drawdown, drawdown_pct} = None` ⇒ 已配置 drawdown 限额时 `RiskGate: MISSING_DRAWDOWN`。
+   禁止为了让 readiness 变绿而把启动时 equity 定义成历史 peak。
+4. **live 可用余额必须来自交易所**：`RiskSnapshot.available_balance` 在 live 路径使用 Binance
+   `availableBalance`（`AvailableBalanceSource.BINANCE_ACCOUNT_SNAPSHOT` + `captured_at` + `age_ms`）；
+   本地推导（`balance - open_order_exposure`）仅保留给 PAPER / REPLAY（语义不变）。
+   "本地估算冒充交易所事实"是禁止的。
+5. **风险策略必须显式配置**：`LiveRiskPolicy` 全字段必填（无默认值），`to_limits()` 产出 `RiskGate` 用的
+   `RiskLimits`；缺任何强制项 ⇒ `RISK_LIMITS_NOT_CONFIGURED`。`RiskLimits = None` **不等于** production-safe。
+   数值由人类配置，本阶段不决定任何数值。
+6. **延迟必须时钟校正（D-036 落地）**：新增 `ClockCalibration`（offset / round_trip / uncertainty / measured_at）；
+   `PrivateAccountRuntime` 的**主指标**改为 `corrected = receive_ts - event_ts + offset_ms`
+   （`offset_ms = 交易所 − 本地`；2026-09-28 按人类裁决更正符号），原始差值仅作审计；
+   校准未测量或过旧 ⇒ `CLOCK_NOT_CALIBRATED`；uncertainty 超阈值 ⇒ `CLOCK_UNCERTAINTY_TOO_HIGH`
+   （**不能**因为 corrected lag 很小就忽略巨大的 RTT）。
+7. **未知一律不得变成 green**：无样本、未测量、未验证、未知 ⇒ BLOCKED 并带 reason code；
+   readiness 收集**全部**原因而不是只报第一个。
+8. **历史风险不做重建**：readiness 只消费"是否已知"；因此 `RECOVERED = true` + `LIVE_READY = false`
+   是**正确结果**，不是缺陷（历史重建若需要，走独立后续能力）。
+
+## D-043 readiness 的"裸布尔/裸事实"输入必须在执行阶段收紧（记录，不阻塞）
+
+**日期**：2026-09-28
+**状态**：生效（**未来约束**；P0001.9.4 当前形态可接受）
+
+- 现状（P0001.9.4）：`LiveReadinessEvidence.market_ready` 是调用方传入的 `bool`；
+  `EnvironmentEvidence.mainnet_private_validated` 也是调用方声明的事实。
+- 风险：真实放单阶段**不允许**任意调用方传一个 `True` 就获得 `LIVE_READY`。
+- 未来要求（ExecutionAdapter / live trading 提案必须满足）：
+  1. 这两项必须改为由受控 runtime / 验收记录生成的 **typed evidence**（带来源、时间、可审计 ID），
+     而不是普通布尔开关；
+  2. readiness 结果需要能追溯到具体证据，而不是"某人说它健康"；
+  3. 在收紧之前，任何真实下单路径都不得只依赖 readiness 的 `LIVE_READY` 值。
+
+## D-044 Historical Risk Bootstrap：daily PnL 可恢复、drawdown 不可推（P0001.9.4.1）
+
+**日期**：2026-09-28
+**状态**：生效
+
+1. **三件事实必须分离**：`daily_pnl_known` / `drawdown_known` / `peak_equity_known`
+   （**禁止**合成一个 `historical_known` 布尔）。`HistoricalRiskBaseline` 中 `daily_net_realized=None` = **未知**（不是 0）。
+2. **daily PnL 的来源与水位线**：`GET /fapi/v1/income`（账户级、不传 symbol、只读、完整分页）；
+   `realized_pnl_today = Σ(trading income, time <= cutoff) + accounting.net_realized_since(cutoff)`；
+   两段不重叠（延续 D-038 的水位线纪律）。任一段未知 ⇒ 结果未知。
+3. **incomeType 分类 fail closed（人类裁决 2026-09-28，白名单不扩展）**：交易类只有 4 种
+   （`REALIZED_PNL` / `COMMISSION` / `FUNDING_FEE` / `SPECIAL_FUNDING_FEE`）；**已知非交易只有 `TRANSFER`**；
+   其余一切（`FEE_RETURN`、`INSURANCE_CLEAR`、返佣、交割结算、`OPTIONS_*`、未来新增枚举……）
+   一律 `UNCLASSIFIED` ⇒ BLOCKED。这里定义的是"可用于 RiskGate 的账户级 daily trading net realized"，
+   不是"钱包余额变化"；不凭名称猜测，等真实样本再 evidence-driven 裁决。
+4. **去重身份按"是否参与 PnL"分开（人类裁决 2026-09-28：审计问题不得污染风险计算）**：
+   - TRADING 行：业务身份 `(income_type, tran_id)` 严格 —— 同 key 内容不同 ⇒ `HISTORY_CONFLICT` ⇒ BLOCKED；
+   - NON_TRADING / UNCLASSIFIED 行：只做**审计层**去重（完整行内容）；`tranId=0` 的多条可以合法共存
+     （真实数据 `TRANSFER.tranId = 0` 并不唯一），**不**影响 `daily_net_realized`，**不**触发 BLOCKED。
+5. **资产契约**：参与 trading PnL 的行必须 `asset == USDT`，否则 `UNSUPPORTED_INCOME_ASSET` ⇒ BLOCKED（不换算、不忽略）。
+6. **绝不从 income 流水或当前 equity 推历史 peak/drawdown**：peak 取决于历史仓位 × 历史 mark 的连续序列；
+   没有连续 equity 证据 ⇒ 永远 UNKNOWN ⇒ readiness 保持 BLOCKED（正确输出，不是缺陷）。
+7. **Paper / Replay 不变**：`historical_baseline` 是可选注入；不传时完全沿用原 `day_start_ts` 本地路径。
+8. **架构约束不被放松**：private 层仍不依赖 risk 领域 ⇒「Binance income 事实 → 领域 baseline」的映射
+   放在 `readiness/evidence.py`（同时依赖两侧的既有模块），而不是塞进 connector。

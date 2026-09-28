@@ -142,8 +142,11 @@ class EventConsumerTest(unittest.TestCase):
         self.assertEqual([event.event_type for event in batch.events], [UserEventType.ACCOUNT_UPDATE])
         telemetry = runtime.telemetry
         self.assertEqual(telemetry.account_update_count, 1)
-        self.assertEqual(telemetry.last_receive_lag_ms, 40)
+        # P0001.9.4 §6 / D-036：主指标是**校正后**延迟 = raw + offset（offset = 交易所 − 本地 = +500）
+        self.assertEqual(telemetry.last_raw_receive_lag_ms, 40)
+        self.assertEqual(telemetry.last_receive_lag_ms, 40 + 500)
         self.assertEqual(telemetry.private_lag_ms.samples, 1)  # type: ignore[union-attr]
+        self.assertEqual(telemetry.clock_calibration.uncertainty_ms, 0)  # type: ignore[union-attr]
         self.assertTrue(runtime.lag_within_threshold())
 
     def test_sc8_order_trade_update_is_consumed(self) -> None:
@@ -215,12 +218,15 @@ class EventConsumerTest(unittest.TestCase):
 
 class LatencyThresholdTest(unittest.TestCase):
     def test_sc13_lag_threshold_judgement(self) -> None:
+        # 时钟 offset = +500（fixture：serverTime = BASE_TS + 500，本地时钟冻结在 BASE_TS）
+        # ⇒ 校正后延迟 = raw + 500。这里 raw = -100（交易所时钟快）⇒ corrected = 400 > 阈值 100。
         runtime, _, factory = build_runtime(max_median_private_lag_ms=100)
         runtime.start()
-        factory.connection.push(account_update_message(event_ts=BASE_TS - 500))
+        factory.connection.push(account_update_message(event_ts=BASE_TS + 100))
 
         runtime.pump_once(timeout_s=0.01)
 
+        self.assertEqual(runtime.telemetry.private_lag_ms.median, 400)  # type: ignore[union-attr]
         self.assertFalse(runtime.lag_within_threshold())
 
     def test_no_samples_means_threshold_not_met(self) -> None:

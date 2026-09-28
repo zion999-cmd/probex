@@ -10,6 +10,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Iterable
 
+from connectors.binance.private.auth import ClockCalibration
+
 
 @dataclass(frozen=True, slots=True)
 class LatencyDistribution:
@@ -61,6 +63,8 @@ class PrivateStreamCounters:
     malformed_count: int = 0
     #: P0001.9.3.2：discontinuity listener 抛异常的次数（observer 故障隔离，仅计数 + 异常类型名）
     discontinuity_listener_failure_count: int = 0
+    #: P0001.9.4 §6：校准不可用时到达的事件数（无法给出 corrected lag，绝不按 0 处理）
+    uncorrected_lag_sample_count: int = 0
     snapshot_count: int = 0
     snapshot_failure_count: int = 0
     snapshot_round_trip_ms: int | None = None
@@ -74,8 +78,17 @@ class PrivateStreamTelemetry:
 
     listen_key_state: str
     continuity_assumed: bool
+    #: **校正后**的最近一次事件延迟（`receive_ts - event_ts + offset`，offset = 交易所 − 本地；P0001.9.4 §6）
     last_receive_lag_ms: int | None
+    #: **校正后**的分布（主指标：不再把本地/交易所时钟偏差当成"网络延迟"）
     private_lag_ms: LatencyDistribution | None
+    #: 原始（未校正）延迟，仅用于审计与 D-036 对照
+    last_raw_receive_lag_ms: int | None
+    raw_private_lag_ms: LatencyDistribution | None
+    #: 未校正的事件样本数（校准不可用期间到达的事件）
+    uncorrected_lag_sample_count: int
+    #: 当前使用的时钟校准事实（含 RTT / 不确定度 / 测量时刻）；未测量时为 None
+    clock_calibration: ClockCalibration | None
     connect_count: int
     reconnect_count: int
     disconnect_count: int
@@ -93,6 +106,7 @@ class PrivateStreamTelemetry:
     out_of_order_count: int
     unsupported_event_count: int
     malformed_count: int
+    uncorrected_lag_sample_count: int
     discontinuity_listener_failure_count: int
     snapshot_count: int
     snapshot_failure_count: int
@@ -125,6 +139,7 @@ class LatencySamples:
 
 
 __all__ = [
+    "ClockCalibration",
     "LatencyDistribution",
     "LatencySamples",
     "PrivateStreamCounters",

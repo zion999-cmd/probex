@@ -123,5 +123,61 @@ class FailClosedTest(unittest.TestCase):
         self.assertIs(decision.reason_code, RiskReasonCode.BOOK_UNHEALTHY)
 
 
+
+
+class BaselineDrawdownFailClosedTest(unittest.TestCase):
+    """P0001.9.4 SC-1 / SC-2 / SC-3：startup baseline 之后历史峰值未知 ⇒ 不得伪造成 drawdown = 0。"""
+
+    def _bootstrapped(self) -> AccountingCore:
+        from portfolio.types import ExternalAccountBaseline
+
+        core = AccountingCore(initial_balance=0.0)
+        core.bootstrap_from_baseline(
+            ExternalAccountBaseline(
+                symbol=SYMBOL,
+                wallet_balance=5_000.0,
+                available_balance=4_900.0,
+                position_qty=1.0,
+                entry_price=100.0,
+                mark_price=100.0,
+                liquidation_price=50.0,
+                captured_at=BASE_TS,
+            )
+        )
+        return core
+
+    def test_sc2_unknown_peak_is_not_replaced_by_current_equity(self) -> None:
+        core = self._bootstrapped()
+        core.update_mark_price(SYMBOL, 110.0, timestamp=BASE_TS + 1)  # equity 变化，但历史峰值仍未知
+
+        snapshot = build_risk_snapshot(core, symbol=SYMBOL, now_ms=BASE_TS + 2)
+
+        self.assertIsNone(snapshot.peak_equity)
+        self.assertIsNone(snapshot.drawdown)
+        self.assertIsNone(snapshot.drawdown_pct)
+
+    def test_sc3_configured_drawdown_limit_fails_closed(self) -> None:
+        core = self._bootstrapped()
+        core.update_mark_price(SYMBOL, 110.0, timestamp=BASE_TS + 1)
+        snapshot = build_risk_snapshot(core, symbol=SYMBOL, now_ms=BASE_TS + 2)
+
+        decision = RiskGate(RiskLimits(max_drawdown_pct=0.2, max_position_qty=10.0)).evaluate(
+            _proposal(), snapshot
+        )
+
+        self.assertIs(decision.decision, RiskDecisionType.REJECT)
+        self.assertIs(decision.reason_code, RiskReasonCode.MISSING_DRAWDOWN)
+
+    def test_reduce_only_still_allowed_with_unknown_drawdown(self) -> None:
+        core = self._bootstrapped()
+        snapshot = build_risk_snapshot(core, symbol=SYMBOL, now_ms=BASE_TS + 2)
+
+        decision = RiskGate(RiskLimits(max_drawdown_pct=0.2, max_position_qty=10.0)).evaluate(
+            _proposal(side=Side.SELL, quantity=0.5, reduce_only=True), snapshot
+        )
+
+        self.assertIs(decision.decision, RiskDecisionType.ALLOW)
+
+
 if __name__ == "__main__":
     unittest.main()

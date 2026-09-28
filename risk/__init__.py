@@ -7,6 +7,7 @@ Prediction / Jev / Strategy / Execution。
 from __future__ import annotations
 
 from risk.gate import RiskGate, classify_exposure
+from risk.history import BASELINE_SOURCE_BINANCE_INCOME, HistoricalRiskBaseline, HistoricalRiskError
 from risk.limits import RiskLimits
 from risk.snapshot import build_risk_snapshot, utc_day_start_ms
 from risk.types import (
@@ -21,7 +22,10 @@ from risk.types import (
 )
 
 __all__ = [
+    "BASELINE_SOURCE_BINANCE_INCOME",
     "ExposureClass",
+    "HistoricalRiskBaseline",
+    "HistoricalRiskError",
     "InvalidOrderProposalError",
     "OrderProposal",
     "RiskDecision",

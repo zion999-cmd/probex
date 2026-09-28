@@ -654,7 +654,8 @@ P0001.9.2 的契约是 **futures**（`/fapi/v1/listenKey`、`ORDER_TRADE_UPDATE`
 ## 后续 live deployment gate（D-036，必须遵守）
 
 - **延迟必须做时钟校正**：真实测试网 raw event lag 出现 **−30 ms**（区间 −30 ~ +2 ms）⇒ 本地接收时钟与交易所事件时钟
-  存在几十毫秒偏差，不是"负延迟"。主网验收必须使用 `event_lag_corrected = receive_ts − event_ts − clock_offset`
+  存在几十毫秒偏差，不是"负延迟"。主网验收必须使用 `event_lag_corrected = receive_ts − event_ts **+** clock_offset`
+  （2026-09-28 人类裁决更正符号：`offset = 交易所 − 本地`）
   （`clock_offset` 取同一时刻的 server-time 测量），并**记录其不确定度**；否则跨环境/跨时间比较会有系统性偏差。
 - **主网私有链路仍未验证**（`MAINNET_PRIVATE_NOT_YET_VALIDATED`）：需在出口可用（此前 IP 被 418 封禁）时补一次
   只读 private smoke，并对 event lag 使用上述校正口径。
@@ -812,3 +813,149 @@ P0001.9.3.1 已作为 commit `4b69a73` 提交并 push 到 `origin/master`。
 **阻塞**：无。
 **下一步**：`currentProposal = null`；等待人类/设计方落盘下一条正式 Proposal。
 本轮改动**尚未 commit / push**（未获授权）。
+
+## 2026-09-28：P0001.9.4 Live Readiness Gate（已完成）
+
+**当前 Proposal**：P0001.9.4（实施中设为 `P0001.9.4`，完成后按 CLAUDE.md §5 回到 `null`，无下一提案切换授权）。
+
+**本次新增**
+
+- `readiness/`（新领域包，按提案"不新造 live/ 层级"的约束拍平为单层）：`__init__.py`、`types.py`、`gate.py`、`evidence.py`。
+- `tests/unit/test_readiness_gate.py`（30）、`tests/unit/test_clock_calibration.py`（8）、
+  `tests/integration/test_live_readiness.py`（8）、`tests/live/test_binance_readiness_live.py`（opt-in）。
+
+**本次修改**
+
+- `risk/snapshot.py`：`peak_equity is None` ⇒ drawdown 三元组全为 None（**修正"用当前 equity 冒充历史 peak"**）；
+  新增 `exchange_available_balance` 入参（交易所权威可用余额 + age）。
+- `risk/types.py`：`AvailableBalanceSource`、`ExchangeAvailableBalance`、`RiskSnapshot` 三个来源字段（默认保持本地推导）。
+- `connectors/binance/private/auth.py`：`ClockCalibration` + `ServerTimeOffset.measure()` 记录完整校准。
+- `connectors/binance/private/rest.py`：`measure_clock()`。
+- `connectors/binance/private/telemetry.py`：corrected/raw 双延迟 + `uncorrected_lag_sample_count` + `clock_calibration`。
+- `connectors/binance/private/runtime.py`：校正后延迟为主指标；`clock_calibration` / `refresh_clock_calibration()`。
+- `tests/unit/test_risk_snapshot.py`、`tests/fault/test_risk_fail_closed.py`（新增 drawdown/可用余额 fail-closed 用例）；
+  `tests/fault/test_private_stream_faults.py`、`tests/integration/test_private_runtime.py`（延迟断言改为 D-036 校正口径）。
+- `proposals/P0001.9.4-*.md`（§0 契约 + §1 结果）、`context/{current_state,handoff,decisions,roadmap}`。
+
+**本次删除**：无（`risk/snapshot.py` 中"peak 回退到当前 equity"的分支被删除——这正是本提案要修的缺陷）。
+
+**Acceptance 结果（SC-1 – SC-13 全 PASS，矩阵见提案 §1.3）**
+
+- **SC-12 真实测试网只读验收**：`recovery=recovered` + `readiness=blocked`（reasons：`PRIVATE_LATENCY_UNKNOWN`、
+  `HISTORICAL_DAILY_PNL_UNKNOWN`、`HISTORICAL_DRAWDOWN_UNKNOWN`、`MARKET_NOT_READY`）；
+  真实 clock offset **199 ms** / RTT **292 ms** / uncertainty **146 ms**；
+  交易所 availableBalance **4998.72604447**（source `binance_account_snapshot`，age 3161 ms）；
+  `peak_equity=null` / `drawdown=null` / `realized_pnl_today=null`；`synthetic_fills=0`。
+- 诚实性：harness 未运行 public market-data 链（P0001.9.1 单独验收）⇒ `market_ready=false`，不伪造 green；
+  窗口内无 user-stream 业务事件 ⇒ corrected lag 无样本 ⇒ `PRIVATE_LATENCY_UNKNOWN`（未知 ≠ 达标）。
+
+**测试结果**：unit 922 / integration 216 / fault 264 / replay 49 passed；live 20 skipped；
+全量 **1471 passed / 0 failed / 20 skipped**；独立检出（`git archive HEAD` + 工作树叠加，未产生 commit）同样全 PASS。
+
+**风险 / 已知问题**
+
+1. **历史风险重建缺失**：readiness 会持续 `HISTORICAL_*_UNKNOWN` ⇒ BLOCKED，直到独立能力补上（提案 §5 明确划出范围）。
+2. **market readiness 未自动接线**：`market_ready` 由调用方显式给出（harness 传 false）；自动接入 `FeatureEngine.book_health`
+   需要新提案。
+3. `PRIVATE_LATENCY_UNKNOWN` 的"空样本"语义：当前视为未知（BLOCKED）；若想放宽需人类裁决。
+4. `mainnet_private_validated` 目前是调用方声明的事实（主网只读验收仍未做，`MAINNET_PRIVATE_NOT_YET_VALIDATED`）。
+5. 仍然：主网私有链路未验证；出口受限环境下的 clock uncertainty 会偏大（真实 146 ms）。
+
+**阻塞**：无。
+**下一步**：`currentProposal = null`；等待人类/设计方落盘下一条正式 Proposal。
+本轮改动**尚未 commit / push**（未获授权）。
+
+## 2026-09-28：D-036 时钟校正公式符号更正（P0001.9.4 implementation correction，窄修）
+
+**背景**：人类审计发现 P0001.9.4 实现的校正公式**符号反了**（原写成 `corrected = raw − offset`）。
+`offset_ms = 交易所时钟 − 本地时钟` ⇒ 把本地接收时刻换算到交易所时钟域是 `receive_ts + offset`，
+正确公式为 **`corrected = receive_ts − event_ts + offset_ms`（= `raw + offset`）**。
+
+**修正内容（只改符号与文档，不扩范围）**
+
+- `connectors/binance/private/auth.py`：`ClockCalibration.corrected_lag_ms` 改为 `receive_ts - event_ts + offset_ms`；
+  类文档补充符号约定与反例（交易所快 200 ms、真实延迟 20 ms ⇒ raw −180 ⇒ corrected **+20**）。
+- `connectors/binance/private/{telemetry,runtime}.py`：注释中的公式同步更正（行为经 `corrected_lag_ms` 单一入口）。
+- 新增符号方向单测（人类指定三例）：`offset=+200 / raw=−180 → 20`、`offset=−100 / raw=+130 → 30`、
+  `offset=0 / raw=25 → 25`，另加"必须是 `raw + offset` 且不等于 `raw − offset`"的回归断言。
+- 既有延迟测试改为新符号口径：`tests/integration/test_private_runtime.py`（raw +500）、
+  `tests/fault/test_private_stream_faults.py`（raw −490..4500 → corrected 10..5000）。
+- 文档公式更正：`decisions`（D-036 就地更正 + 更正说明、D-042 §6）、`handoff`（本段 + D-036 段）、
+  `current_state`、`proposals/P0001.9.2`（历史提及处就地更正并标注）、`proposals/P0001.9.4`（§0.5 修正说明 + §2 原文本就地更正并标注）。
+- `uncertainty_ms` 语义不变：**单独保存**，不从 corrected lag 中加/减。
+- 新增 **D-043**（记录、不阻塞）：`market_ready` 与 `mainnet_private_validated` 目前是调用方裸传的 bool / 事实，
+  在真实 ExecutionAdapter 阶段必须改为受控 runtime / 验收记录生成的 typed evidence。
+
+**测试结果**：全量 **1474 passed / 0 failed / 20 skipped**；独立检出（`git archive HEAD` + 工作树叠加）同样全 PASS。
+
+**未做**：没有重跑测试网 runner（该窗口内无 user-stream 业务事件 ⇒ corrected lag 无样本，报告里 `corrected_median_ms` 本来就是 `null`，
+重跑不会产生新的校正数据；端到端校正路径已由 integration/fault 测试覆盖）。
+
+## 2026-09-28：P0001.9.4.1 Historical Risk Bootstrap（已完成）
+
+**当前 Proposal**：P0001.9.4.1（实施中设为 `P0001.9.4.1`，完成后按 CLAUDE.md §5 回到 `null`）。
+
+**本次新增**
+
+- `connectors/binance/private/income.py`：`IncomeRow` / `IncomeHistoryCoverage` / `IncomeHistoryFacts`、
+  显式分类表（TRADING 4 种 / NON_TRADING 纯钱包移动 / 其余 UNCLASSIFIED）、严格解析（空串→None）、
+  `(income_type, tran_id)` 去重 + `HISTORY_CONFLICT`、`UNSUPPORTED_INCOME_ASSET`、`fetch_income_history(...)` 完整分页。
+- `risk/history.py`：`HistoricalRiskBaseline`（三件事实分离；`daily_net_realized=None` = 未知）+ `compose_daily_pnl`。
+- `tests/unit/test_income_history.py`（20）、`tests/integration/test_historical_risk_bootstrap.py`（14）、
+  `tests/live/test_binance_income_live.py`（opt-in）。
+
+**本次修改**
+
+- `connectors/binance/private/rest.py`：只读 `income_history(start_time, end_time, page, limit)`（不传 symbol）。
+- `connectors/binance/market_data/endpoints.py`：`INCOME_PATH`。
+- `connectors/binance/private/errors.py`：`translate_market_errors` 对私有层自身错误原样透传（保留子类）。
+- `risk/snapshot.py`：`build_risk_snapshot(..., historical_baseline=...)`（不传则行为不变）。
+- `readiness/evidence.py`：`historical_risk_baseline_from_income(...)`（income 事实 → 领域 baseline 的纯映射；
+  放在这里是为了不放松 "private 层不依赖 risk" 的架构约束）。
+- `tests/live/test_binance_readiness_live.py`：`build_evidence(..., historical_baseline=...)`（报告含 baseline 区段）。
+- `proposals/P0001.9.4.1-*.md`、`context/{decisions,current_state,roadmap}`。
+
+**本次删除**：无。
+
+**Acceptance 结果（SC-1 – SC-18 全 PASS，矩阵见提案 §1.3）**
+
+- **SC-16 真实测试网（只读）**：coverage **complete**、pages 1、rows 11、duplicates 0；
+  trading **10**（`COMMISSION`×7 + `REALIZED_PNL`×3）、non-trading **1**（`TRANSFER`）、**unclassified 0**；
+  **`daily_net_realized = −1.27395553 USDT`**；assets 全为 USDT；耗时 237 ms。
+- **SC-13 真实 readiness 变化**：`HISTORICAL_DAILY_PNL_UNKNOWN` **被真实解除**；
+  同一轮 reasons = `PRIVATE_LATENCY_UNKNOWN` / **`HISTORICAL_DRAWDOWN_UNKNOWN`** / `MARKET_NOT_READY`；
+  `peak_equity=null` / `drawdown=null`（SC-15：本阶段不伪造）。
+- 真实 payload 驱动的解析修正：`TRANSFER` 行的 `symbol`/`tradeId`/`info` 是**空串**（按无值处理）。
+
+**测试结果**：unit 945 / integration 230 / fault 264 / replay 49 passed；live 22 skipped；
+全量 **1510 passed / 0 failed / 22 skipped**；独立检出（`git archive HEAD` + 工作树叠加）同样全 PASS。
+
+**风险 / 已知问题（需要人类裁决的见提案 §1.7）**
+
+1. `TRANSFER.tranId = 0` 不唯一 ⇒ 同一 UTC 日两笔内容不同的 TRANSFER 会 `HISTORY_CONFLICT` ⇒ BLOCKED（有意 fail closed）。
+2. 返佣 / 保险清算 / 交割结算等类型目前一律 UNCLASSIFIED（⇒ BLOCKED）：是否属于 trading PnL 需人类裁决。
+3. `drawdown` / `peak_equity` 仍 UNKNOWN（本阶段明确不做）；设计方建议后续 `P0001.9.4.2`。
+4. D-043 的两处裸输入（`market_ready` / `mainnet_private_validated`）仍在。
+
+**阻塞**：无。
+**下一步**：`currentProposal = null`；等待人类/设计方落盘下一条正式 Proposal。
+本轮改动**尚未 commit / push**（未获授权）。
+
+## 2026-09-28：P0001.9.4.1 implementation correction（人类裁决，窄修）
+
+**裁决 1 —— 审计身份不得污染风险计算**：`TRANSFER.tranId = 0` 不再触发 `HISTORY_CONFLICT`。
+去重身份按"是否参与 PnL"分开：TRADING 行继续用 `(income_type, tran_id)` 严格去重（冲突 ⇒ BLOCKED）；
+NON_TRADING / UNCLASSIFIED 行只做**审计层**去重（完整行内容），不同内容合法共存、不影响 `daily_net_realized`。
+
+**裁决 2 —— incomeType 白名单不扩展**：trading 仍只有 4 类；**已知非交易只有 `TRANSFER`**；
+`FEE_RETURN` / `INSURANCE_CLEAR` / 交割结算 / `OPTIONS_*` / `WELCOME_BONUS` / 返佣等一律 `UNCLASSIFIED` ⇒ BLOCKED
+（不凭名称猜测；等真实样本再 evidence-driven 裁决）。
+
+**变更**：`connectors/binance/private/income.py`（`_audit_identity` + 分类型去重；`NON_TRADING_INCOME_TYPES` 收窄为 `{TRANSFER}`）；
+`tests/unit/test_income_history.py::AuditIdentityRulingTest`（5 条新用例）；`proposals/P0001.9.4.1` §0.2 / §0.2.1 / §1.7 / §1.8；`context/decisions.md` D-044。
+
+**真实回归（测试网，只读）**：`daily_net_realized = −1.27395553 USDT`、coverage complete、trading 10 / non-trading 1 / unclassified 0；
+readiness reasons 不变：`PRIVATE_LATENCY_UNKNOWN` / `HISTORICAL_DRAWDOWN_UNKNOWN` / `MARKET_NOT_READY`。
+
+**测试结果**：全量 **1515 passed / 0 failed / 22 skipped**；独立检出（`git archive HEAD` + 工作树叠加）同样全 PASS。
+**未 commit / push**（未获授权）。

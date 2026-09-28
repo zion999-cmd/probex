@@ -12,7 +12,8 @@ import math
 from market.events.types import Milliseconds
 from portfolio.accounting import AccountingCore
 from portfolio.types import LiquidationInfo
-from risk.types import RiskSnapshot
+from risk.history import HistoricalRiskBaseline
+from risk.types import AvailableBalanceSource, ExchangeAvailableBalance, RiskSnapshot
 
 #: 一天的毫秒数（用于 UTC 日界）。
 _DAY_MS = 86_400_000
@@ -39,11 +40,22 @@ def build_risk_snapshot(
     unresolved_order_count: int = 0,
     liquidation: LiquidationInfo | None = None,
     day_start_ts: Milliseconds | None = None,
+    exchange_available_balance: ExchangeAvailableBalance | None = None,
+    historical_baseline: HistoricalRiskBaseline | None = None,
 ) -> RiskSnapshot:
     """构建某个 symbol 的风险快照。
 
     `open_order_exposure` 是**总量**（= confirmed + uncertain）。允许只给总量（此时 confirmed 由减法推出）；
     若三个值都给且不自洽，直接 `ValueError`（fail closed，避免调用方给出矛盾的暴露）。
+
+    `exchange_available_balance`（P0001.9.4 §3）：传入时 `available_balance` 使用**交易所事实**
+    （Binance `availableBalance` + 采集时刻），否则保持 P0001.5 的本地推导
+    （`balance - open_order_exposure`）——PAPER / REPLAY 语义**不变**。
+
+    `historical_baseline`（P0001.9.4.1 §9）：传入**受信**的历史 baseline 时，
+    `realized_pnl_today = baseline.daily_net_realized + local_net_realized_since(cutoff)`；
+    缺任一段 ⇒ `None`（未知 ≠ 0）。**不**使用 baseline 推导 peak/drawdown（本阶段永远未知）。
+    不传时完全沿用原来的 `day_start_ts` 本地路径（Paper / Replay 不变）。
     """
     _validate_inputs(
         symbol=symbol,
@@ -68,6 +80,8 @@ def build_risk_snapshot(
         unresolved=unresolved,
         liquidation=liquidation,
         day_start_ts=day_start_ts,
+        exchange_available_balance=exchange_available_balance,
+        historical_baseline=historical_baseline,
     )
 
 
@@ -82,6 +96,8 @@ def _assemble_snapshot(
     unresolved: int,
     liquidation: LiquidationInfo | None,
     day_start_ts: Milliseconds | None,
+    exchange_available_balance: ExchangeAvailableBalance | None = None,
+    historical_baseline: HistoricalRiskBaseline | None = None,
 ) -> RiskSnapshot:
     """把 mutable accounting 事实转成不可变快照（字段逐个映射，不做判断）。"""
     mark_price = accounting.mark_price(symbol)
@@ -100,8 +116,14 @@ def _assemble_snapshot(
         gross_exposure=accounting.gross_exposure,
         net_exposure=accounting.net_exposure,
         open_order_exposure=exposed_total,
-        available_balance=accounting.balance - exposed_total,
-        realized_pnl_today=None if day_start_ts is None else accounting.net_realized_since(day_start_ts),
+        available_balance=(
+            accounting.balance - exposed_total
+            if exchange_available_balance is None
+            else exchange_available_balance.value
+        ),
+        realized_pnl_today=_realized_pnl_today(
+            accounting, day_start_ts=day_start_ts, historical_baseline=historical_baseline
+        ),
         unrealized_pnl=accounting.unrealized_pnl(),
         drawdown=drawdown,
         mark_price=mark_price,
@@ -115,6 +137,17 @@ def _assemble_snapshot(
         confirmed_open_exposure=confirmed,
         uncertain_exposure=uncertain,
         unresolved_order_count=unresolved,
+        available_balance_source=(
+            AvailableBalanceSource.LOCAL_DERIVED
+            if exchange_available_balance is None
+            else exchange_available_balance.source
+        ),
+        available_balance_captured_at=(
+            None if exchange_available_balance is None else exchange_available_balance.captured_at
+        ),
+        available_balance_age_ms=(
+            None if exchange_available_balance is None else exchange_available_balance.age_ms(now_ms=now_ms)
+        ),
     )
 
 
@@ -183,16 +216,34 @@ def _validate_inputs(
         raise ValueError("day_start_ts must be a non-negative int epoch-millisecond value or None")
 
 
+def _realized_pnl_today(
+    accounting: AccountingCore,
+    *,
+    day_start_ts: Milliseconds | None,
+    historical_baseline: HistoricalRiskBaseline | None,
+) -> float | None:
+    """当日已实现盈亏：优先使用受信历史 baseline（Live），否则沿用本地账本（Paper / Replay）。"""
+    if historical_baseline is None:
+        return None if day_start_ts is None else accounting.net_realized_since(day_start_ts)
+    return historical_baseline.compose_daily_pnl(accounting.net_realized_since(historical_baseline.cutoff_ts))
+
+
 def _derive_drawdown(accounting: AccountingCore) -> tuple[float | None, float | None, float | None]:
-    """返回 (drawdown, drawdown_pct, peak_equity)；equity 未知时三者皆 None。"""
+    """返回 (drawdown, drawdown_pct, peak_equity)。
+
+    P0001.9.4 §2（修正事实链）：**历史峰值未知时不得用当前 equity 冒充峰值**。
+    `peak_equity is None`（例如 startup baseline 之后 `historical_pnl_known = False`）⇒
+    三元组全为 `None` ⇒ `RiskGate` 以 `MISSING_DRAWDOWN` fail closed。
+    禁止为了让 readiness 变绿而把启动时 equity 定义成历史 peak。
+    """
     equity = accounting.equity()
     if equity is None:
         return None, None, None
 
     peak_equity = accounting.peak_equity
     if peak_equity is None:
-        # 尚未观测过历史峰值 → 当前 equity 就是峰值（drawdown = 0）
-        peak_equity = equity
+        # 未知 ≠ 0：历史峰值未知就是未知，不制造 drawdown = 0 的假事实
+        return None, None, None
 
     drawdown = max(0.0, peak_equity - equity)
     drawdown_pct = 0.0 if peak_equity <= 0.0 else drawdown / peak_equity

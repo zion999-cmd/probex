@@ -235,8 +235,9 @@ class SnapshotFailureTest(unittest.TestCase):
 
 class LatencyTest(unittest.TestCase):
     def test_sc12_latency_distribution_is_measured(self) -> None:
+        # 时钟 offset = +500（fixture 固定）；主指标是校正后延迟 = raw + 500（P0001.9.4 §6 / D-036）
         runtime, _, factory, _ = _runtime()
-        for index, lag in enumerate((10, 20, 30, 40, 5_000)):
+        for index, lag in enumerate((-490, -480, -470, -460, 4_500)):
             factory.connection.push(
                 order_update_message(
                     event_ts=BASE_TS - lag, trade_id=100 + index, cumulative_fill_quantity=f"0.{index + 1}"
@@ -246,21 +247,26 @@ class LatencyTest(unittest.TestCase):
         for _ in range(6):
             runtime.pump_once(timeout_s=0.01)
 
-        distribution = runtime.telemetry.private_lag_ms
+        telemetry = runtime.telemetry
+        distribution = telemetry.private_lag_ms
         self.assertIsNotNone(distribution)
         self.assertEqual(distribution.samples, 5)  # type: ignore[union-attr]
         self.assertEqual(distribution.minimum, 10)  # type: ignore[union-attr]
         self.assertEqual(distribution.median, 30)  # type: ignore[union-attr]
         self.assertEqual(distribution.maximum, 5_000)  # type: ignore[union-attr]
+        # 原始差值单独保留（本例 raw = corrected - 500），用于审计对照
+        self.assertEqual(telemetry.raw_private_lag_ms.minimum, -490)  # type: ignore[union-attr]
+        self.assertEqual(telemetry.uncorrected_lag_sample_count, 0)
         # SC-13 的门控按 **median** 判定（单点尖峰不改变 median）
         self.assertTrue(runtime.lag_within_threshold())
 
     def test_sc13_sustained_lag_breaches_the_threshold(self) -> None:
+        # raw = 2_500 ⇒ corrected = 2_500 + 500 = 3_000 > 阈值 1_000
         runtime, _, factory, _ = _runtime(max_median_private_lag_ms=1_000)
         for index in range(3):
             factory.connection.push(
                 order_update_message(
-                    event_ts=BASE_TS - 3_000, trade_id=200 + index, cumulative_fill_quantity=f"0.{index + 1}"
+                    event_ts=BASE_TS - 2_500, trade_id=200 + index, cumulative_fill_quantity=f"0.{index + 1}"
                 )
             )
 

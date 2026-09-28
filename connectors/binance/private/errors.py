@@ -17,13 +17,17 @@ def translate_market_errors(func: _F) -> _F:
     """把 market_data 窄化助手抛出的边界错误统一为 `PrivateFormatError`。
 
     私有层复用 `market_data.parsing` 的窄化函数（同一套不变量），但对外只暴露自己的错误类型；
-    `UnsupportedAccountModeError` 等私有层错误不受影响。
+    私有层自己的错误（`UnsupportedAccountModeError`、以及 `PrivateFormatError` 的**子类**，
+    例如 P0001.9.4.1 的 `IncomeHistoryError` / `IncomeHistoryConflictError`）原样透传，
+    不做降级包装（调用方需要据此区分 BLOCKED 原因）。
     """
 
     @functools.wraps(func)
     def wrapper(*args: object, **kwargs: object) -> object:
         try:
             return func(*args, **kwargs)
+        except PrivateApiError:
+            raise
         except MarketDataFormatError as exc:
             raise PrivateFormatError(str(exc)) from None
 

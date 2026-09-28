@@ -9,6 +9,7 @@ from market.events.types import Venue
 from portfolio.accounting import AccountingCore
 from portfolio.types import LiquidationInfo, Side
 from risk.snapshot import build_risk_snapshot, utc_day_start_ms
+from risk.types import AvailableBalanceSource, ExchangeAvailableBalance
 from tests.support import BASE_TS, make_fill, make_funding
 
 
@@ -82,17 +83,19 @@ class SnapshotFieldsTest(unittest.TestCase):
         self.assertIsNone(without.realized_pnl_today)
         self.assertEqual(with_start.realized_pnl_today, 10.0)
 
-    def test_peak_equity_defaults_to_current_equity(self) -> None:
+    def test_unknown_peak_equity_stays_unknown(self) -> None:
+        """P0001.9.4 §2：历史峰值未知时**不得**用当前 equity 冒充峰值得出 drawdown = 0。"""
         core = _long_core(mark=105.0)
-        # 清掉历史峰值观测（模拟「只有一次观测」的等价场景）
+        # 尚无任何 equity 观测 ⇒ 峰值未知（不是 0）
         core_without_history = AccountingCore(initial_balance=100.0)
 
         snapshot = build_risk_snapshot(core_without_history, symbol="BTCUSDT", now_ms=BASE_TS)
 
-        self.assertEqual(snapshot.peak_equity, 100.0)
-        self.assertEqual(snapshot.drawdown, 0.0)
-        self.assertEqual(snapshot.drawdown_pct, 0.0)
+        self.assertIsNone(snapshot.peak_equity)
+        self.assertIsNone(snapshot.drawdown)
+        self.assertIsNone(snapshot.drawdown_pct)
 
+        # 已经观测过 equity 的正常会话：峰值照常来自观测
         dropped = build_risk_snapshot(core, symbol="BTCUSDT", now_ms=BASE_TS + 2)
         self.assertEqual(dropped.peak_equity, 10_005.0)
         self.assertEqual(dropped.drawdown, 0.0)
@@ -170,6 +173,64 @@ class UtcDayStartTest(unittest.TestCase):
         snapshot = build_risk_snapshot(_long_core(), symbol="BTCUSDT", now_ms=BASE_TS)
         self.assertFalse(hasattr(snapshot, "venue"))
         self.assertIs(Venue.BINANCE.value, "binance")
+
+
+class ExchangeAvailableBalanceTest(unittest.TestCase):
+    """P0001.9.4 §3 / SC-4 / SC-5：live 口径必须来自交易所，Paper/Replay 语义不变。"""
+
+    def test_local_derivation_is_the_default(self) -> None:
+        core = _long_core(mark=100.0)
+
+        snapshot = build_risk_snapshot(core, symbol="BTCUSDT", now_ms=BASE_TS, open_order_exposure=25.0)
+
+        self.assertEqual(snapshot.available_balance, snapshot.balance - 25.0)
+        self.assertIs(snapshot.available_balance_source, AvailableBalanceSource.LOCAL_DERIVED)
+        self.assertFalse(snapshot.has_exchange_available_balance)
+        self.assertIsNone(snapshot.available_balance_captured_at)
+        self.assertIsNone(snapshot.available_balance_age_ms)
+
+    def test_exchange_value_overrides_the_local_estimate(self) -> None:
+        core = _long_core(mark=100.0)
+        exchange = ExchangeAvailableBalance(value=777.0, captured_at=BASE_TS - 250)
+
+        snapshot = build_risk_snapshot(
+            core, symbol="BTCUSDT", now_ms=BASE_TS, open_order_exposure=25.0, exchange_available_balance=exchange
+        )
+
+        self.assertEqual(snapshot.available_balance, 777.0)  # 不是 balance - exposure
+        self.assertIs(snapshot.available_balance_source, AvailableBalanceSource.BINANCE_ACCOUNT_SNAPSHOT)
+        self.assertTrue(snapshot.has_exchange_available_balance)
+        self.assertEqual(snapshot.available_balance_captured_at, BASE_TS - 250)
+        self.assertEqual(snapshot.available_balance_age_ms, 250)
+
+    def test_exchange_value_may_differ_from_local_derivation(self) -> None:
+        """交易所可用余额可能因未实现盈亏/保证金占用而小于本地推导值——必须照实使用。"""
+        core = _long_core(mark=100.0)
+        local = build_risk_snapshot(core, symbol="BTCUSDT", now_ms=BASE_TS).available_balance
+
+        exchange = ExchangeAvailableBalance(value=local - 100.0, captured_at=BASE_TS)
+        snapshot = build_risk_snapshot(
+            core, symbol="BTCUSDT", now_ms=BASE_TS, exchange_available_balance=exchange
+        )
+
+        self.assertLess(snapshot.available_balance, local)
+
+    def test_contract_rejects_fake_sources_and_bad_values(self) -> None:
+        with self.assertRaises(ValueError):
+            ExchangeAvailableBalance(value=-1.0, captured_at=BASE_TS)
+        with self.assertRaises(ValueError):
+            ExchangeAvailableBalance(value=float("nan"), captured_at=BASE_TS)
+        with self.assertRaises(ValueError):
+            ExchangeAvailableBalance(value=1.0, captured_at=-1)
+        with self.assertRaises(ValueError):
+            ExchangeAvailableBalance(
+                value=1.0, captured_at=BASE_TS, source=AvailableBalanceSource.LOCAL_DERIVED
+            )
+
+    def test_age_never_negative(self) -> None:
+        exchange = ExchangeAvailableBalance(value=1.0, captured_at=BASE_TS + 10)
+
+        self.assertEqual(exchange.age_ms(now_ms=BASE_TS), 0)
 
 
 if __name__ == "__main__":

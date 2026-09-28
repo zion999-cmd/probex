@@ -28,7 +28,7 @@ from connectors.binance.market_data.endpoints import WS_HOST, StreamTier
 from connectors.binance.market_data.errors import TransportError, WebSocketClosed, WebSocketTimeout
 from connectors.binance.market_data.transport import ReconnectPolicy, WebSocketConnection
 from connectors.binance.private.account import AccountSnapshotObservation, parse_account_snapshot
-from connectors.binance.private.auth import ApiCredentials, ServerTimeOffset, wall_clock_ms
+from connectors.binance.private.auth import ApiCredentials, ClockCalibration, ServerTimeOffset, wall_clock_ms
 from connectors.binance.private.errors import (
     CredentialsError,
     ListenKeyError,
@@ -153,12 +153,14 @@ class PrivateAccountRuntime:
         self.counters = PrivateStreamCounters()
         self.ordering = UserEventOrdering()
         self.latency = LatencySamples(limit=self.config.latency_sample_limit)
+        self.raw_latency = LatencySamples(limit=self.config.latency_sample_limit)
         self._ws: WebSocketConnection | None = None
         self._stream_connected_at_ms: Milliseconds | None = None
         self._boundary: PrivateSnapshotBoundary | None = None
         self._latest_snapshot: AccountSnapshotObservation | None = None
         self._latest_position: PositionObservation | None = None
         self._continuity_assumed = False
+        self._calibration: ClockCalibration | None = None
         self._discontinuity_listeners: list[Callable[[str], None]] = []
         self._discontinuity_events: list[str] = []
 
@@ -186,6 +188,21 @@ class PrivateAccountRuntime:
         return self._latest_position
 
     @property
+    def clock_calibration(self) -> ClockCalibration | None:
+        """最近一次 server-time 校准（含 RTT / 不确定度 / 测量时刻）。
+
+        来源是 `PrivateRestClient.measure_clock()` 的返回值（单一来源），未测量时为 None。
+        """
+        return self._calibration
+
+    def refresh_clock_calibration(self) -> ClockCalibration:
+        """重新测量时钟校准（readiness 需要新鲜的不确定度，而不是沿用启动时的一次测量）。"""
+        calibration = self.rest.measure_clock()
+        self._calibration = calibration
+        self.counters.server_time_offset_ms = calibration.offset_ms
+        return calibration
+
+    @property
     def telemetry(self) -> PrivateStreamTelemetry:
         counters = self.counters
         return PrivateStreamTelemetry(
@@ -193,6 +210,10 @@ class PrivateAccountRuntime:
             continuity_assumed=self._continuity_assumed,
             last_receive_lag_ms=self.latency.last,
             private_lag_ms=self.latency.distribution(),
+            last_raw_receive_lag_ms=self.raw_latency.last,
+            raw_private_lag_ms=self.raw_latency.distribution(),
+            uncorrected_lag_sample_count=counters.uncorrected_lag_sample_count,
+            clock_calibration=self.clock_calibration,
             connect_count=counters.connect_count,
             reconnect_count=counters.reconnect_count,
             disconnect_count=counters.disconnect_count,
@@ -266,7 +287,7 @@ class PrivateAccountRuntime:
     def start(self) -> PrivateSnapshotBoundary:
         """启动顺序（提案 §0.6）：凭据 → server time → listenKey → user stream → snapshot → boundary。"""
         self._require_credentials()
-        self.counters.server_time_offset_ms = self._measure_server_time()
+        self.counters.server_time_offset_ms = self.refresh_clock_calibration().offset_ms
         self._create_listen_key_and_connect()
         self.refresh_snapshot()
         assert self._boundary is not None  # refresh_snapshot 已设置
@@ -476,7 +497,20 @@ class PrivateAccountRuntime:
             self._record_lag(event_ts=observation.event_ts, receive_ts=receive_ts)
 
     def _record_lag(self, *, event_ts: Milliseconds, receive_ts: Milliseconds) -> None:
-        self.latency.add(receive_ts - event_ts)
+        """记录事件延迟（P0001.9.4 §6 / D-036）。
+
+        - 原始差值 `receive_ts - event_ts` 只作审计（它混入了本地与交易所的时钟偏差）；
+        - **主指标**是校正值 `receive_ts - event_ts + offset_ms`（offset = 交易所 − 本地），
+          且必须能同时给出 `uncertainty_ms`；
+        - 校准不可用时**不**产生校正样本，也没有 anything 被当成 0（未知 ≠ 0）。
+        """
+        raw = receive_ts - event_ts
+        self.raw_latency.add(raw)
+        calibration = self.clock_calibration
+        if calibration is None:
+            self.counters.uncorrected_lag_sample_count += 1
+            return
+        self.latency.add(calibration.corrected_lag_ms(receive_ts=receive_ts, event_ts=event_ts))
 
     def _reconnect_once(self) -> None:
         """一次重连尝试：复用未过期的 listenKey，否则重建。"""

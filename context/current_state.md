@@ -15,7 +15,7 @@ Provider identity 核实（决策 D，提案 §1.7）与授权探测 P1/P2（提
   P2 单条 `noul` 探针 → HTTP 200、604 ms、`answers.ok={type:noul,noul:0.99}`、cost 1.1634e-05。
 - **热路径 Jev 的真实目标应为 `/api/v1/systemone`**；实现 typed provider 需新提案（尚未授权、尚未改代码）。
 
-`context/status.json` 的 `currentProposal` 为 `null`（**P0001.9.3.2 已收口**，等待下一条正式 Proposal）。
+`context/status.json` 的 `currentProposal` 为 `null`（**P0001.9.4.1 已收口**，等待下一条正式 Proposal）。
 
 ## 已完成能力
 
@@ -170,7 +170,8 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 - **仍未验证**：主网（出口 IP 曾封禁 418/-1003；主网私有链路延迟与账户数据未取样）⇒ 状态串
   `TESTNET_PRIVATE_VALIDATED / MAINNET_PRIVATE_NOT_YET_VALIDATED`。
 - **Risk（后续 live gate，D-036）**：raw event lag 出现 −30 ms（区间 −30 ~ +2 ms）⇒ 本地与交易所时钟有几十毫秒偏差，
-  主网验收必须用 `event_lag_corrected = receive_ts − event_ts − clock_offset` 并记录不确定度。
+  主网验收必须用 `event_lag_corrected = receive_ts − event_ts **+** clock_offset`（`offset = 交易所 − 本地`；
+  2026-09-28 人类裁决更正符号）并记录不确定度；`uncertainty_ms` 单独保存。
 - `status.json.currentProposal` = `null`；**P0001.9.3 不启动**，等待下一条正式 Proposal（人类 2026-09-28 指示）。
 
 ### P0001.9.2.1 — Private Connectivity Contract Audit & CCXT Fit（已完成；裁决 KEEP_NATIVE_PRIVATE）
@@ -233,6 +234,49 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
   **superseded** 说明，两处「尚未 commit」表述就地标注 superseded。
 - 全量测试 **1416 passed / 0 failed / 19 skipped**；`context/status.json.currentProposal` 回到 `null`。
 
+### P0001.9.4 — Live Readiness Gate（已完成）
+
+- 新增 `readiness/`：`types.py`（`LiveReadinessStatus` / `LiveReadinessScope` / 15 个 reason code /
+  `ReadinessPolicy` / `LiveRiskPolicy`，全部必填无默认值）、`gate.py`（`LiveReadinessGate`，纯判定、收集全部原因）、
+  `evidence.py`（telemetry / account snapshot / `RiskSnapshot` → 证据的纯映射）。
+- **`RECOVERED` ≠ `LIVE_READY`**：readiness 独立于 `RecoveryStatus` 与逐订单 `RiskGate`；`LIVE_READY` 带作用域
+  （testnet 只能得 `TESTNET_LIVE_READY`；主网缺验证证据 ⇒ `MAINNET_PRIVATE_NOT_VALIDATED` ⇒ BLOCKED）。
+- **修正 drawdown 事实链**：baseline 后 `peak_equity is None` ⇒ `drawdown/drawdown_pct` 为 `None`
+  （不再用当前 equity 冒充峰值）⇒ 已配置限额时 `RiskGate: MISSING_DRAWDOWN` fail closed。
+- **live 可用余额取交易所事实**：`RiskSnapshot.available_balance` 支持 Binance `availableBalance`
+  （`BINANCE_ACCOUNT_SNAPSHOT` + `captured_at` + `age_ms`）；Paper/Replay 仍为本地推导（`LOCAL_DERIVED`）。
+- **live 风险策略显式化**：`LiveRiskPolicy` 全字段必填并可 `to_limits()` 喂给 `RiskGate`；
+  缺失 ⇒ `RISK_LIMITS_NOT_CONFIGURED`；kill switch 非 NORMAL ⇒ `KILL_SWITCH_NOT_OPERABLE`。
+- **D-036 落地**：`ClockCalibration`（offset / RTT / uncertainty / measured_at）；runtime 主延迟指标改为校正值
+  （原始值仅审计）；未测量/过旧 ⇒ `CLOCK_NOT_CALIBRATED`，uncertainty 超阈值 ⇒ `CLOCK_UNCERTAINTY_TOO_HIGH`。
+- **真实测试网只读验收（SC-12）**：`recovery = recovered` 而 `readiness = blocked`，原因
+  `PRIVATE_LATENCY_UNKNOWN`（窗口内无业务事件）/ `HISTORICAL_DAILY_PNL_UNKNOWN` / `HISTORICAL_DRAWDOWN_UNKNOWN` /
+  `MARKET_NOT_READY`（本 harness 未运行 public market-data 链，未伪造 green）；真实 clock offset 199 ms /
+  RTT 292 ms / uncertainty 146 ms；交易所 availableBalance 4998.72604447；`synthetic_fills = 0`。
+- 全量测试 **1474 passed / 0 failed / 20 skipped**；`context/status.json.currentProposal` 回到 `null`。
+- **实现修正（2026-09-28，人类裁决）**：D-036 时钟校正公式符号原本写反，已改为
+  `corrected = receive_ts − event_ts + offset_ms`（= `raw + offset`），并加入符号方向单测
+  （`offset=+200/raw=−180 → 20`、`offset=−100/raw=+130 → 30`、`offset=0/raw=25 → 25`）。
+
+### P0001.9.4.1 — Historical Risk Bootstrap（已完成）
+
+- 新增 `connectors/binance/private/income.py`（只读 `/fapi/v1/income` 事实：严格解析、显式 incomeType 分类、
+  `(income_type, tranId)` 去重与冲突检测、结算资产校验、**完整分页**（`max_pages` 显式、超页/越界 ⇒ coverage 不完整））
+  与 `connectors/binance/private/rest.py::income_history(...)`（账户级、不传 symbol）。
+- 新增 `risk/history.py`：`HistoricalRiskBaseline`（`daily_net_realized=None` = 未知；
+  `drawdown_known`/`peak_equity_known` **恒 False**）+ `compose_daily_pnl(...)`；
+  `risk/snapshot.py` 支持 `historical_baseline=` 注入 ⇒
+  `realized_pnl_today = Σ(trading income, time ≤ cutoff) + accounting.net_realized_since(cutoff)`（不双计）。
+- 三件事实分离（daily / drawdown / peak）；**绝不**从 income 或当前 equity 反推历史 peak（D-044）。
+- **真实测试网只读验收（SC-16）**：coverage complete、1 页 11 行、trading 10（COMMISSION×7 + REALIZED_PNL×3）、
+  non-trading 1（TRANSFER）、unclassified 0、**daily_net_realized = −1.27395553 USDT**、全部 USDT 资产。
+- **真实 readiness 变化（SC-13）**：`HISTORICAL_DAILY_PNL_UNKNOWN` **被真实解除**，
+  剩余阻塞为 `PRIVATE_LATENCY_UNKNOWN` / **`HISTORICAL_DRAWDOWN_UNKNOWN`** / `MARKET_NOT_READY`。
+- **implementation correction（2026-09-28，人类裁决）**：去重身份按"是否参与 PnL"分开 ——
+  TRADING 行严格用 `(income_type, tran_id)`（冲突 ⇒ BLOCKED）；NON_TRADING / UNCLASSIFIED 行只做审计层去重
+  （`TRANSFER.tranId=0` 可多条共存，不影响 daily PnL）；incomeType 白名单**不扩展**（已知非交易只有 `TRANSFER`）。
+- 全量测试 **1515 passed / 0 failed / 22 skipped**；`context/status.json.currentProposal` 回到 `null`。
+
 ## 进行中能力
 
 无。
@@ -240,7 +284,9 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 
 ## 下一步
 
-- **无授权中的步骤**：P0001.9.3 / P0001.9.3.1 / P0001.9.3.2 均已收口，`currentProposal = null`。下一阶段必须由人类/设计方落盘正式 Proposal，
+- **无授权中的步骤**：P0001.9.3 – P0001.9.4.1 均已收口，`currentProposal = null`。
+  真实下单能力（Binance ExecutionAdapter）**尚未授权**，且 readiness 目前必然 BLOCKED（历史风险未知），
+  任何"进入真实交易"的下一步都必须由人类落盘新提案。下一阶段必须由人类/设计方落盘正式 Proposal，
   再由人类下达「读取 … 实施」指令后才可实现（不得从 roadmap / handoff 推断任务）。
 - 待人类决定（不阻塞）：① adverse-selection 阈值 X（bps）；② 五分类 bucket 数值分档；
   ③ `RiskLimits` 全部限额数值；④ `MakerPolicyConfig` 生产数值；⑤ 是否补验**主网**私有链路（含 D-036 时钟校正口径）；
@@ -270,8 +316,10 @@ Git 仓库已初始化；P0001.1 – P0001.9.2.1 均已提交并推送（每个 
 | `7053a70` … `aeb4ab8` | P0001.6 – P0001.9.2（含 1.9.1 / 1.9.1.1 / 1.9.2.1） | 1190 – 1327 passed |
 | `1be451a` | **P0001.9.3** Startup Recovery + Account Reconciliation | 1387 passed（含 P0001.9.3.1 前的基线） |
 | `4b69a73` | **P0001.9.3.1** Recovery Contract Closure | 1405 passed（detached worktree 复核） |
-| （未提交） | **P0001.9.3.2** Discontinuity Notification Reliability | 工作树 + 独立快照 1416 passed（见提案 §1.4） |
+| `e5d6921` | **P0001.9.3.2** Discontinuity Notification Reliability | 1416 passed（detached worktree 复核） |
+| （未提交） | **P0001.9.4** Live Readiness Gate（含 D-036 符号修正） | 工作树 + 独立快照 1474 passed（见提案 §1.5） |
+| （未提交） | **P0001.9.4.1** Historical Risk Bootstrap（含审计身份修正） | 工作树 + 独立快照 1515 passed（见提案 §1.5） |
 
 `CLAUDE.md` 与 `.gitignore` 被使用者全局 gitignore（`~/.gitignore_global`）排除，未纳入版本控制。
 P0001.9.3（`1be451a`）与 P0001.9.3.1（`4b69a73`）均已提交并 **push 到 `origin/master`**；
-P0001.9.3.2 的改动尚未提交（见「版本」表；当前工作树状态以 `git status` 为准）。
+P0001.9.4 / P0001.9.4.1 的改动尚未提交（见「版本」表；当前工作树状态以 `git status` 为准）。

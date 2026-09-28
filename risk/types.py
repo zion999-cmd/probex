@@ -43,6 +43,18 @@ class ExposureClass(Enum):
     REVERSING = "reversing"
 
 
+class AvailableBalanceSource(Enum):
+    """`RiskSnapshot.available_balance` 的**来源**（P0001.9.4 §3）。
+
+    本地推导只适用于 PAPER / REPLAY；真实下单前的 readiness 必须要求交易所事实。
+    """
+
+    #: `accounting.balance - open_order_exposure`（P0001.5 起的既有语义，Paper/Replay 不变）
+    LOCAL_DERIVED = "local_derived"
+    #: 交易所 `availableBalance`（Binance 权威口径）
+    BINANCE_ACCOUNT_SNAPSHOT = "binance_account_snapshot"
+
+
 class RiskReasonCode(Enum):
     """拒绝原因码（第一个命中的检查决定 reason_code）。"""
 
@@ -137,6 +149,35 @@ class RiskDecision:
 
 
 @dataclass(frozen=True, slots=True)
+class ExchangeAvailableBalance:
+    """交易所口径的可用余额事实（**不是**本地估算）。
+
+    携带 `captured_at` 以便计算 `age_ms`：readiness 必须判断新鲜度，而不是只看数值。
+    """
+
+    value: float
+    captured_at: Milliseconds
+    source: AvailableBalanceSource = AvailableBalanceSource.BINANCE_ACCOUNT_SNAPSHOT
+
+    def __post_init__(self) -> None:
+        if isinstance(self.value, bool) or not isinstance(self.value, (int, float)):
+            raise ValueError("ExchangeAvailableBalance.value must be a number")
+        if not math.isfinite(float(self.value)) or float(self.value) < 0.0:
+            raise ValueError("ExchangeAvailableBalance.value must be a non-negative finite number")
+        object.__setattr__(self, "value", float(self.value))
+        if isinstance(self.captured_at, bool) or not isinstance(self.captured_at, int) or self.captured_at < 0:
+            raise ValueError("ExchangeAvailableBalance.captured_at must be a non-negative int epoch-ms")
+        if self.source is not AvailableBalanceSource.BINANCE_ACCOUNT_SNAPSHOT:
+            raise ValueError(
+                "ExchangeAvailableBalance.source must be BINANCE_ACCOUNT_SNAPSHOT "
+                "(本地推导不得伪装成交易所事实)"
+            )
+
+    def age_ms(self, *, now_ms: Milliseconds) -> int:
+        return max(0, now_ms - self.captured_at)
+
+
+@dataclass(frozen=True, slots=True)
 class RiskSnapshot:
     """RiskGate 唯一消费的不可变快照（§8）。
 
@@ -172,9 +213,20 @@ class RiskSnapshot:
     uncertain_exposure: float = 0.0
     #: 资料不足、无法量化的订单数量（> 0 时 Gate 拒绝新增暴露）
     unresolved_order_count: int = 0
+    #: `available_balance` 的来源（P0001.9.4 §3）；默认保持 P0001.5 的本地推导语义
+    available_balance_source: AvailableBalanceSource = AvailableBalanceSource.LOCAL_DERIVED
+    #: 交易所事实的采集时刻 / 新鲜度（仅当来源为交易所快照时非 None）
+    available_balance_captured_at: Milliseconds | None = None
+    available_balance_age_ms: Milliseconds | None = None
+
+    @property
+    def has_exchange_available_balance(self) -> bool:
+        return self.available_balance_source is AvailableBalanceSource.BINANCE_ACCOUNT_SNAPSHOT
 
 
 __all__ = [
+    "AvailableBalanceSource",
+    "ExchangeAvailableBalance",
     "ExposureClass",
     "KillSwitchMode",
     "InvalidOrderProposalError",

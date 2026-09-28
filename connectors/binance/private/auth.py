@@ -160,11 +160,72 @@ def build_signed_request(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class ClockCalibration:
+    """一次 server-time 测量的**完整事实**（P0001.9.4 §6 / D-036）。
+
+    - `offset_ms`：`server_time - local_time`（用往返时间一半校正，见 `ServerTimeOffset.measure`）
+    - `round_trip_ms`：本次测量的往返时间（**不能**因为 corrected lag 很小就忽略一个巨大的 RTT）
+    - `uncertainty_ms`：偏移估计的不确定度（对称假设下 = `round_trip_ms // 2`）
+    - `measured_at_ms`：测量时刻（本地时钟），用于判断"校正是否已经过旧"
+
+    **符号约定（关键）**：`offset_ms = 交易所时钟 − 本地时钟`（交易所快 ⇒ 正值）。
+    因此把本地接收时刻换算到交易所时钟域是 `local_receive + offset`，校正延迟为：
+
+    ```text
+    corrected_lag = receive_ts - event_ts + offset_ms
+    ```
+
+    例：交易所快 200 ms（offset=+200）、真实延迟 20 ms ⇒ event_ts=1200、receive_ts=1020
+    ⇒ raw = −180 ⇒ corrected = −180 + 200 = **+20 ms** ✓。
+    必须**同时**记录 `uncertainty_ms`（不并入 corrected lag）。
+    """
+
+    offset_ms: int
+    round_trip_ms: int
+    uncertainty_ms: int
+    measured_at_ms: int
+
+    def __post_init__(self) -> None:
+        for name in ("offset_ms", "round_trip_ms", "uncertainty_ms", "measured_at_ms"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise PrivateAuthError(f"ClockCalibration.{name} must be an int, got {value!r}")
+            if name == "offset_ms":
+                continue
+            if value < 0:
+                raise PrivateAuthError(f"ClockCalibration.{name} must be >= 0, got {value!r}")
+        if self.uncertainty_ms > self.round_trip_ms:
+            raise PrivateAuthError(
+                "ClockCalibration.uncertainty_ms must not exceed round_trip_ms "
+                f"({self.uncertainty_ms} > {self.round_trip_ms})"
+            )
+
+    def corrected_lag_ms(self, *, receive_ts: int, event_ts: int) -> int:
+        """`receive_ts - event_ts + offset_ms`（`offset = 交易所 − 本地`）。
+
+        raw 差值为负是**正常现象**（交易所时钟快），校正只做时钟域换算：
+        `local_receive_in_exchange_clock = receive_ts + offset_ms`。
+        """
+        for name, value in (("receive_ts", receive_ts), ("event_ts", event_ts)):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise PrivateAuthError(f"{name} must be an int, got {value!r}")
+        return receive_ts - event_ts + self.offset_ms
+
+    def age_ms(self, *, now_ms: int) -> int:
+        """校正的新鲜度（>= 0）。"""
+        if isinstance(now_ms, bool) or not isinstance(now_ms, int):
+            raise PrivateAuthError(f"now_ms must be an int, got {now_ms!r}")
+        return max(0, now_ms - self.measured_at_ms)
+
+
 @dataclass
 class ServerTimeOffset:
     """`server_time - local_time`（毫秒）。仅在 live 边界测量/使用。"""
 
     offset_ms: int | None = None
+    #: 最近一次测量的完整事实（含 RTT / 不确定度 / 测量时刻）；未测量时为 None
+    calibration: ClockCalibration | None = None
 
     @property
     def measured(self) -> bool:
@@ -177,13 +238,22 @@ class ServerTimeOffset:
         return local_now_ms + (self.offset_ms or 0)
 
     def measure(self, *, server_time_ms: int, local_receive_ms: int, round_trip_ms: int = 0) -> int:
-        """记录一次测量：估算 `server_time - local_time`（用往返时间的一半校正）。"""
+        """记录一次测量：`offset_ms = server_time - local_time`（= 交易所 − 本地；用 RTT/2 校正）。
+
+        同时保存完整 `ClockCalibration`（P0001.9.4 §6）——偏移、RTT、不确定度、测量时刻。
+        """
         for name, value in (("server_time_ms", server_time_ms), ("local_receive_ms", local_receive_ms)):
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise PrivateAuthError(f"{name} must be a positive int, got {value!r}")
         if isinstance(round_trip_ms, bool) or not isinstance(round_trip_ms, int) or round_trip_ms < 0:
             raise PrivateAuthError(f"round_trip_ms must be an int >= 0, got {round_trip_ms!r}")
         self.offset_ms = server_time_ms - local_receive_ms + round_trip_ms // 2
+        self.calibration = ClockCalibration(
+            offset_ms=self.offset_ms,
+            round_trip_ms=round_trip_ms,
+            uncertainty_ms=round_trip_ms // 2,
+            measured_at_ms=local_receive_ms,
+        )
         return self.offset_ms
 
 
