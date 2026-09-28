@@ -66,6 +66,8 @@ class RiskReasonCode(Enum):
     LIQUIDATION_DISTANCE = "LIQUIDATION_DISTANCE"
     # 已配置限额但数据缺失 → fail closed
     MISSING_DAILY_PNL = "MISSING_DAILY_PNL"
+    #: 已配置 drawdown 限额但历史峰值未知（例如 startup baseline 之后）→ fail closed（P0001.9.3）
+    MISSING_DRAWDOWN = "MISSING_DRAWDOWN"
     MISSING_LIQUIDATION_INFO = "MISSING_LIQUIDATION_INFO"
     #: 存在资料不足、无法量化的订单暴露 → 不允许新增暴露（P0001.6.1）
     UNCERTAIN_EXPOSURE_UNKNOWN = "UNCERTAIN_EXPOSURE_UNKNOWN"

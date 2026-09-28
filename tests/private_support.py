@@ -197,6 +197,64 @@ def listen_key_expired_message(*, event_ts: int = BASE_TS) -> str:
     return json.dumps({"e": "listenKeyExpired", "E": event_ts})
 
 
+def binance_order_payload(
+    *,
+    order_id: int = 101,
+    client_order_id: str = "probex-s1-000001",
+    symbol: str = SYMBOL,
+    side: str = "BUY",
+    status: str = "NEW",
+    price: str = "60000.0",
+    orig_qty: str = "0.002",
+    executed_qty: str = "0.000",
+    avg_price: str = "0.0",
+    update_time: int = BASE_TS,
+) -> dict:
+    """真实形态的 `/fapi/v1/openOrders` / `/fapi/v1/allOrders` 条目。"""
+    return {
+        "orderId": order_id,
+        "clientOrderId": client_order_id,
+        "symbol": symbol,
+        "side": side,
+        "type": "LIMIT",
+        "status": status,
+        "price": price,
+        "origQty": orig_qty,
+        "executedQty": executed_qty,
+        "avgPrice": avg_price,
+        "time": update_time,
+        "updateTime": update_time,
+    }
+
+
+def binance_trade_payload(
+    *,
+    trade_id: int = 555,
+    order_id: int = 101,
+    symbol: str = SYMBOL,
+    price: str = "60000.0",
+    qty: str = "0.001",
+    commission: str = "0.012",
+    commission_asset: str = "USDT",
+    timestamp: int = BASE_TS + 5,
+) -> dict:
+    """真实形态的 `/fapi/v1/userTrades` 条目（**没有 clientOrderId**，只有 orderId）。"""
+    return {
+        "id": trade_id,
+        "orderId": order_id,
+        "symbol": symbol,
+        "side": "BUY",
+        "price": price,
+        "qty": qty,
+        "realizedPnl": "0.0",
+        "commission": commission,
+        "commissionAsset": commission_asset,
+        "time": timestamp,
+        "maker": True,
+        "buyer": True,
+    }
+
+
 @dataclass
 class FakeRestFetcher:
     """脚本化 REST：按 path 返回预置响应，并记录调用。"""
@@ -210,6 +268,8 @@ class FakeRestFetcher:
     #: 依次由 `POST /fapi/v1/listenKey` 返回的 key 序列（耗尽后重复最后一个）。
     listen_keys: deque[str] = field(default_factory=lambda: deque([FAKE_LISTEN_KEY]))
     key_index: int = 0
+    #: 同一 path 的**连续不同响应**（用于「再次读取拿到不同事实」的竞态测试）；耗尽后回退到 `responses`。
+    sequences: dict[str, list[object]] = field(default_factory=dict)
 
     def send(self, *, method: str, url: str, headers: dict[str, str], timeout_s: float):
         path = url.split("?")[0].split("fapi.binance.com")[-1]
@@ -231,6 +291,9 @@ class FakeRestFetcher:
                 self.key_index += 1
                 return {"listenKey": key}
             return {}
+        queued = self.sequences.get(path)
+        if queued:
+            return queued.pop(0)
         if path not in self.responses:
             raise TransportError(f"no stub response for {path}")
         return self.responses[path]
@@ -289,6 +352,54 @@ class ScriptedStreamFactory:
         return connection
 
 
+#: 恢复测试用的只读端点 → 响应映射构造器。
+def recovery_responses(
+    *,
+    account: dict | None = None,
+    position: list[dict] | None = None,
+    open_orders: list[dict] | None = None,
+    history: list[dict] | None = None,
+    trades: list[dict] | None = None,
+) -> dict[str, object]:
+    return {
+        "/fapi/v1/time": {"serverTime": BASE_TS + 500},
+        "/fapi/v2/account": account if account is not None else account_payload(),
+        "/fapi/v2/positionRisk": position if position is not None else position_risk_payload(),
+        "/fapi/v1/openOrders": open_orders if open_orders is not None else [],
+        "/fapi/v1/allOrders": history if history is not None else [],
+        "/fapi/v1/userTrades": trades if trades is not None else [],
+    }
+
+
+def build_recovery(**overrides: object):
+    """组装 StartupRecovery（假 REST + 空 tracker/accounting）。"""
+    from connectors.binance.private.recovery import StartupRecovery
+    from execution.tracker import OrderTracker
+    from portfolio.accounting import AccountingCore
+
+    responses = overrides.pop("responses", None)
+    fetcher = FakeRestFetcher(responses=dict(responses) if responses else recovery_responses())
+    clock = overrides.pop("clock", lambda: BASE_TS)
+    rest = PrivateRestClient(credentials=credentials(), fetcher=fetcher, clock=clock)
+    tracker = overrides.pop("tracker", None) or OrderTracker(session_id="s1")
+    accounting = overrides.pop("accounting", None) or AccountingCore(initial_balance=0.0)
+    recovery = StartupRecovery(
+        rest=rest, tracker=tracker, accounting=accounting, symbol=SYMBOL, clock=clock,
+        **overrides,  # type: ignore[arg-type]
+    )
+    return recovery, fetcher, tracker, accounting
+
+
+def stream_state(*, active: bool = True, continuity: bool = True, boundary: bool = True):
+    from connectors.binance.private.recovery import StreamState
+
+    return StreamState(
+        listen_key_state="ACTIVE" if active else "EXPIRED",
+        continuity_assumed=continuity,
+        boundary_present=boundary,
+    )
+
+
 def build_runtime(**overrides: object):
     """组装一个私有运行时（假 REST + 假 WS）。"""
     from connectors.binance.private.runtime import PrivateAccountRuntime
@@ -328,4 +439,9 @@ __all__ = [
     "position_risk_payload",
     "testnet_position_risk_payload",
     "private_config",
+    "binance_order_payload",
+    "binance_trade_payload",
+    "build_recovery",
+    "recovery_responses",
+    "stream_state",
 ]

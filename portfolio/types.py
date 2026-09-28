@@ -230,10 +230,78 @@ class LiquidationInfo:
         return self.liquidation_price < self.mark_price
 
 
+#: baseline 来源标记（P0001.9.3）。
+BASELINE_SOURCE_BINANCE_RECOVERY = "BINANCE_RECOVERY"
+
+
+class InvalidBaselineError(PortfolioError):
+    """startup baseline 不满足不变量。"""
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalAccountBaseline:
+    """启动时从交易所读到的**账户事实基线**（P0001.9.3 §0.4）。
+
+    用途：让 `AccountingCore` 在**尚未处理任何本 session Fill** 时一次性 bootstrap 到当前真实状态，
+    从而**不需要**用 synthetic Fill 伪造已有仓位。它只回答「现在是什么状态」，不提供任何历史 PnL。
+    """
+
+    symbol: str
+    wallet_balance: float
+    available_balance: float
+    position_qty: float
+    entry_price: float
+    mark_price: float
+    liquidation_price: float
+    captured_at: Milliseconds
+    source: str = BASELINE_SOURCE_BINANCE_RECOVERY
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.symbol, str) or not self.symbol:
+            raise InvalidBaselineError("ExternalAccountBaseline.symbol must be a non-empty string")
+        if not isinstance(self.source, str) or not self.source:
+            raise InvalidBaselineError("ExternalAccountBaseline.source must be a non-empty string")
+        for field in ("wallet_balance", "available_balance", "position_qty", "entry_price",
+                      "mark_price", "liquidation_price"):
+            value = getattr(self, field)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise InvalidBaselineError(f"ExternalAccountBaseline.{field} must be a number")
+            number = float(value)
+            if not math.isfinite(number):
+                raise InvalidBaselineError(f"ExternalAccountBaseline.{field} must be finite")
+            object.__setattr__(self, field, number)
+        if self.mark_price < 0.0:
+            raise InvalidBaselineError("ExternalAccountBaseline.mark_price must be >= 0")
+        if self.liquidation_price < 0.0:
+            raise InvalidBaselineError("ExternalAccountBaseline.liquidation_price must be >= 0")
+        if self.position_qty != 0.0:
+            # 有仓位时所有价格必须可用，否则 fail closed
+            if self.mark_price <= 0.0:
+                raise InvalidBaselineError("ExternalAccountBaseline.mark_price must be > 0 for an open position")
+            if self.entry_price <= 0.0:
+                raise InvalidBaselineError("ExternalAccountBaseline.entry_price must be > 0 for an open position")
+        else:
+            # 空仓：Binance 对空仓可能返回 markPrice=0（P0001.9.2 实测）也可能返回真实行情价
+            # （P0001.9.3 测试网实测），两者都合法；entryPrice 必须为 0。
+            if self.entry_price != 0.0:
+                raise InvalidBaselineError("ExternalAccountBaseline.entry_price must be 0 for a flat position")
+        object.__setattr__(
+            self, "captured_at", _require_timestamp(self.captured_at, field="ExternalAccountBaseline.captured_at",
+                                                     error=InvalidBaselineError)
+        )
+
+    @property
+    def is_flat(self) -> bool:
+        return self.position_qty == 0.0
+
+
 __all__ = [
     "Fill",
     "FundingPayment",
     "InvalidFillError",
+    "BASELINE_SOURCE_BINANCE_RECOVERY",
+    "ExternalAccountBaseline",
+    "InvalidBaselineError",
     "InvalidFundingError",
     "InvalidLiquidationInfoError",
     "LiquidationInfo",

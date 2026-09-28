@@ -576,3 +576,58 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
   并**必须同时记录其不确定度**；至少也要显式记录 clock-offset uncertainty。
 - 本阶段证据（测试网 event lag median −8 ms / p95 +2 ms / max +2 ms）在**标注了该偏差**的前提下有效；
   该要求已写入提案 P0001.9.2 §1.2 的 risk 与 handoff 的「后续 live gate」。
+
+## D-037 启动恢复契约：一次性 baseline / 历史 PnL 保持 UNKNOWN / ownership boundary
+
+**日期**：2026-09-28
+**状态**：生效（P0001.9.3）
+
+1. **恢复状态**：`RECOVERED` / `BLOCKED`（初始与 stream 断开后回落为 `NOT_RECOVERED`）；**任何未知即 BLOCKED**，
+   且每条阻塞必须带 reason code（P0001.9.3 §0.2 全表）。
+2. **一次性 startup baseline**：`AccountingCore.bootstrap_from_baseline(ExternalAccountBaseline)` —— 只在
+   「尚未 bootstrap」且「本 session 尚未处理任何 Fill」时允许一次；**不产生任何 synthetic Fill**；
+   之后所有变化仍只能由真实 Fill / Funding / Mark 驱动，禁止第二次覆盖（`BaselineAlreadyAppliedError`）。
+3. **历史 PnL 保持 UNKNOWN**：baseline 之后 `historical_pnl_known = False`；`net_realized_since(ts)` 对
+   `ts < baseline.captured_at` 返回 `None`；`peak_equity` / `drawdown` / `drawdown_pct` 为 `None`；
+   `RiskGate` 因此 fail closed（新增 `MISSING_DRAWDOWN`，不再误报 `MISSING_MARK_PRICE`）。
+   **禁止**把 restart 当成 `realized_pnl_today = 0` / `drawdown = 0`。
+4. **Ownership boundary**：只认 `clientOrderId` 前缀 `probex-` 为自有订单；存在**非 Probex 的未平挂单** ⇒
+   `BLOCKED: FOREIGN_OPEN_ORDER`（**不忽略、不自动撤、不 adopt**）；foreign 历史/成交直接丢弃。
+5. **恢复门不接受自相矛盾的事实**：`reconcile` 产生的 `STATUS_CONFLICT` / `ADOPT_REJECTED` ⇒ `BLOCKED`；
+   而 `ADOPTED` / `RESTORED` / `MARKED_LOST` / `QUANTITY_CORRECTED` / `STATUS_CORRECTED` 是**已被正确解决**的差异，
+   不阻塞（`MARKED_LOST` 的不确定暴露由 OrderTracker 以 `uncertain exposure` 表达，见 D-021 / D-022）。
+
+## D-038 恢复窗口的成交归属与 baseline 水位线
+
+**日期**：2026-09-28
+**状态**：生效（P0001.9.3）
+
+- **baseline 覆盖的成交不重复入账**：账户/持仓快照在 `captured_at` 时刻已包含此前全部流水；因此
+  `captured_at` **之前**的成交只用于让 `OrderTracker` 收敛（补 canonical Fill 供 tracker 使用），
+  **不得**再喂给 `AccountingCore`（否则余额/仓位被凭空加倍）。
+  已有 baseline 时（第二次启动）只补 `exchange_ts > baseline.captured_at` 的成交。
+- **无法归属的成交不算自己的**：`userTrades` 只有 `orderId`，需由 `openOrders ∪ allOrders` 的
+  `orderId → clientOrderId` 映射反查；映射不到（foreign 或超出查询窗口）的成交**不 adopt、不按 0**，
+  仅计入 telemetry `unresolved_fill_orders`。
+- **`openOrders` 是无窗口的全量接口** ⇒ 不存在「漏掉某个未平挂单」的可能；`allOrders`/`userTrades` 受
+  `fact_limit` 限窗，其覆盖之外的**历史**成交由 baseline 的余额/仓位事实兜底（风险见 handoff）。
+- **恢复后必须复核**：再用一次新鲜的 `positionRisk` 比较 `AccountingCore` 持仓与交易所持仓，
+  不一致即 `BLOCKED: BASELINE_MISMATCH`（fail closed，不猜哪边对）。
+- **窄修一处既有缺口**：`reconciliation._apply_status` 原先只带 `filled_quantity` 不带 `avg_fill_price`，
+  导致「外部已部分成交」的 RESTORE 路径构造出 `filled>0 && avg=0` 的非法订单；现补齐该字段（契约未改，仅补全事件载荷）。
+
+## D-039 人类裁决（2026-09-28）：`RECOVERED` ≠ `LIVE TRADE READY`；`fact_limit` 只是 current-state 窗口
+
+**日期**：2026-09-28
+**状态**：生效（约束下一阶段语义，**不改变 P0001.9.3 已交付行为**）
+
+- **语义必须分开**：P0001.9.3 的 `RecoveryStatus.RECOVERED` **只**表示
+  「当前账户 / 持仓 / 挂单 / 近期成交与本地 `OrderTracker` 已在**当前事实边界**上收敛」，
+  **绝不**表示「已允许开始真实交易」。因为 baseline 之后 `historical_pnl_known = false`、
+  `peak_equity = unknown`、`drawdown = unknown`，`RiskGate` 对这些未知项继续 fail closed
+  ⇒ 完全可能出现「Recovery 绿、Risk 仍不能放单」。
+  下一阶段（真实 `ExecutionAdapter` / live trading gate）**必须**引入独立于 recovery 的 readiness 判定，
+  不得复用 `RECOVERED` 作为放单许可；两者不得互相推导。
+- **`fact_limit` 只是 current-state 恢复窗口**：`allOrders` / `userTrades` 的限窗只能支撑
+  「当前状态收敛」；startup baseline 只兜当前余额 / 持仓，**不兜**历史 PnL、历史手续费、funding 与 drawdown。
+  未来若需要历史重建，必须走独立能力（独立提案），不得放宽 `fact_limit` 冒充历史恢复。

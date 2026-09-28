@@ -29,11 +29,18 @@ FORBIDDEN_ENDPOINT_MARKERS = (
     "cancelOrder",
     "placeOrder",
 )
-#: 禁止的依赖（交易侧领域 / 输出通道）。
-FORBIDDEN_ROOTS = {"execution", "portfolio", "prediction", "risk", "strategy", "logging", "warnings", "sys"}
+#: 禁止的依赖（交易侧运行时 / 输出通道）。
+#:
+#: P0001.9.3 授权 private 层承担 recovery 编排，因此**仅放行**交易侧的**数据契约 / 已授权算法**；
+#: 其余（risk / strategy / prediction / storage / 输出通道 / execution 的运行时模块）仍然禁止。
+FORBIDDEN_ROOTS = {"prediction", "risk", "strategy", "storage", "logging", "warnings", "sys"}
+ALLOWED_EXECUTION_MODULES = {"execution.types", "execution.tracker", "execution.reconciliation"}
+ALLOWED_PORTFOLIO_MODULES = {"portfolio.types", "portfolio.accounting"}
 #: 允许的 import 根（标准库 + 本仓库的两层）。
 ALLOWED_ROOTS = {
     "__future__",
+    "execution",
+    "portfolio",
     "collections",
     "dataclasses",
     "enum",
@@ -56,6 +63,17 @@ def _files() -> list[Path]:
     return sorted(PRIVATE_DIR.glob("*.py"))
 
 
+def _imported_modules(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            modules.add(node.module)
+        elif isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+    return modules
+
+
 def _imported_roots(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     roots: set[str] = set()
@@ -72,8 +90,9 @@ class PrivateIsolationTest(unittest.TestCase):
         names = {path.name for path in _files()}
 
         self.assertTrue(
-            {"__init__.py", "account.py", "auth.py", "errors.py", "events.py", "positions.py",
-             "rest.py", "runtime.py", "telemetry.py", "user_stream.py"} <= names
+            {"__init__.py", "account.py", "auth.py", "errors.py", "events.py", "orders.py",
+             "positions.py", "recovery.py", "rest.py", "runtime.py", "telemetry.py", "trades.py",
+             "user_stream.py"} <= names
         )
 
     def test_sc2_secret_handling_only_in_credential_modules(self) -> None:
@@ -116,6 +135,20 @@ class PrivateIsolationTest(unittest.TestCase):
             with self.subTest(module=path.name):
                 self.assertEqual(_imported_roots(path) & FORBIDDEN_ROOTS, set())
 
+    def test_only_authorized_execution_and_portfolio_modules(self) -> None:
+        """P0001.9.3：private 层只允许上述数据契约/已授权算法，不得依赖执行运行时。"""
+        for path in _files():
+            modules = _imported_modules(path)
+            with self.subTest(module=path.name):
+                execution = {m for m in modules if m.split(".")[0] == "execution"}
+                portfolio = {m for m in modules if m.split(".")[0] == "portfolio"}
+                self.assertTrue(
+                    execution <= ALLOWED_EXECUTION_MODULES, f"{path.name}: unexpected execution imports {sorted(execution)}"
+                )
+                self.assertTrue(
+                    portfolio <= ALLOWED_PORTFOLIO_MODULES, f"{path.name}: unexpected portfolio imports {sorted(portfolio)}"
+                )
+
     def test_only_expected_import_roots(self) -> None:
         for path in _files():
             with self.subTest(module=path.name):
@@ -129,6 +162,39 @@ class PrivateIsolationTest(unittest.TestCase):
         self.assertNotIn("cancel", public)
         self.assertNotIn("place_order", public)
         self.assertTrue({"start", "stop", "pump_once", "refresh_snapshot", "telemetry"} <= set(public))
+
+    def test_recovery_exposes_no_order_operations(self) -> None:
+        """P0001.9.3 SC-11：recovery 编排只做只读事实读取与本地状态收敛。"""
+        recovery = __import__("connectors.binance.private.recovery", fromlist=["StartupRecovery"])
+        public = [name for name in dir(recovery.StartupRecovery) if not name.startswith("_")]
+
+        for forbidden in ("submit", "cancel", "place_order", "amend", "set_leverage"):
+            with self.subTest(name=forbidden):
+                self.assertNotIn(forbidden, public)
+        self.assertTrue({"run", "fetch_snapshot", "invalidate"} <= set(public))
+
+    def test_recovery_rest_queries_are_read_only(self) -> None:
+        """三只读端点必须都是 GET（无任何写动词）。"""
+        from tests.private_support import SYMBOL, FakeRestFetcher, credentials
+        from connectors.binance.private.rest import PrivateRestClient
+
+        fetcher = FakeRestFetcher(
+            responses={
+                "/fapi/v1/openOrders": [],
+                "/fapi/v1/allOrders": [],
+                "/fapi/v1/userTrades": [],
+            }
+        )
+        client = PrivateRestClient(credentials=credentials(), fetcher=fetcher)
+
+        client.open_orders(SYMBOL)
+        client.order_history(SYMBOL, limit=10)
+        client.user_trades(SYMBOL, limit=10)
+
+        self.assertEqual(
+            fetcher.calls,
+            [("GET", "/fapi/v1/openOrders"), ("GET", "/fapi/v1/allOrders"), ("GET", "/fapi/v1/userTrades")],
+        )
 
     def test_sensitive_helpers_exist_for_redaction(self) -> None:
         auth = __import__("connectors.binance.private.auth", fromlist=["sanitize_query", "sanitize_mapping"])

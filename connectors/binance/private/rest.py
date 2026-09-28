@@ -20,10 +20,13 @@ from typing import Mapping, Protocol
 
 from connectors.binance.market_data.endpoints import (
     ACCOUNT_PATH,
+    ALL_ORDERS_PATH,
     LISTEN_KEY_PATH,
+    OPEN_ORDERS_PATH,
     POSITION_RISK_PATH,
     REST_BASE_URL,
     SERVER_TIME_PATH,
+    USER_TRADES_PATH,
 )
 from connectors.binance.market_data.errors import TransportError
 from connectors.binance.private.auth import ApiCredentials, ServerTimeOffset, build_signed_request, wall_clock_ms
@@ -117,6 +120,20 @@ class PrivateRestClient:
     def position_risk(self) -> object:
         return self._signed_get(POSITION_RISK_PATH, {})
 
+    # ------------------------------------------------------------------ 启动恢复（只读，P0001.9.3）
+
+    def open_orders(self, symbol: str) -> object:
+        """`GET /fapi/v1/openOrders` —— 当前挂单（只读）。"""
+        return self._signed_get(OPEN_ORDERS_PATH, {"symbol": _require_symbol(symbol)})
+
+    def order_history(self, symbol: str, *, limit: int) -> object:
+        """`GET /fapi/v1/allOrders` —— 历史订单（只读；用于发现终态与 clientOrderId 映射）。"""
+        return self._signed_get(ALL_ORDERS_PATH, {"symbol": _require_symbol(symbol), "limit": _require_limit(limit)})
+
+    def user_trades(self, symbol: str, *, limit: int) -> object:
+        """`GET /fapi/v1/userTrades` —— 账户成交（只读）。"""
+        return self._signed_get(USER_TRADES_PATH, {"symbol": _require_symbol(symbol), "limit": _require_limit(limit)})
+
     def _signed_get(self, path: str, params: Mapping[str, object]) -> object:
         signed = build_signed_request(
             path=path,
@@ -153,6 +170,18 @@ class PrivateRestClient:
         return self.fetcher.send(
             method=method, url=self._url(path), headers=self._headers(), timeout_s=self.timeout_s
         )
+
+
+def _require_symbol(symbol: object) -> str:
+    if not isinstance(symbol, str) or not symbol:
+        raise PrivateFormatError("symbol must be a non-empty string")
+    return symbol
+
+
+def _require_limit(limit: object) -> str:
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+        raise PrivateFormatError(f"limit must be an int in [1, 1000], got {limit!r}")
+    return str(limit)
 
 
 __all__ = ["API_KEY_HEADER", "PrivateRestClient", "RestFetcher", "UrllibRestFetcher"]

@@ -385,8 +385,9 @@ class RiskGate:
             return None
         if snapshot.drawdown_pct is None:
             return self._reject(
-                RiskReasonCode.MISSING_MARK_PRICE,
-                "drawdown is unknown while max_drawdown_pct is configured (fail closed)",
+                RiskReasonCode.MISSING_DRAWDOWN,
+                "drawdown is unknown (e.g. historical peak unknown after a startup baseline) "
+                "while max_drawdown_pct is configured (fail closed)",
                 applied,
             )
         applied.append("drawdown")

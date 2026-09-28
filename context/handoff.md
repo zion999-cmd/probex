@@ -644,3 +644,69 @@ P0001.9.2 的契约是 **futures**（`/fapi/v1/listenKey`、`ORDER_TRADE_UPDATE`
   （`clock_offset` 取同一时刻的 server-time 测量），并**记录其不确定度**；否则跨环境/跨时间比较会有系统性偏差。
 - **主网私有链路仍未验证**（`MAINNET_PRIVATE_NOT_YET_VALIDATED`）：需在出口可用（此前 IP 被 418 封禁）时补一次
   只读 private smoke，并对 event lag 使用上述校正口径。
+
+## 2026-09-28：P0001.9.3 Startup Recovery + Account Reconciliation（已完成）
+
+**当前 Proposal**：P0001.9.3（`status.json.currentProposal` 已按 CLAUDE.md §5 回到 `null`，无下一提案切换授权）。
+
+**本次新增**
+
+| 文件 | 内容 |
+| --- | --- |
+| `connectors/binance/private/orders.py` | `is_probex_order` / `parse_external_orders` / `classify_orders` / `latest_by_client_order_id` / `sort_orders_by_time`；Binance→`OrderStatus` 显式映射；缺字段/未知状态/非数组 fail closed |
+| `connectors/binance/private/trades.py` | `parse_external_fills`：`userTrades` → `ExternalFill`（需 `orderId → clientOrderId` 映射）；无法归属的不 adopt，仅计 telemetry |
+| `connectors/binance/private/recovery.py` | `StartupRecovery` + `RecoverySnapshot` / `RecoveryResult` / `StreamState` / `RecoveryStatus` / `RecoveryReason` / `RecoveryReadError`；`RecoveryGate`（见下） |
+| `tests/unit/test_recovery_orders.py`、`tests/unit/test_accounting_baseline.py`、`tests/integration/test_startup_recovery.py`、`tests/fault/test_recovery_faults.py`、`tests/live/test_binance_recovery_live.py` | 49 条新测试（SC-1 – SC-11） |
+
+**本次修改**
+
+- `connectors/binance/private/rest.py`：三只读签名 GET（`open_orders` / `order_history` / `user_trades`）；
+  `connectors/binance/market_data/endpoints.py`：`OPEN_ORDERS_PATH` / `ALL_ORDERS_PATH` / `USER_TRADES_PATH`。
+- `portfolio/types.py` + `portfolio/accounting.py`：`ExternalAccountBaseline` 与**一次性** `bootstrap_from_baseline`
+  （拒绝第二次 + 拒绝「已有 session Fill」；不产生 synthetic Fill）；`baseline` / `baseline_applied` / `historical_pnl_known` /
+  `net_realized_since`；baseline 后 `peak_equity` / `drawdown` 为 `None`。
+- `risk/types.py` + `risk/gate.py`：`MISSING_DRAWDOWN`（历史峰值未知的正确原因码；此前误报 `MISSING_MARK_PRICE`）。
+- `execution/reconciliation.py`：`reconcile(..., external_history=...)`（终态历史收敛本地订单）；
+  `_apply_status` 补齐 `avg_fill_price`（修掉「外部部分成交」RESTORE 时 `filled>0 && avg=0` 的非法中间态）。
+- `tests/unit/test_private_isolation.py`：按 P0001.9.3 §0.1 **最小放宽** private 层依赖（仅 `execution.types/tracker/reconciliation`
+  与 `portfolio.types/accounting`），并新增「三端点必须都是 GET」「recovery 无下单操作」两条静态/行为断言。
+- `context/*`：decisions（D-037 / D-038）、roadmap（清理残留错误状态行）、current_state。
+
+**本次删除**：无。
+
+**Acceptance 结果**（SC-1 – SC-12 全部 PASS；矩阵见提案 §1.4）
+
+- SC-10 **测试网真实只读验收 PASS**：`RECOVERED`、`reasons=[]`、elapsed 3476 ms；probex open orders 0 / history 5 /
+  fills 2；foreign open 0；position 0.0 / BOTH；baseline_applied true、source `BINANCE_RECOVERY`、**synthetic_fills 0**、
+  `historical_pnl_known=false`。runner：`/tmp/probex_live/run_recovery_testnet.py ~/.probex/testnet.env`（经本机 7890 代理 +
+  仓库外 relay；凭据只从 `~/.probex/testnet.env` 注入，未打印）。
+- 真实数据驱动的修正：空仓时 Binance 返回**真实行情 markPrice**（非 0）⇒ baseline 规则 = 「空仓允许 mark>0，
+  `entryPrice` 必须为 0；有仓 mark 必须 >0」。
+
+**测试结果**
+
+- unit 876 / integration 185 / fault 256 / replay 49 passed；live 19 skipped（opt-in 关闭）。
+- 全量：**1387 passed / 0 failed / 19 skipped**。
+- 独立检出（`git archive HEAD` 干净检出 + 工作树叠加，未产生任何 commit；获得 commit 授权后可改用 `git worktree add --detach <sha>`）：1387 passed / 0 failed（提案 §1.5）。
+
+**风险 / 已知问题**
+
+1. `allOrders` / `userTrades` 受 `fact_limit` 限窗 ⇒ 窗口之外的**历史**成交不由 tracker 恢复（结果已由 baseline 覆盖）；
+   `openOrders` 无窗口 ⇒ 不会漏掉任何未平挂单（D-038）。
+2. 两次读取之间若恰有新成交 ⇒ `BLOCKED: BASELINE_MISMATCH`（有意的 fail-closed，需重试）。
+3. 主网私有链路仍未验证（`MAINNET_PRIVATE_NOT_YET_VALIDATED`）；延迟必须按 **D-036** 做时钟校正。
+4. 无 durable trading state / checkpoint（NOT Included）⇒ 每次启动都必须重走恢复流程。
+
+**阻塞**：无。
+
+**下一步**：`currentProposal = null`；等待人类/设计方落盘下一条正式 Proposal 后再由人类下达实施指令。
+P0001.9.3 的代码改动**尚未 commit / push**（未获授权，CLAUDE.md §28）。
+
+## 2026-09-28：人类裁决 D-039（下一阶段必须遵守）
+
+- `RECOVERED` **仅**表示「当前账户/持仓/挂单/近期成交与 tracker 在当前事实边界上收敛」，
+  **不是** `LIVE TRADE READY`：baseline 之后历史 PnL / peak equity / drawdown 仍是 UNKNOWN，
+  `RiskGate` 继续 fail closed ⇒ 可能出现「Recovery 绿、Risk 仍不能放单」。
+  下一阶段的放单许可必须有**独立** readiness 判定，不得由 `RECOVERED` 推导。
+- `fact_limit` 只是 current-state 恢复窗口；baseline 只兜当前余额/持仓，不兜历史 PnL / 手续费 / funding / drawdown。
+- 本条为文档级约束，**未改动** P0001.9.3 的任何代码或契约。

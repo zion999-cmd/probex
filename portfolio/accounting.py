@@ -25,6 +25,9 @@ from portfolio.fills import FillLedger, FillOutcome
 from portfolio.funding import FundingLedger
 from portfolio.position import Position, apply_fill
 from portfolio.types import (
+    ExternalAccountBaseline,
+    InvalidBaselineError,
+    PortfolioError,
     Fill,
     FundingPayment,
     UnsupportedAssetError,
@@ -49,6 +52,21 @@ class FillApplication:
         return self.outcome.accepted
 
 
+class BaselineAlreadyAppliedError(PortfolioError):
+    """已 bootstrap 过（或在有 session Fill 之后）再次 bootstrap。"""
+
+
+@dataclass(frozen=True, slots=True)
+class BaselineApplication:
+    """一次 startup baseline 的应用结果（审计用）。"""
+
+    baseline: ExternalAccountBaseline
+    position: Position
+    balance: float
+    equity: float | None
+    historical_pnl_known: bool
+
+
 class AccountingCore:
     """单一账户的账本与持仓状态。"""
 
@@ -69,6 +87,11 @@ class AccountingCore:
         self._mark_timestamps: dict[str, Milliseconds] = {}
         self._realized_events: list[tuple[Milliseconds, float, float]] = []  # (ts, realized_delta, fee)
         self._peak_equity = float("-inf")
+        #: startup baseline（P0001.9.3）：一次性、只在尚无本 session Fill 时允许
+        self._baseline: ExternalAccountBaseline | None = None
+        self._baseline_balance_offset = 0.0
+        #: 历史 PnL / 历史峰值是否已知（baseline 之后为 False ⇒ 相关指标返回 None，由 RiskGate fail closed）
+        self._historical_pnl_known = True
 
     # ------------------------------------------------------------------ 入账
 
@@ -135,6 +158,52 @@ class AccountingCore:
             self._positions[symbol] = position.with_mark(mark)
         self._refresh_peak_equity()
 
+    def bootstrap_from_baseline(self, baseline: ExternalAccountBaseline) -> BaselineApplication:
+        """用交易所账户事实**一次性** bootstrap 本地账本（不产生 synthetic Fill）。
+
+        拒绝条件（fail closed）：
+
+        - 已经 bootstrap 过（禁止第二次偷偷覆盖 Accounting 状态）；
+        - 本 session 已经处理过任何 Fill（说明本地历史已经存在，baseline 会掩盖它）。
+        """
+        if not isinstance(baseline, ExternalAccountBaseline):
+            raise InvalidBaselineError("baseline must be an ExternalAccountBaseline")
+        if self._baseline is not None:
+            raise BaselineAlreadyAppliedError(
+                "accounting already bootstrapped from a startup baseline; "
+                "subsequent changes must come from real fills/funding/mark"
+            )
+        if len(self._fills.fills) > 0:
+            raise BaselineAlreadyAppliedError(
+                "accounting has already processed session fills; refusing to overwrite state with a baseline"
+            )
+        if baseline.wallet_balance < 0.0 or baseline.available_balance < 0.0:
+            raise InvalidBaselineError("baseline balances must be non-negative")
+
+        position = Position(
+            symbol=baseline.symbol,
+            qty=baseline.position_qty,
+            avg_entry_price=baseline.entry_price if baseline.position_qty != 0.0 else 0.0,
+            mark_price=baseline.mark_price if baseline.mark_price > 0.0 else None,
+        )
+        self._baseline = baseline
+        self._positions[baseline.symbol] = position
+        if baseline.mark_price > 0.0:
+            self._marks[baseline.symbol] = baseline.mark_price
+            self._mark_timestamps[baseline.symbol] = baseline.captured_at
+        # balance 由账本派生（D-020）⇒ 用 offset 让 balance 等于交易所 wallet balance，且之后只随真实流水变化
+        self._baseline_balance_offset = baseline.wallet_balance - (self._initial_balance + self.net_realized)
+        # 历史峰值/PnL 未知：本 session 不再做 drawdown 判定（RiskGate 因此 fail closed）
+        self._historical_pnl_known = False
+
+        return BaselineApplication(
+            baseline=baseline,
+            position=position,
+            balance=self.balance,
+            equity=self.equity(),
+            historical_pnl_known=False,
+        )
+
     # ------------------------------------------------------------------ 只读事实
 
     @property
@@ -167,6 +236,20 @@ class AccountingCore:
         return self._initial_balance
 
     @property
+    def baseline(self) -> ExternalAccountBaseline | None:
+        """已应用的 startup baseline；未 bootstrap 时为 None。"""
+        return self._baseline
+
+    @property
+    def baseline_applied(self) -> bool:
+        return self._baseline is not None
+
+    @property
+    def historical_pnl_known(self) -> bool:
+        """历史 PnL / 历史峰值是否可信（baseline 之后为 False）。"""
+        return self._historical_pnl_known
+
+    @property
     def realized_trade_pnl(self) -> float:
         """累计已实现**交易**盈亏（不含手续费、不含资金费）。"""
         return float(sum(position.realized_pnl for position in self._positions.values()))
@@ -187,8 +270,11 @@ class AccountingCore:
 
     @property
     def balance(self) -> float:
-        """已结算现金（Balance ≠ Equity）。"""
-        return self._initial_balance + self.net_realized
+        """已结算现金（Balance ≠ Equity）。
+
+        `baseline` 之后等于交易所 wallet balance，并且此后**只**随真实 Fill / Funding 变化（D-020 账本派生 + offset）。
+        """
+        return self._initial_balance + self._baseline_balance_offset + self.net_realized
 
     def unrealized_pnl(self) -> float | None:
         """Σ 未实现盈亏；任一非 flat 持仓缺 mark 时为 `None`。"""
@@ -209,7 +295,13 @@ class AccountingCore:
 
     @property
     def peak_equity(self) -> float | None:
-        """历史最高 equity（用于 drawdown）；从未观测到 equity 时为 `None`。"""
+        """历史最高 equity（用于 drawdown）。
+
+        `baseline` 之后**历史峰值未知** ⇒ 返回 `None`（不允许把「本 session 起点」冒充历史峰值，
+        否则 drawdown 会长期显示为 0，看起来像真的）。
+        """
+        if not self._historical_pnl_known:
+            return None
         return None if self._peak_equity == float("-inf") else self._peak_equity
 
     def drawdown(self) -> float | None:
@@ -251,8 +343,14 @@ class AccountingCore:
     def funding_since(self, timestamp: Milliseconds) -> float:
         return self._funding.total_since(timestamp)
 
-    def net_realized_since(self, timestamp: Milliseconds) -> float:
-        """`realized − fees + funding`（用于 Daily Loss 判定）。"""
+    def net_realized_since(self, timestamp: Milliseconds) -> float | None:
+        """`realized − fees + funding`（用于 Daily Loss 判定）。
+
+        `baseline` 之后，若查询窗口的起点**早于** baseline 捕获时刻，则返回 `None`（未知 ⇒ 调用方 fail closed）：
+        baseline 只说明「现在是什么状态」，**不能**证明启动前赚亏多少。
+        """
+        if self._baseline is not None and timestamp < self._baseline.captured_at:
+            return None
         return (
             self.realized_trade_pnl_since(timestamp)
             - self.trading_fees_since(timestamp)
@@ -273,4 +371,4 @@ class AccountingCore:
             self._peak_equity = equity
 
 
-__all__ = ["AccountingCore", "FillApplication"]
+__all__ = ["AccountingCore", "BaselineAlreadyAppliedError", "BaselineApplication", "FillApplication"]

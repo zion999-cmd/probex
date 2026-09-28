@@ -92,14 +92,23 @@ def reconcile(
     *,
     external_open_orders: tuple[ExternalOrder, ...] = (),
     external_recent_fills: tuple[ExternalFill, ...] = (),
+    external_history: tuple[ExternalOrder, ...] = (),
     timestamp: Milliseconds,
     venue: Venue | None = None,
 ) -> ReconciliationReport:
-    """把外部事实并入本地 tracker。返回 report 与需要记账的 canonical fills。"""
+    """把外部事实并入本地 tracker。返回 report 与需要记账的 canonical fills。
+
+    `external_history`（P0001.9.3 新增，可选）：交易所**历史订单**里**终态**的证据，
+    用于解决「本地 active/LOST，但交易所已不在挂单列表」——若历史明确是终态，按终态收敛而不是判 LOST。
+    调用方应传入每个 `client_order_id` 的**最新**一条（见 `latest_by_client_order_id`）。
+    """
     actions, fills = _apply_external_fills(tracker, external_recent_fills)
 
     external_by_id = {external.client_order_id: external for external in external_open_orders}
-    actions.extend(_reconcile_local_orders(tracker, external_by_id, timestamp=timestamp))
+    history_by_id = {external.client_order_id: external for external in external_history}
+    actions.extend(
+        _reconcile_local_orders(tracker, external_by_id, history_by_id=history_by_id, timestamp=timestamp)
+    )
 
     known = {order.client_order_id for order in tracker.orders}
     tracker_venue = venue or tracker.venue
@@ -141,13 +150,45 @@ def _apply_external_fills(
 
 
 def _reconcile_local_orders(
-    tracker: OrderTracker, external_by_id: dict[str, ExternalOrder], *, timestamp: Milliseconds
+    tracker: OrderTracker,
+    external_by_id: dict[str, ExternalOrder],
+    *,
+    history_by_id: dict[str, ExternalOrder] | None = None,
+    timestamp: Milliseconds,
 ) -> list[ReconciliationAction]:
-    """本地 active / LOST 与外部事实对齐。"""
+    """本地 active / LOST 与外部事实对齐（挂单列表优先，其次历史终态证据）。"""
     actions: list[ReconciliationAction] = []
+    history = history_by_id if history_by_id is not None else {}
     for order in tracker.orders:
         external = external_by_id.get(order.client_order_id)
         if external is None:
+            terminal = history.get(order.client_order_id)
+            if terminal is not None and terminal.status.is_terminal:
+                if order.status.is_terminal and order.status is not terminal.status:
+                    # 两侧都已是终态却不一致（例如本地 CANCELED vs 交易所 FILLED）⇒ 事实自相矛盾，
+                    # 不擅自回退本地终态，也不静默接受（未知成交仍由 external_recent_fills 表达）
+                    actions.append(
+                        ReconciliationAction(
+                            ReconciliationActionKind.STATUS_CONFLICT,
+                            order.client_order_id,
+                            f"local {order.status.value} vs history {terminal.status.value}",
+                        )
+                    )
+                    continue
+                if order.status.is_terminal:
+                    # 两侧终态一致 ⇒ 已收敛
+                    continue
+                # 交易所历史明确给出终态 ⇒ 收敛到终态（不判 LOST）
+                _apply_status(tracker, order, terminal, timestamp=timestamp)
+                actions.append(
+                    ReconciliationAction(
+                        ReconciliationActionKind.STATUS_CORRECTED,
+                        order.client_order_id,
+                        f"history_terminal:{terminal.status.value}",
+                    )
+                )
+                tracker.clear_unresolved_order(order.client_order_id)
+                continue
             if order.is_active:
                 tracker.mark_lost(
                     order.client_order_id,
@@ -234,6 +275,9 @@ def _apply_status(
             detail="reconciliation: external status",
             exchange_order_id=external.exchange_order_id,
             filled_quantity=external.filled_quantity,
+            # 外部已部分成交时，状态更新必须同时带上均价，否则 filled>0 与 avg=0 的组合会被
+            # Order 契约判定为非法（P0001.9.3 恢复路径暴露出的缺口）
+            avg_fill_price=external.avg_fill_price,
         )
     )
 

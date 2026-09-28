@@ -15,7 +15,7 @@ Provider identity 核实（决策 D，提案 §1.7）与授权探测 P1/P2（提
   P2 单条 `noul` 探针 → HTTP 200、604 ms、`answers.ok={type:noul,noul:0.99}`、cost 1.1634e-05。
 - **热路径 Jev 的真实目标应为 `/api/v1/systemone`**；实现 typed provider 需新提案（尚未授权、尚未改代码）。
 
-`context/status.json` 的 `currentProposal` 为 `null`（P0001.9.2 已收口，等待下一条正式 Proposal）。
+`context/status.json` 的 `currentProposal` 为 `null`（**P0001.9.3 已收口**，等待下一条正式 Proposal）。
 
 ## 已完成能力
 
@@ -150,7 +150,7 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 - 真实流核验：`pu` 100% 连续（199/199、473 对样本）、旧规则 0%；修复后真实 smoke **gap 0 / resync 1 / HEALTHY 100% /
   event lag 中位 −48 ms**（修前 7267 ms）。
 
-### P0001.9.2 — Private Account + User Stream Validation（实现中：离线通过，真实凭据 smoke 待执行）
+### P0001.9.2 — Private Account + User Stream Validation（已完成）
 
 - 新增 `connectors/binance/private/`：`auth`（凭据 + HMAC 签名 + server-time offset + 遮蔽工具）、`rest`（签名 REST + listenKey）、
   `account` / `positions`（账户与持仓事实）、`events`（ACCOUNT_UPDATE / ORDER_TRADE_UPDATE / listenKeyExpired + 去重/乱序）、
@@ -186,6 +186,25 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 - **人类裁决（2026-09-28）：`KEEP_NATIVE_PRIVATE`** —— 不引入 `ccxt`/`ccxt.pro`，不改 public market data；
   继续使用 native private transport（见 D-032；D-031 的待裁决项已关闭）。
 
+### P0001.9.3 — Startup Recovery + Account Reconciliation（已完成）
+
+- 新增 `connectors/binance/private/orders.py`（`ExternalOrder` 归一化 + ownership boundary）、
+  `trades.py`（`ExternalFill` 归一化，`orderId → clientOrderId` 映射）、
+  `recovery.py`（`StartupRecovery` 编排 + `RecoveryGate`：`RECOVERED` / `BLOCKED` + reason code 全表）；
+  `rest.py` 追加三只读签名 GET（`open_orders` / `order_history` / `user_trades`，均为 `GET`）。
+- `portfolio/`：`ExternalAccountBaseline` + `AccountingCore.bootstrap_from_baseline(...)` —— **一次性** startup baseline，
+  **不产生 synthetic Fill**；baseline 之后历史 PnL / 峰值保持 UNKNOWN（`net_realized_since` 早于水位线 → `None`，
+  `peak_equity` / `drawdown` → `None`），`RiskGate` 新增 `MISSING_DRAWDOWN` 继续 fail closed（D-037）。
+- 恢复门（全有才 `RECOVERED`，任何未知即 `BLOCKED`）：stream `ACTIVE` + `continuity_assumed` + boundary 有效、
+  account/position/openOrders/allOrders/userTrades 读取成功、无 foreign 未平挂单、无 unresolved 订单、
+  无 `STATUS_CONFLICT` / `ADOPT_REJECTED`、baseline 与新鲜持仓复核一致、one-way / USDT-M / symbol 契约成立。
+- 断线纪律：`invalidate()` ⇒ 立即回落 `NOT_RECOVERED`；**自动重连成功也不得自动 RECOVERED**，必须重走完整流程。
+- **测试网真实验收 PASS（2026-09-28）**：`RECOVERED`、`reasons=[]`、probex open 0 / history 5 / fills 2、
+  foreign open 0、baseline_applied true、**synthetic_fills 0**、`historical_pnl_known=false`（真实报告见提案 §1.2）。
+- 真实数据驱动的修正：空仓时 Binance 仍返回真实行情 `markPrice`（非 0）⇒ baseline 规则改为「空仓允许 mark>0 且
+  `entryPrice` 必须为 0；有仓 mark 必须 >0」；并窄修 `reconciliation._apply_status` 缺失 `avg_fill_price` 的既有缺口。
+- 全量测试 **1387 passed / 0 failed / 19 skipped**；`context/status.json.currentProposal` 回到 `null`。
+
 ## 进行中能力
 
 无。
@@ -193,8 +212,11 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 
 ## 下一步
 
-- **当前唯一授权中的步骤**：在具备 `OPENROUTER_API_KEY` 的环境中执行 `tests/live/test_openrouter_live.py`（需 `JEV_LIVE_TEST=1` opt-in），完成 SC-1 / SC-2 / SC-5；若真实 content 与 `jev-market-v1` 不一致，先报告 `CONTRACT_MISMATCH`。
-- 其余未包含（需人类授权后才可进行）：prediction 持久化 archive、outcome / evaluation、Experiment Runtime、Parquet / 数据库 / 压缩、Strategy / Execution / Risk、第三方依赖引入（含 pytest）、性能下沉 C++/Rust、Live WS / REST。
+- **无授权中的步骤**：P0001.9.3 已收口，`currentProposal = null`。下一阶段必须由人类/设计方落盘正式 Proposal，
+  再由人类下达「读取 … 实施」指令后才可实现（不得从 roadmap / handoff 推断任务）。
+- 待人类决定（不阻塞）：① adverse-selection 阈值 X（bps）；② 五分类 bucket 数值分档；
+  ③ `RiskLimits` 全部限额数值；④ `MakerPolicyConfig` 生产数值；⑤ 是否补验**主网**私有链路（含 D-036 时钟校正口径）；
+  ⑥ 是否轮换测试网 key（`~/.probex/testnet.env`，仓库外 600 权限、未提交）。
 
 ## Blocker
 
@@ -202,11 +224,12 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 0. Accounting / Risk 的限额数值（`RiskLimits` 全为调用方配置；本阶段只提供机制与默认 fail-closed 行为）；
 1. adverse-selection 阈值 X（bps）——实现为必填构造参数，测试值 5.0 仅为测试参数；
 2. 五分类 bucket 是否需要数值分档（当前为定性描述，与 `jev-market-v1` 既有语义一致）。
-冻结项：在 Provider identity 五问全部回答前，不进入 P0001.5、不改 `jev-market-v1`、不加兼容 parser、不做 prompt engineering。
+冻结项（已解除，历史记录）：Provider identity 五问已由 P0001.4.1 / P0001.4.2 回答；P0001.5 及其后阶段均已按各自提案实施。
+当前冻结项：未获批准的下一阶段不实现；未授权不得新增第三方依赖（含 ccxt / pytest）；产品代码不得出现下单/撤单能力（除独立提案授权）。
 
 ## 版本
 
-Git 仓库已初始化，P0001.1 – P0001.4.1 均已提交（每个 commit 都能在其检出点独立通过测试）：
+Git 仓库已初始化；P0001.1 – P0001.9.2.1 均已提交并推送（每个 commit 都能在其检出点独立通过测试）：
 
 | commit | 阶段 | 检出后测试 |
 | --- | --- | --- |
@@ -216,6 +239,8 @@ Git 仓库已初始化，P0001.1 – P0001.4.1 均已提交（每个 commit 都�
 | `ce2bb41` | P0001.3 MarketState + Feature Engine | 344 passed |
 | `c247fff` | P0001.4 Jev Prediction Runtime | 495 passed |
 | `2d7d508` | P0001.4.1 OpenRouter transport | 541 passed（4 skipped） |
+| `7053a70` … `aeb4ab8` | P0001.6 – P0001.9.2（含 1.9.1 / 1.9.1.1 / 1.9.2.1） | 1190 – 1327 passed |
+| （未提交） | **P0001.9.3** Startup Recovery + Account Reconciliation | 工作树 + 独立快照 1387 passed（见提案 §1.5） |
 
 `CLAUDE.md` 与 `.gitignore` 被使用者全局 gitignore（`~/.gitignore_global`）排除，未纳入版本控制。
-未执行 push（未获授权）。
+P0001.9.3 的改动**未提交**（人类本轮指令只授权实施，未授权 commit/push，见 CLAUDE.md §28）。

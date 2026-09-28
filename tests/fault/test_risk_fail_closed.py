@@ -52,12 +52,13 @@ class FailClosedTest(unittest.TestCase):
         self.assertIs(decision.reason_code, RiskReasonCode.MISSING_LIQUIDATION_INFO)
 
     def test_unknown_drawdown_blocks_when_limit_configured(self) -> None:
-        # 手工构造「equity 已知但 drawdown 未知」的异常快照
+        # 手工构造「equity 已知但 drawdown 未知」的快照（真实场景：startup baseline 之后历史峰值未知）
         snapshot = replace(build_risk_snapshot(_core(), symbol=SYMBOL, now_ms=BASE_TS), drawdown_pct=None)
 
         decision = RiskGate(RiskLimits(max_drawdown_pct=0.1)).evaluate(_proposal(), snapshot)
 
-        self.assertIs(decision.reason_code, RiskReasonCode.MISSING_MARK_PRICE)
+        self.assertTrue(decision.rejected)
+        self.assertIs(decision.reason_code, RiskReasonCode.MISSING_DRAWDOWN)
 
     def test_negative_balance_blocks_new_exposure(self) -> None:
         core = _core(balance=1.0)

@@ -35,6 +35,11 @@ ACCOUNT_PATH = "/fapi/v2/account"
 POSITION_RISK_PATH = "/fapi/v2/positionRisk"
 LISTEN_KEY_PATH = "/fapi/v1/listenKey"
 
+#: 启动恢复用的**只读**查询（P0001.9.3；本仓库依然没有任何下单/撤单端点）。
+OPEN_ORDERS_PATH = "/fapi/v1/openOrders"
+ALL_ORDERS_PATH = "/fapi/v1/allOrders"
+USER_TRADES_PATH = "/fapi/v1/userTrades"
+
 #: WS 主机（tier 只是路径前缀）。
 WS_HOST = "wss://fstream.binance.com"
 
@@ -90,7 +95,10 @@ __all__ = [
     "ACCOUNT_PATH",
     "DEPTH_PATH",
     "EXCHANGE_INFO_PATH",
+    "ALL_ORDERS_PATH",
     "LISTEN_KEY_PATH",
+    "OPEN_ORDERS_PATH",
+    "USER_TRADES_PATH",
     "POSITION_RISK_PATH",
     "REST_BASE_URL",
     "SERVER_TIME_PATH",
