@@ -20,6 +20,7 @@ from market.events.types import MarketEvent, Venue
 from market.features.engine import FeatureEngine
 from market.health.state import BookHealth, HealthTransition
 from market.state.types import MarketState
+from portfolio.types import Fill, FundingPayment, Side
 from storage.events.codec import SCHEMA_VERSION, EventRecord, compute_event_id, dumps_record
 from storage.events.writer import JsonlEventWriter
 
@@ -187,6 +188,45 @@ class TempDirTestCase(unittest.TestCase):
 
     def store_path(self, name: str = "events.jsonl") -> Path:
         return self.tmp_path / name
+
+
+def make_fill(
+    fill_id: str,
+    side: Side,
+    price: float,
+    quantity: float,
+    *,
+    symbol: str = SYMBOL,
+    fee: float = 0.0,
+    fee_asset: str = "USDT",
+    trade_id: str | None = None,
+    order_id: str = "order-1",
+    exchange_ts: int = BASE_TS,
+    receive_ts: int | None = None,
+    venue: Venue = Venue.BINANCE,
+) -> Fill:
+    """构造一笔成交（accounting / risk 测试共用）。"""
+    return Fill(
+        fill_id=fill_id,
+        order_id=order_id,
+        venue=venue,
+        symbol=symbol,
+        side=side,
+        price=price,
+        quantity=quantity,
+        fee=fee,
+        fee_asset=fee_asset,
+        trade_id=trade_id if trade_id is not None else fill_id,
+        exchange_ts=exchange_ts,
+        receive_ts=exchange_ts if receive_ts is None else receive_ts,
+    )
+
+
+def make_funding(
+    amount: float, *, symbol: str = SYMBOL, asset: str = "USDT", timestamp: int = BASE_TS, rate: float | None = None
+) -> FundingPayment:
+    """构造一笔资金费。"""
+    return FundingPayment(symbol=symbol, amount=amount, asset=asset, timestamp=timestamp, rate=rate)
 
 
 def feature_engine(*, max_book_age_ms: int | None = None) -> FeatureEngine:

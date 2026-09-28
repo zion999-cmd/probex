@@ -1,13 +1,10 @@
-# Handoff
-
 ## 当前 Proposal
 
-P0001.4.2 — Native Typed Jev Provider：**已完成**。
+P0001.5 — Accounting + Risk Core：**已完成**。
 
 `context/status.json` 中 `currentProposal` 为 `null`（无切换授权，等待人类指定下一 Proposal）。
 
-- 热路径 = `SystemOneProvider` → `POST https://openrouter.ai/api/v1/systemone`（model alias `jev-1.13`）。
-- 结论与实测见提案 §1.6 与 `context/decisions.md` D-019；P0001.4.1 的 Chat Completions 路径已正式废弃。
+前序：P0001.1（`282ea61`）、P0001.2（`ac3975b`）、P0001.3（`ce2bb41`）、P0001.4（`c247fff`）、P0001.4.1（`43ead36`/`c721ecf`）、P0001.4.2（`920cb01`）。
 
 ## 本次新增
 
@@ -204,3 +201,32 @@ python3 -m unittest -v tests.live.test_openrouter_live
 
 **下一步**：等待人类指定 Proposal（路线下一阶段 P0001.5 Accounting + Risk，需先落盘独立提案）。
 本轮改动**未提交**（本轮未获提交授权）。
+
+
+## P0001.5 交付摘要（2026-09-28）
+
+**新增**
+- `portfolio/`：`types.py`（Fill / FundingPayment / LiquidationInfo / Side）、`fills.py`（`FillLedger` + `FillOutcome`）、
+  `position.py`（`Position` + `apply_fill`，含反手 close/open 拆分）、`funding.py`（`FundingLedger`）、
+  `accounting.py`（`AccountingCore` + `FillApplication`）
+- `risk/`：`types.py`（`OrderProposal` / `RiskSnapshot` / `RiskDecision` / `RiskReasonCode` / `ExposureClass`）、
+  `limits.py`（`RiskLimits`）、`snapshot.py`（`build_risk_snapshot` / `utc_day_start_ms` / `_validate_inputs` / `_derive_drawdown`）、
+  `gate.py`（`RiskGate`，硬检查 → 暴露分类 → reduce-only 放行 → increasing 限额链）
+- 测试：`tests/unit/{test_fill_ledger,test_position,test_accounting,test_funding,test_risk_snapshot,test_risk_gate,test_accounting_risk_isolation}.py`、
+  `tests/integration/test_accounting_risk.py`、`tests/replay/test_accounting_determinism.py`、
+  `tests/fault/{test_fill_duplicates,test_risk_fail_closed}.py`
+- `tests/support.py`：`make_fill` / `make_funding`
+
+**Acceptance**：SC-1 – SC-13 全部 PASS（见提案 §2/§2.1）。
+
+**测试**：`python3 -m unittest discover -s tests -t .` → **750 passed / 0 failed / 12 skipped**
+（unit 542、integration 57、fault 107、replay 32、live 12 skipped）。
+
+**有意为之的行为（供审查）**
+1. 空仓且无 mark → 不能下单（`MISSING_MARK_PRICE`，fail closed）；
+2. kill switch 第一版拒绝一切（含 reduce-only），emergency policy 待后续定义；
+3. 非结算资产的 fee / funding 一律拒绝（不做多币种换算）；
+4. `balance` 由账本派生而非运行式累加。
+
+**下一步**：等待人类指定 Proposal（路线下一阶段 P0001.6 Paper Execution + Order Lifecycle，需先落盘独立提案）。
+本轮改动**未提交**（本轮仅授权提交 P0001.4.2）。

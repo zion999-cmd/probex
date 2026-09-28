@@ -208,3 +208,21 @@ typed `answers.<id>.{noul|choice|score}`、不生成文本。与 `typesafe/jev-r
 cost ≈1.1e-04/call、五分类求和 = 1、Noul 无 confidence（详见提案 §1.6）。
 **待人类/设计决定的业务参数**：adverse-selection 阈值 X（bps，必填构造参数，无默认值）；五分类是否需要数值分档。
 **影响**：`PredictionRecord` 追加 `requested_model` / `resolved_model` / `response_id` / `usage`（均有默认值，向后兼容）。
+
+## D-020 Accounting / Risk 核心的固定契约
+
+**日期**：2026-09-28
+**状态**：生效（P0001.5 完成）
+**决策**：
+- `Position.realized_pnl` **只含交易盈亏**；`trading_fees` / `funding` 独立累计；
+  `net_realized = realized − fees + funding`（§7 与 §5 唯一自洽的读法）。
+- `balance` 由账本派生（`initial + net_realized`）；`equity = balance + Σ unrealized`；两者严格区分。
+- Fill 双键去重：`(venue, symbol, fill_id)` 与 `(venue, symbol, trade_id)`；重复只计数、不记账。
+- 反手拆成 close leg + open leg（不混合均价）；`is_reversal` 显式记录。
+- mark price 显式注入；未知 ≠ 0（缺 mark → unrealized / equity / notional / drawdown 为 `None`）。
+- `RiskGate` 只消费 immutable `RiskSnapshot`；`portfolio.accounting` 只允许被 `risk/snapshot.py` 读取。
+- reduce-only 真正降低暴露时只受硬检查约束（订单参数 / 数据完整性 / kill switch）；会增大暴露则拒绝。
+- 已配置限额但数据缺失一律 REJECT；`available_balance = balance − open_order_exposure`；
+  未配置 `max_leverage` 时可用余额检查按 1.0（不允许杠杆）。
+- 时间边界（`now_ms` / `day_start_ts`）由调用方注入；`portfolio/**` 与 `risk/**` 不 import `time`/`datetime`。
+**影响**：真实下单、order lifecycle、partial-fill 状态机、多币种换算、强平价推导均属后续阶段（P0001.6+）。
