@@ -83,6 +83,40 @@ class OrderUpdateTest(unittest.TestCase):
                     parse_user_event(message, receive_ts=1, process_ts=1)
 
 
+class RealSchemaRegressionTest(unittest.TestCase):
+    """SC-1 / SC-2：真实 Binance `ORDER_TRADE_UPDATE` 的 symbol 只在 `o.s`（没有 top-level `s`）。"""
+
+    def test_sc1_real_shape_without_top_level_symbol_parses(self) -> None:
+        payload = json.loads(order_update_message())
+
+        self.assertNotIn("s", payload)  # 真实报文没有 top-level s
+        self.assertEqual(payload["o"]["s"], SYMBOL)
+
+        event = parse_user_event(payload, receive_ts=1, process_ts=2)
+
+        self.assertIs(event.event_type, UserEventType.ORDER_TRADE_UPDATE)
+        self.assertEqual(event.observation.symbol, SYMBOL)  # type: ignore[union-attr]
+
+    def test_sc2_top_level_symbol_does_not_substitute_for_o_s(self) -> None:
+        """只有错误的 top-level `s`、缺 `o.s` ⇒ 必须 fail closed（不为了兼容旧 fixture 接受两个位置）。"""
+        payload = json.loads(order_update_message())
+        payload["s"] = SYMBOL
+        del payload["o"]["s"]
+
+        with self.assertRaises(PrivateFormatError) as ctx:
+            parse_user_event(payload, receive_ts=1, process_ts=2)
+
+        self.assertIn("ORDER_TRADE_UPDATE.o", str(ctx.exception))  # 报的是缺失的 o.s，而不是接受 top-level s
+
+    def test_o_s_is_authoritative_when_both_are_present(self) -> None:
+        payload = json.loads(order_update_message())
+        payload["s"] = "ETHUSDT"  # 干扰字段仍然存在，但不得覆盖 o.s
+
+        event = parse_user_event(payload, receive_ts=1, process_ts=2)
+
+        self.assertEqual(event.observation.symbol, SYMBOL)  # type: ignore[union-attr]
+
+
 class OtherEventsTest(unittest.TestCase):
     def test_listen_key_expired_is_normalized(self) -> None:
         event = parse_user_event(json.loads(listen_key_expired_message()), receive_ts=1, process_ts=2)

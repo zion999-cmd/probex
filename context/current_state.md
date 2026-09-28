@@ -15,7 +15,7 @@ Provider identity 核实（决策 D，提案 §1.7）与授权探测 P1/P2（提
   P2 单条 `noul` 探针 → HTTP 200、604 ms、`answers.ok={type:noul,noul:0.99}`、cost 1.1634e-05。
 - **热路径 Jev 的真实目标应为 `/api/v1/systemone`**；实现 typed provider 需新提案（尚未授权、尚未改代码）。
 
-`context/status.json` 的 `currentProposal` 为 `null`。
+`context/status.json` 的 `currentProposal` 为 `P0001.9.2`（真实凭据 Acceptance 未完成，仍未关闭）。
 
 ## 已完成能力
 
@@ -130,17 +130,6 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
   `UNKNOWN` 队列绝不产生推测性成交；盘口不可信时挂起并作废队列，恢复后必须重建。
 - `PaperBroker`、Strategy、Prediction、Risk、Accounting 均未改动。
 
-### P0001.9.1 — Binance USDⓈ-M Live Market Data（实现中：离线验收通过，真实 smoke 待公网出口）
-
-- 新增 `connectors/binance/market_data/`：`endpoints`（端点单一 Owner）、`transport`（标准库 WS）、
-  `streams`（stream/tier/订阅/信封）、`trades`（aggTrade → TradePayload + 水位去重）、`mark`（MarkPriceObservation）、
-  `exchange_info`（TradingRules）、`snapshot`（REST 客户端）、`runtime`（LiveMarketDataRuntime + telemetry）。
-- `market/` 新增两个最小入口：`MarketBook.invalidate(reason)` / `FeatureEngine.invalidate(reason)` 与
-  `FeatureEngine.book_health`（SC-9 的必要机制，未改任何既有转换语义）。
-- 端点按 2026 WS 迁移分层（depth → `/public`，aggTrade/markPrice → `/market`），**未经官方文档核实**，可配置覆盖。
-- 真实公网 smoke：`PROBEX_LIVE_SMOKE=1 python3 -m unittest tests.live.test_binance_live_market_data`（无需凭据）；
-  本机无公网出口，**未执行**。`status.json.currentProposal` 仍为 `P0001.9.1`。
-
 ### P0001.9.1 — Binance USDⓈ-M Live Market Data（已完成，真实公网验收通过）
 
 - `connectors/binance/market_data/`：`endpoints`（端点单一 Owner）、`transport`（标准库 WS：握手/帧/掩码/ping-pong/分片）、
@@ -168,8 +157,24 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
   `user_stream`（7 态 listenKey 状态机 + private tier WS 客户端）、`telemetry`、`runtime`（只读运行时）、`errors`。
 - 纪律：凭据只在环境变量中；签名与 query 不进日志/异常；**无任何下单/撤单端点**（静态测试固定）；
   非 one-way/USDT-M fail closed；重连后 `continuity_assumed=False`。
-- 本机无凭据 ⇒ 认证 smoke NOT RUN（运行即抛 `CredentialsError ... refusing to start`，即 SC-1 的真实证据）；
-  `status.json.currentProposal` 仍为 `P0001.9.2`，未提交。
+- 本机无凭据 ⇒ 认证 smoke NOT RUN（运行即抛 `CredentialsError ... refusing to start`，即 SC-1 的真实证据）。
+- 已提交并推送：`c97d2eb`（远端 `origin/master`）。
+- **未完成的真实项（门控）**：SC-4 真实 account/position snapshot、SC-6 真实 user stream、
+  SC-12 private stream latency、SC-13 latency gate。在这些项通过前 **P0001.9.2 = In Progress**，
+  **P0001.9.3 不启动**（人类 2026-09-28 指示）。
+
+### P0001.9.2.1 — Private Connectivity Contract Audit & CCXT Fit（已完成；裁决 KEEP_NATIVE_PRIVATE）
+
+- 代码修正（已验收）：`ORDER_TRADE_UPDATE` symbol 只取 `o.s`；listenKey REST 异常一律离开 `RENEWING`（HTTP 失败 ⇒ `FAILED`）；
+  `stop()` best-effort 幂等（DELETE 失败仍 `STOPPED`）；`stream_connected_at_ms` = 真实 WS 连接时刻 + 新增 `snapshot_started_at_ms`。
+- 审计（只读、无凭据）：`wss://ws-fapi.binance.com/ws-fapi/v1` + `userDataStream.start` 实测存在（无效 key ⇒ 401/-2014）；
+  private tier URL `wss://fstream.binance.com/private/ws?listenKey=` 与 ccxt 4.5.84 完全一致（无 `events=`）；
+  `events=` 不是连接准入条件，真实投递仍需有效 listenKey（待 P0001.9.2 真实 smoke）。
+- CCXT Pro fit（仓库外 PoC）：`watch_orders/watch_my_trades/watch_balance/watch_positions` 齐备；
+  `order['info']`/`trade['info']` **保留原始 payload**（Probex 所需 raw 字段可取）；但 `parse_position` **NotSupported**、
+  归一化字段不足需读 `info`；ccxt 对 user data **无任何连续性证据** ⇒ `continuity_assumed` 与 P0001.9.3 不可省。
+- **人类裁决（2026-09-28）：`KEEP_NATIVE_PRIVATE`** —— 不引入 `ccxt`/`ccxt.pro`，不改 public market data；
+  继续使用 native private transport（见 D-032；D-031 的待裁决项已关闭）。
 
 ## 进行中能力
 

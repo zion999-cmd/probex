@@ -105,10 +105,15 @@ class PrivateAccountConfig:
 
 @dataclass(frozen=True, slots=True)
 class PrivateSnapshotBoundary:
-    """快照边界：user stream 建立之后拉取的账户/持仓快照，供 P0001.9.3 对账使用。"""
+    """快照边界：user stream 建立之后拉取的账户/持仓快照，供 P0001.9.3 对账使用。
+
+    `stream_connected_at_ms` 是 **WS 实际连接成功**的时刻（不是快照开始时刻）；
+    `snapshot_started_at_ms` 单独记录本轮快照的开始时刻。
+    """
 
     symbol: str
     stream_connected_at_ms: Milliseconds
+    snapshot_started_at_ms: Milliseconds
     account_received_ts: Milliseconds
     position_received_ts: Milliseconds
     account_update_time_ms: Milliseconds | None
@@ -148,6 +153,7 @@ class PrivateAccountRuntime:
         self.ordering = UserEventOrdering()
         self.latency = LatencySamples(limit=self.config.latency_sample_limit)
         self._ws: WebSocketConnection | None = None
+        self._stream_connected_at_ms: Milliseconds | None = None
         self._boundary: PrivateSnapshotBoundary | None = None
         self._latest_snapshot: AccountSnapshotObservation | None = None
         self._latest_position: PositionObservation | None = None
@@ -241,7 +247,7 @@ class PrivateAccountRuntime:
             raise
 
     def _fetch_and_apply_snapshot(self) -> PrivateSnapshotBoundary:
-        started = int(self.clock())
+        snapshot_started = int(self.clock())
         account_raw = self.rest.account_snapshot()
         account_received = int(self.clock())
         position_raw = self.rest.position_risk()
@@ -256,10 +262,15 @@ class PrivateAccountRuntime:
         )
         self._latest_snapshot = snapshot
         self._latest_position = position
-        self.counters.snapshot_round_trip_ms = max(0, position_received - started)
+        self.counters.snapshot_round_trip_ms = max(0, position_received - snapshot_started)
+        if self._stream_connected_at_ms is None:
+            raise PrivateStreamError(
+                "snapshot boundary requires a connected user stream (connect the stream before snapshotting)"
+            )
         self._boundary = PrivateSnapshotBoundary(
             symbol=self.config.symbol,
-            stream_connected_at_ms=started,
+            stream_connected_at_ms=self._stream_connected_at_ms,
+            snapshot_started_at_ms=snapshot_started,
             account_received_ts=account_received,
             position_received_ts=position_received,
             account_update_time_ms=snapshot.update_time_ms,
@@ -269,15 +280,19 @@ class PrivateAccountRuntime:
         return self._boundary
 
     def stop(self) -> None:
-        """关闭 user stream 与 listenKey（幂等）。"""
+        """best-effort 幂等关闭：WS 必须关闭；`DELETE listenKey` 失败只记录错误，本地仍进入 `STOPPED`。"""
         if self._ws is not None:
-            self._ws.close()
-            self._ws = None
+            try:
+                self._ws.close()
+            finally:
+                self._ws = None
         if self.lifecycle.has_key and self.credentials is not None:
             try:
                 self.rest.listen_key_close()
-            except (TransportError, PrivateStreamError):
-                self.counters.last_error = "listenKey close failed"
+            except (TransportError, PrivateApiError) as exc:
+                self.counters.last_error = f"listenKey close failed: {type(exc).__name__}"
+        self._stream_connected_at_ms = None
+        self._continuity_assumed = False
         self.lifecycle.stop()
 
     def pump_once(self, *, timeout_s: float, max_messages: int = 1) -> PrivateBatch:
@@ -306,13 +321,19 @@ class PrivateAccountRuntime:
     def _create_listen_key_and_connect(self) -> None:
         now = int(self.clock())
         self.lifecycle.start_creating(now_ms=now)
-        listen_key = self.rest.listen_key_create()
+        try:
+            listen_key = self.rest.listen_key_create()
+        except (TransportError, PrivateApiError) as exc:
+            self.counters.last_error = f"listenKey create failed: {type(exc).__name__}"
+            self.lifecycle.fail("listenKey create failed")
+            raise
         self.lifecycle.on_created(listen_key, now_ms=int(self.clock()))
         self.counters.listen_key_created_count += 1
         self._connect_ws(listen_key)
 
     def _connect_ws(self, listen_key: str) -> None:
         self._ws = self.stream.connect(listen_key, timeout_s=self.config.connect_timeout_s)
+        self._stream_connected_at_ms = int(self.clock())  # 真实 WS 连接成功时刻
         self.counters.connect_count += 1
 
     def _maintain_listen_key(self, builder: "_BatchBuilder") -> None:
@@ -325,7 +346,8 @@ class PrivateAccountRuntime:
             self.lifecycle.mark_renewing()
             try:
                 self.rest.listen_key_keepalive()
-            except (TransportError, PrivateStreamError) as exc:
+            except (TransportError, PrivateApiError) as exc:
+                # 任何失败（含 HTTP 4xx/5xx）都必须离开 RENEWING：绝不留下僵尸状态
                 self.counters.keepalive_failure_count += 1
                 self.counters.last_error = f"keepalive failed: {type(exc).__name__}"
                 self.lifecycle.fail("keepalive failed")
@@ -425,7 +447,7 @@ class PrivateAccountRuntime:
             self.sleeper(policy.delay_ms(attempt) / 1000.0)
             try:
                 self._reconnect_once()
-            except (TransportError, PrivateStreamError, ListenKeyError) as exc:
+            except (TransportError, PrivateApiError) as exc:
                 self.counters.last_error = f"reconnect failed: {type(exc).__name__}"
                 continue
             self.counters.reconnect_count += 1

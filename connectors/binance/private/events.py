@@ -223,7 +223,8 @@ def _parse_order_update(
         transaction_ts=require_int(require_field(message, "T", path=path), path=f"{path}.T"),
         receive_ts=receive_ts,
         process_ts=process_ts,
-        symbol=require_str(require_field(message, "s", path=path), path=f"{path}.s"),
+        # 真实 Binance USDⓈ-M `ORDER_TRADE_UPDATE` 把 symbol 放在 `o.s`（**没有** top-level `s`）
+        symbol=require_str(require_field(order, "s", path=f"{path}.o"), path=f"{path}.o.s"),
         client_order_id=require_str(require_field(order, "c", path=f"{path}.o"), path=f"{path}.o.c"),
         order_id=require_int(require_field(order, "i", path=f"{path}.o"), path=f"{path}.o.i"),
         side=require_str(require_field(order, "S", path=f"{path}.o"), path=f"{path}.o.S"),

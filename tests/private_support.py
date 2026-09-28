@@ -150,12 +150,13 @@ def order_update_message(
     trade_id: int = 77,
     is_maker: bool = True,
 ) -> str:
+    # 真实 Binance USDⓈ-M `ORDER_TRADE_UPDATE`：symbol 在 `o.s`，**没有** top-level `s`
     payload = {
         "e": "ORDER_TRADE_UPDATE",
         "E": event_ts,
         "T": event_ts if transaction_ts is None else transaction_ts,
-        "s": SYMBOL,
         "o": {
+            "s": SYMBOL,
             "c": client_order_id,
             "i": order_id,
             "S": "BUY",
@@ -188,7 +189,10 @@ class FakeRestFetcher:
 
     responses: dict[str, object] = field(default_factory=dict)
     calls: list[tuple[str, str]] = field(default_factory=list)
+    #: 注入传输层失败（模拟网络/超时）。
     failures: dict[str, int] = field(default_factory=dict)
+    #: 注入 **HTTP 状态** 失败（模拟 4xx/5xx；业务层必须把它当作失败而不是继续 RENEWING）。
+    http_failures: dict[str, int] = field(default_factory=dict)
     #: 依次由 `POST /fapi/v1/listenKey` 返回的 key 序列（耗尽后重复最后一个）。
     listen_keys: deque[str] = field(default_factory=lambda: deque([FAKE_LISTEN_KEY]))
     key_index: int = 0
@@ -200,6 +204,12 @@ class FakeRestFetcher:
         if remaining > 0:
             self.failures[path] = remaining - 1
             raise TransportError(f"injected failure for {path}")
+        http_remaining = self.http_failures.get(path, 0)
+        if http_remaining > 0:
+            self.http_failures[path] = http_remaining - 1
+            from connectors.binance.private.errors import PrivateResponseError
+
+            raise PrivateResponseError(f"{method} {path} -> HTTP 500")
         if path == "/fapi/v1/listenKey":
             if method == "POST":
                 keys = list(self.listen_keys)

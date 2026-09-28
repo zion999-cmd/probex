@@ -70,6 +70,20 @@ class KeepaliveTest(unittest.TestCase):
         self.assertEqual(telemetry.listen_key_state, "FAILED")
         self.assertIn("keepalive failed", telemetry.last_error or "")
 
+    def test_sc3_keepalive_http_failure_does_not_leave_renewing(self) -> None:
+        """HTTP 层失败（4xx/5xx）必须离开 RENEWING 并落到 FAILED，不能留僵尸状态。"""
+        runtime, fetcher, _, clock = _runtime()
+        fetcher.http_failures["/fapi/v1/listenKey"] = 1
+        clock.advance(KEEPALIVE_INTERVAL)
+
+        with self.assertRaises(ListenKeyError):
+            runtime.pump_once(timeout_s=0.01)
+
+        telemetry = runtime.telemetry
+        self.assertEqual(telemetry.listen_key_state, "FAILED")
+        self.assertNotEqual(telemetry.listen_key_state, "RENEWING")
+        self.assertEqual(telemetry.keepalive_failure_count, 1)
+
     def test_sc9_ttl_expiry_recreates_the_listen_key(self) -> None:
         runtime, fetcher, factory, clock = _runtime()
         fetcher.listen_keys = deque([fetcher.listen_keys[0], "LK-SECOND", "LK-THIRD"])
@@ -144,6 +158,29 @@ class ReconnectTest(unittest.TestCase):
         self.assertEqual(runtime.telemetry.timeout_count, 1)
         self.assertEqual(runtime.telemetry.disconnect_count, 0)
         self.assertTrue(runtime.continuity_assumed)
+
+
+class ShutdownTest(unittest.TestCase):
+    def test_sc4_listen_key_close_failure_still_reaches_stopped(self) -> None:
+        """`DELETE listenKey` 失败只记录错误；本地必须可靠进入 STOPPED（best-effort 幂等关闭）。"""
+        runtime, fetcher, factory, _ = _runtime()
+        fetcher.http_failures["/fapi/v1/listenKey"] = 1
+
+        runtime.stop()
+
+        self.assertEqual(runtime.lifecycle_state, "STOPPED")
+        self.assertTrue(factory.connection.closed)
+        self.assertIn("listenKey close failed", runtime.telemetry.last_error or "")
+
+    def test_stop_is_idempotent_and_transport_failure_safe(self) -> None:
+        runtime, fetcher, factory, _ = _runtime()
+        fetcher.failures["/fapi/v1/listenKey"] = 5
+
+        runtime.stop()
+        runtime.stop()
+
+        self.assertEqual(runtime.lifecycle_state, "STOPPED")
+        self.assertFalse(runtime.continuity_assumed)
 
 
 class EventOrderingFaultTest(unittest.TestCase):

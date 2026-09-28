@@ -471,3 +471,46 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
 - **lag 语义**：`private_lag_ms` = 业务事件的 `receive_ts - event_ts` 分布（median/p95/max）；
   窗口内无业务事件时以 `snapshot_round_trip_ms`（私有 REST 路径 RTT）作为**明确标注**的替代基准；
   SC-13 的 BLOCKED 判定按 median 与 `max_median_private_lag_ms` 比较。
+
+## D-031 private 契约澄清（P0001.9.2.1）：o.s、失败态与 boundary 语义；transport 选型待裁决
+
+**日期**：2026-09-28
+**状态**：生效（前三条）；第四条为**待裁决事实记录**（本阶段不实施）
+
+**已生效的契约澄清**：
+
+1. **`ORDER_TRADE_UPDATE` 的 symbol 只来自 `o.s`**：真实 Binance USDⓈ-M 报文没有 top-level `s`；
+   只接受 `o.s`，两者同时存在时以 `o.s` 为准（不为旧 fixture 兼容第二个位置）。
+2. **listenKey REST 失败必须是显式失败态**：keepalive / create 的任何失败（含 HTTP 4xx/5xx）都必须离开
+   `RENEWING`/`STARTING` 并进入 `FAILED`；`stop()` 是 best-effort 幂等关闭——`DELETE listenKey` 失败只记录错误，
+   本地仍必须进入 `STOPPED`。
+3. **boundary 时间语义**：`stream_connected_at_ms` = **WS 实际连接成功**时刻；快照另有
+   `snapshot_started_at_ms` / `account_received_ts` / `position_received_ts`；未连接就快照 ⇒ `PrivateStreamError`。
+
+**待裁决事实（不自行选择）**：
+
+- private 数据入口有两个 surface：（i）REST listenKey + `/private/ws?listenKey=`（本实现，与 ccxt 默认一致）；
+  （ii）WS API `wss://ws-fapi.binance.com/ws-fapi/v1` 的 `userDataStream.start/ping/stop`（已实测存在，无需 listenKey 续期）。
+- transport 选型候选：`KEEP_NATIVE_PRIVATE` 或 `USE_CCXT_PRO_PRIVATE`（事实矩阵见提案 P0001.9.2.1 §4）。
+- **无论选哪种**：`continuity_assumed` 与 P0001.9.3 reconciliation 都不可省（ccxt 对 user data 无连续性证据）。
+
+## D-032 裁决：private transport 采用 Native（`KEEP_NATIVE_PRIVATE`）
+
+**日期**：2026-09-28
+**状态**：生效（关闭 D-031 中的待裁决项）
+
+**裁决（人类）**：`A. KEEP_NATIVE_PRIVATE`。
+
+- **不引入** `ccxt` / `ccxt.pro`（§16 未触发；仓库继续保持零第三方依赖）。
+- **不改** public market data（P0001.9.1 的 native transport 保持原样；本裁决只覆盖 private transport 选型）。
+- 继续使用 `connectors/binance/private/`（P0001.9.2 已修正的契约）作为唯一 private 入口。
+
+**依据（P0001.9.2.1 已核实事实）**：
+
+1. native private 契约已在本阶段修正并验证：`ORDER_TRADE_UPDATE` 取 `o.s`；listenKey 失败 ⇒ `FAILED`（无 `RENEWING` 僵尸）；
+   `stop()` best-effort 幂等；`stream_connected_at_ms` = 真实 WS 连接时刻。
+2. 零依赖；listenKey 生命周期（7 态）与 `continuity_assumed` 完全可观测、可控。
+3. CCXT Pro 的增量有限：`parse_position` **NotSupported**、归一化字段不足（仍需 `info`）、
+   user data **无连续性证据** ⇒ 换 transport 仍要保留 Probex 自己的归一化与 continuity 管理，
+   却额外承担依赖、升级与许可成本。
+4. 与 transport 选择无关的约束不变：`continuity_assumed` 与 P0001.9.3 reconciliation 都不可省。

@@ -1,11 +1,18 @@
 ## 当前 Proposal
 
-P0001.9.2 — Private Account + User Stream Validation：**实现中（未关闭）**。
+**P0001.9.2 — Private Account + User Stream Validation：实现中（In Progress，未关闭）。**
 
-离线验收 SC-1/2/3/5/7/8/9/10/11/14/15 PASS（**1310 passed / 0 failed / 17 skipped**）；
-SC-4/SC-6/SC-12/SC-13 的**真实**部分因本机无凭据 **NOT RUN**。`status.json.currentProposal` = `P0001.9.2`，**未提交**。
+人类 2026-09-28 裁决：**`KEEP_NATIVE_PRIVATE`**（不引入 ccxt / ccxt.pro，不改 public market data），
+P0001.9.2.1 因此**已完成**（见 D-032）。
 
-**补齐方式**（人类在自己 shell 执行，凭据只留在环境变量里）：
+**门控（在这些真实项通过前，P0001.9.3 不启动）**：
+
+- SC-4 真实 account / position snapshot
+- SC-6 真实 user data stream
+- SC-12 private stream latency 真实测量
+- SC-13 latency gate（median 超 `max_median_private_lag_ms` ⇒ 标记 BLOCKED）
+
+**补齐方式**（凭据只留在你自己的 shell 环境里，不写入仓库/日志/fixture）：
 
 ```bash
 export BINANCE_API_KEY=...
@@ -14,8 +21,10 @@ export PROBEX_LIVE_PRIVATE=1
 python3 -m unittest -v tests.live.test_binance_private_live
 ```
 
-报告会打印 `PROBEX PRIVATE LIVE SMOKE REPORT`（账户/持仓事实、listenKey 状态、private lag median/p95/max 或路径 RTT、
-去重/乱序/keepalive/重连计数）。若 median lag 超过 `max_median_private_lag_ms` ⇒ 按提案 SC-13 标记 **BLOCKED**，不进入真实下单。
+把 `PROBEX PRIVATE LIVE SMOKE REPORT` 贴回来；我会据实补 SC-4/6/12/13，再决定把 P0001.9.2 置「已完成」并把
+`currentProposal → null`（届时才考虑 P0001.9.3）。
+
+`status.json.currentProposal` = `P0001.9.2`。测试 **1318 passed / 0 failed / 17 skipped**。
 
 ## 本次新增
 
@@ -499,3 +508,19 @@ D 非阻塞快照抓取（仅缓解新鲜度）。
 - **event lag 归属**（重要）：tight-loop 实测 `/public` depth 中位 −230 ms（新鲜），而 `/market` 的
   aggTrade / markPrice 中位 2274–2790 ms ⇒ 延迟来自测试所用**代理出口排队**，不是本系统判定/处理问题。
 - 两阶段均已置为「已完成」；`currentProposal` → `null`；本轮按条件授权提交（P0001.9.1 + P0001.9.1.1 同一 commit）。
+
+## P0001.9.2.1 摘要（2026-09-28）
+
+**代码修正（已验收）**：① `ORDER_TRADE_UPDATE` symbol 只取 `o.s`（fixture 同步改真实形态 + 3 条回归测试）；
+② listenKey keepalive/create 的 HTTP 失败 ⇒ 立即 `FAILED`（不留 `RENEWING` 僵尸）；③ `stop()` best-effort 幂等
+（DELETE 失败仍 `STOPPED`）；④ `stream_connected_at_ms` 改为真实 WS 连接时刻 + 新增 `snapshot_started_at_ms`。
+
+**审计结论（只读、无凭据）**：
+- `wss://ws-fapi.binance.com/ws-fapi/v1` + `userDataStream.start` 实测存在（无效 key ⇒ `401 / -2014 API-key format invalid`）；
+- private tier URL 与 ccxt 4.5.84 完全一致（`/private/ws?listenKey=`，无 `events=`）；`events=` 非准入条件，投递需有效 key（待真实 smoke）；
+- CCXT Pro：`watch_orders/watch_my_trades/watch_balance/watch_positions` 齐备，`info` 保留原始 payload（Probex raw 字段可取）；
+  但 `parse_position` NotSupported、归一化不足需读 `info`、**user data 无连续性证据**；
+- ccxt 对 futures **orderbook** 的判据包含 `pu == nonce` —— 独立佐证了 P0001.9.1.1 的修正 ✓。
+
+**下一步**：人类在提案 §4 两个候选中裁决；随后要么继续 Native（直接进入 P0001.9.3），
+要么按 §16 授权引入 ccxt 依赖并改造 private transport。

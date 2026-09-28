@@ -67,6 +67,29 @@ class StartupTest(unittest.TestCase):
         self.assertAlmostEqual(position.liquidation_price, 55000.0)  # type: ignore[union-attr]
         self.assertAlmostEqual(position.mark_price, 60100.0)  # type: ignore[union-attr]
 
+    def test_sc5_stream_connected_at_ms_is_the_ws_connect_instant(self) -> None:
+        """boundary 的 stream_connected_at_ms 必须是真实 WS 连接时刻，而不是快照开始时刻。"""
+        from tests.private_support import build_runtime
+        from tests.fault.test_private_stream_faults import Clock
+
+        clock = Clock()
+        runtime, _, factory = build_runtime(clock=clock)
+        runtime.start()
+        clock.advance(5_000)  # WS 已连接，稍后才刷新快照
+
+        boundary = runtime.refresh_snapshot()
+
+        self.assertEqual(boundary.stream_connected_at_ms, BASE_TS)  # connect 时刻
+        self.assertEqual(boundary.snapshot_started_at_ms, BASE_TS + 5_000)  # 快照开始时刻
+        self.assertGreater(boundary.snapshot_started_at_ms, boundary.stream_connected_at_ms)
+        self.assertEqual(boundary.account_received_ts, BASE_TS + 5_000)
+
+    def test_snapshot_requires_a_connected_stream(self) -> None:
+        runtime, _, _ = build_runtime()
+
+        with self.assertRaises(PrivateStreamError):
+            runtime.refresh_snapshot()
+
     def test_server_time_offset_is_recorded(self) -> None:
         runtime, _, _ = build_runtime()
 
