@@ -710,3 +710,46 @@ P0001.9.3 的代码改动**尚未 commit / push**（未获授权，CLAUDE.md §2
   下一阶段的放单许可必须有**独立** readiness 判定，不得由 `RECOVERED` 推导。
 - `fact_limit` 只是 current-state 恢复窗口；baseline 只兜当前余额/持仓，不兜历史 PnL / 手续费 / funding / drawdown。
 - 本条为文档级约束，**未改动** P0001.9.3 的任何代码或契约。
+
+## 2026-09-28：P0001.9.3.1 Recovery Contract Closure（已完成）
+
+**当前 Proposal**：P0001.9.3.1（实施中设为 `P0001.9.3.1`，完成后按 CLAUDE.md §5 回到 `null`，无下一提案切换授权）。
+
+**本次新增**：`tests/integration/test_recovery_invalidation.py`（runtime ↔ recovery 断线接线，9 条）。
+**本次修改**
+
+- `connectors/binance/private/orders.py`：`OWNED_CLIENT_ORDER_ID_PREFIX="probex-"` + `is_probex_order` **严格匹配**
+  （SC-1：`probexevil-1` / `probex2` / `probex` / `probex-` → external）。
+- `connectors/binance/private/trades.py`：成交三分类 `fills` / `foreign_order_ids`(+`foreign_fill_count`) / `unresolved_order_ids`。
+- `connectors/binance/private/recovery.py`：`RecoveryReason.UNRESOLVED_FILLS`；snapshot `foreign_fills` +
+  `unresolved_fill_order_ids`；不可归属成交在 reconcile/baseline **之前** BLOCKED；`on_stream_discontinuity` + `bind(runtime)`。
+- `connectors/binance/private/runtime.py`：`subscribe_discontinuity` / `discontinuity_events`；在 `_reconnect` /
+  `_recreate_listen_key` / `stop()` 广播 reason。
+- `tests/**`：unit（严格 ownership + 三分类）、fault（`UNRESOLVED_FILLS` 阻塞 / 已验证外部不阻塞）、live（报告字段 + `bind`）。
+- `proposals/P0001.9.3*.md`、`context/*`（D-038 修订、D-040、roadmap、current_state）。
+
+**本次删除**：无。
+
+**Acceptance 结果（SC-1 – SC-7 全 PASS，矩阵见提案 §1.3）**
+
+- **SC-3 真实测试网（只读）**：10 单 → 自有 5（`probex-audit-*`）/ 外部 5（`web_*`）；7 笔成交 → 自有 2 /
+  已验证外部 5 / **不可归属 0** ⇒ `RECOVERED`（`foreign_fills=5`、`unresolved_fill_order_ids=[]`、`synthetic_fills=0`、
+  `historical_pnl_known=false`）。原先被误计为 `unresolved` 的 5 笔已证明是外部订单成交。
+- **SC-4**：真实断线路径（`FakeConnection.drop()` / `listenKeyExpired` / `stop()`）触发 runtime 广播 ⇒ recovery
+  **自动** `NOT_RECOVERED`；测试**未**调用 `recovery.invalidate()`。
+- **SC-5**：断线后 `continuity_assumed=False` ⇒ 直接 run 得 `BLOCKED`；必须 `refresh_snapshot()` 重建 boundary
+  并重走完整恢复才 `RECOVERED`。
+
+**测试结果**：unit 879 / integration 197 / fault 261 / replay 49 passed；live 19 skipped；
+全量 **1405 passed / 0 failed / 19 skipped**；独立检出（`git archive HEAD` + 工作树叠加，未产生 commit）同样全 PASS。
+
+**风险 / 已知问题**
+
+1. 真正不可归属的成交（orderId 不在事实窗口内）会持续 `BLOCKED: UNRESOLVED_FILLS`（有意的 fail closed）；
+   若要放宽必须由人类裁决「可验证证据规则」，实现方不得自行降级。
+2. `fact_limit` 仍只是 current-state 窗口（D-039）。
+3. `RECOVERED` ≠ `LIVE TRADE READY`（D-039）。
+
+**阻塞**：无。
+**下一步**：`currentProposal = null`；等待人类/设计方落盘下一条正式 Proposal。
+本轮改动**尚未 commit / push**（未获授权）。

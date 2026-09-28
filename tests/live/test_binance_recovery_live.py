@@ -82,7 +82,7 @@ def build_live_recovery(*, base_url: str | None = None, host: str | None = None)
     )
     tracker = OrderTracker(session_id="live-recovery")
     accounting = AccountingCore(initial_balance=0.0)
-    recovery = StartupRecovery(
+    startup_recovery = StartupRecovery(
         rest=rest,
         tracker=tracker,
         accounting=accounting,
@@ -90,7 +90,9 @@ def build_live_recovery(*, base_url: str | None = None, host: str | None = None)
         clock=clock,
         fact_limit=int(os.environ.get(FACT_LIMIT_ENV, DEFAULT_FACT_LIMIT)),
     )
-    return runtime, recovery, tracker, accounting
+    # SC-4：真实接线（断线 ⇒ recovery 自动失效），而不是靠调用方记得手工 invalidate
+    startup_recovery.bind(runtime)
+    return runtime, startup_recovery, tracker, accounting
 
 
 def stream_state_from(runtime: PrivateAccountRuntime) -> StreamState:
@@ -120,7 +122,9 @@ def recovery_report(
             "continuity_assumed": runtime.continuity_assumed,
             "boundary_present": runtime.snapshot_boundary is not None,
             "heartbeats": runtime.telemetry.heartbeat_count,
+            "discontinuity_events": list(runtime.discontinuity_events),
         },
+        "recovery_state_after_run": recovery.state.value,
         "recovery": {
             "status": result.status.value,
             "reasons": [reason.value for reason in result.reasons],
@@ -136,7 +140,8 @@ def recovery_report(
             "probex_fills": len(snapshot.fills),
             "foreign_open_orders": len(snapshot.foreign_open_orders),
             "foreign_history_ignored": snapshot.foreign_ignored,
-            "unresolved_fill_orders": snapshot.unresolved_fill_orders,
+            "foreign_fills": snapshot.foreign_fills,
+            "unresolved_fill_order_ids": list(snapshot.unresolved_fill_order_ids),
             "position_amt": snapshot.position.position_amt,
             "position_side": snapshot.position.position_side,
         },

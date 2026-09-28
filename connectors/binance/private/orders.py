@@ -39,9 +39,21 @@ _STATUS_MAP: dict[str, OrderStatus] = {
 }
 
 
+#: Probex 自有 clientOrderId 的**严格**前缀（`OrderTracker` 生成 `probex-<session>-<seq>`）。
+#: P0001.9.3.1 SC-1：必须是 `probex-`（带连字符），`probexevil-1` / `probex2` / `probex` 一律不是我们的。
+OWNED_CLIENT_ORDER_ID_PREFIX = f"{CLIENT_ORDER_ID_PREFIX}-"
+
+
 def is_probex_order(client_order_id: str) -> bool:
-    """ownership boundary：只有 `probex-` 前缀的订单属于本系统。"""
-    return isinstance(client_order_id, str) and client_order_id.startswith(CLIENT_ORDER_ID_PREFIX)
+    """ownership boundary（严格匹配）：`probex-` + 至少一个字符才属于本系统。
+
+    只做前缀匹配是**不够**的：`probexevil-1` 会通过 `startswith("probex")`。
+    """
+    return (
+        isinstance(client_order_id, str)
+        and client_order_id.startswith(OWNED_CLIENT_ORDER_ID_PREFIX)
+        and len(client_order_id) > len(OWNED_CLIENT_ORDER_ID_PREFIX)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +178,7 @@ def order_update_timestamp(entry: Mapping[str, object]) -> int:
 
 
 __all__ = [
+    "OWNED_CLIENT_ORDER_ID_PREFIX",
     "ExternalOrderFacts",
     "classify_orders",
     "is_probex_order",

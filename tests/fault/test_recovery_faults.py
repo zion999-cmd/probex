@@ -155,6 +155,57 @@ class TerminalConflictFaultTest(unittest.TestCase):
         self.assertNotIn(ReconciliationActionKind.STATUS_CONFLICT, result.report.kinds())  # type: ignore[union-attr]
 
 
+class UnresolvedFillFaultTest(unittest.TestCase):
+    """P0001.9.3.1 SC-2 / SC-3：不可归属成交不得被降级为 telemetry。"""
+
+    def test_sc2_unresolved_fill_blocks_recovery(self) -> None:
+        responses = recovery_responses(
+            position=_flat_position(),
+            open_orders=[binance_order_payload()],
+            history=[binance_order_payload()],
+            trades=[binance_trade_payload(order_id=999)],  # orderId 不在任何事实里
+        )
+        recovery, _, tracker, accounting = build_recovery(responses=responses)
+
+        result = recovery.run(stream_state=stream_state(), snapshot_provider=recovery.fetch_snapshot)
+
+        self.assertIs(result.status, RecoveryStatus.BLOCKED)
+        self.assertEqual(result.reasons, (RecoveryReason.UNRESOLVED_FILLS,))
+        self.assertEqual(result.snapshot.unresolved_fill_order_ids, (999,))  # type: ignore[union-attr]
+        self.assertFalse(accounting.baseline_applied)  # 阻塞前不得改账本
+        self.assertEqual(len(tracker.orders), 0)  # 阻塞前不得 adopt
+
+    def test_sc2_proven_foreign_fill_does_not_block(self) -> None:
+        """已验证外部订单的成交（同账户人工/其他机器人）只计数，不阻塞。"""
+        responses = recovery_responses(
+            position=_flat_position(),
+            history=[binance_order_payload(order_id=202, client_order_id="web_manual")],
+            trades=[binance_trade_payload(order_id=202)],
+        )
+        recovery, _, _, _ = build_recovery(responses=responses)
+
+        result = recovery.run(stream_state=stream_state(), snapshot_provider=recovery.fetch_snapshot)
+
+        self.assertIs(result.status, RecoveryStatus.RECOVERED)
+        self.assertEqual(result.snapshot.unresolved_fill_order_ids, ())  # type: ignore[union-attr]
+        self.assertEqual(result.snapshot.foreign_fills, 1)  # type: ignore[union-attr]
+
+    def test_sc1_collision_prefix_fill_blocks_as_foreign_open_order_when_open(self) -> None:
+        """碰撞前缀的**未平挂单**必须先被 ownership boundary 拦下（比 fills 更早 fail closed）。"""
+        responses = recovery_responses(
+            position=_flat_position(),
+            open_orders=[binance_order_payload(client_order_id="probexevil-1")],
+            trades=[binance_trade_payload()],
+        )
+        recovery, _, tracker, _ = build_recovery(responses=responses)
+
+        result = recovery.run(stream_state=stream_state(), snapshot_provider=recovery.fetch_snapshot)
+
+        self.assertIs(result.status, RecoveryStatus.BLOCKED)
+        self.assertEqual(result.reasons, (RecoveryReason.FOREIGN_OPEN_ORDER,))
+        self.assertEqual(len(tracker.orders), 0)
+
+
 class StreamStateFaultTest(unittest.TestCase):
     def _reasons(self, state: StreamState) -> tuple[RecoveryReason, ...]:
         recovery, _, _, _ = build_recovery(responses=recovery_responses(position=_flat_position(),

@@ -79,10 +79,43 @@ class OrderNormalizationTest(unittest.TestCase):
 
 
 class OwnershipBoundaryTest(unittest.TestCase):
-    def test_only_probex_prefix_is_ours(self) -> None:
-        self.assertTrue(is_probex_order("probex-s1-000001"))
-        self.assertFalse(is_probex_order("manual-order-1"))
-        self.assertFalse(is_probex_order(""))
+    def test_sc1_only_strict_probex_dash_prefix_is_ours(self) -> None:
+        """P0001.9.3.1 SC-1：`probex-` 严格匹配，碰撞前缀不得被认成自己的订单。"""
+        owned = ["probex-s1-000001", "probex-audit-1790584187", "probex-x"]
+        foreign = [
+            "probexevil-1",   # 旧 startswith("probex") 会误判为自有
+            "probex2",
+            "probex",
+            "probex-",        # 只有前缀、没有内容 ⇒ 不是本系统生成的形态
+            "PROBEX-s1-000001",
+            "manual-order-1",
+            "",
+        ]
+        for client_order_id in owned:
+            with self.subTest(client_order_id=client_order_id):
+                self.assertTrue(is_probex_order(client_order_id))
+        for client_order_id in foreign:
+            with self.subTest(client_order_id=client_order_id):
+                self.assertFalse(is_probex_order(client_order_id))
+
+    def test_sc1_collision_prefix_open_order_is_foreign(self) -> None:
+        orders = parse_external_orders(
+            [binance_order_payload(client_order_id="probexevil-1")], symbol=SYMBOL
+        )
+
+        facts = classify_orders(open_orders=orders, history=())
+
+        self.assertEqual(facts.open_orders, ())
+        self.assertEqual([order.client_order_id for order in facts.foreign_open_orders], ["probexevil-1"])
+
+    def test_sc1_collision_prefix_fill_is_not_ours(self) -> None:
+        facts = parse_external_fills(
+            [binance_trade_payload()], symbol=SYMBOL, order_id_to_client_id={101: "probexevil-1"}
+        )
+
+        self.assertEqual(facts.fills, ())
+        self.assertEqual(facts.foreign_order_ids, (101,))
+        self.assertEqual(facts.unresolved_order_ids, ())
 
     def test_foreign_open_order_is_separated(self) -> None:
         orders = parse_external_orders(
@@ -130,6 +163,8 @@ class FillNormalizationTest(unittest.TestCase):
             [binance_trade_payload()], symbol=SYMBOL, order_id_to_client_id={101: "probex-s1-000001"}
         )
 
+        self.assertEqual(facts.unresolved_order_ids, ())
+        self.assertEqual(facts.foreign_order_ids, ())
         self.assertEqual(len(facts.fills), 1)
         fill = facts.fills[0]
         self.assertEqual(fill.client_order_id, "probex-s1-000001")
@@ -138,23 +173,46 @@ class FillNormalizationTest(unittest.TestCase):
         self.assertAlmostEqual(fill.quantity, 0.001)
         self.assertAlmostEqual(fill.fee, 0.012)
         self.assertEqual(fill.fee_asset, "USDT")
-        self.assertEqual(facts.unresolved_order_ids, 0)
+        self.assertEqual(facts.unresolved_order_ids, ())
+        self.assertEqual(facts.foreign_order_ids, ())
 
-    def test_unknown_order_id_is_not_claimed_as_ours(self) -> None:
+    def test_unknown_order_id_is_unresolved_not_foreign(self) -> None:
+        """SC-2：orderId 从未出现在事实窗口内 ⇒ **不可归属**（不是"已验证外部"）。"""
         facts = parse_external_fills(
             [binance_trade_payload(order_id=999)], symbol=SYMBOL, order_id_to_client_id={101: "probex-s1-000001"}
         )
 
         self.assertEqual(facts.fills, ())
-        self.assertEqual(facts.unresolved_order_ids, 1)
+        self.assertEqual(facts.foreign_order_ids, ())
+        self.assertEqual(facts.unresolved_order_ids, (999,))
 
-    def test_foreign_order_fill_is_not_claimed_as_ours(self) -> None:
+    def test_foreign_order_fill_is_proven_foreign(self) -> None:
+        """映射存在且明确是外部订单 ⇒ 记入 foreign，不 adopt、也不算 unresolved。"""
         facts = parse_external_fills(
-            [binance_trade_payload()], symbol=SYMBOL, order_id_to_client_id={101: "manual-9"}
+            [binance_trade_payload(), binance_trade_payload(trade_id=556)],
+            symbol=SYMBOL,
+            order_id_to_client_id={101: "manual-9"},
         )
 
         self.assertEqual(facts.fills, ())
-        self.assertEqual(facts.unresolved_order_ids, 1)
+        self.assertEqual(facts.foreign_order_ids, (101,))
+        self.assertEqual(facts.foreign_fill_count, 2)
+        self.assertEqual(facts.unresolved_order_ids, ())
+
+    def test_mixed_trades_are_classified_three_ways(self) -> None:
+        facts = parse_external_fills(
+            [
+                binance_trade_payload(trade_id=1, order_id=101),
+                binance_trade_payload(trade_id=2, order_id=202),
+                binance_trade_payload(trade_id=3, order_id=303),
+            ],
+            symbol=SYMBOL,
+            order_id_to_client_id={101: "probex-s1-000001", 202: "web_manual"},
+        )
+
+        self.assertEqual([fill.trade_id for fill in facts.fills], ["1"])
+        self.assertEqual(facts.foreign_order_ids, (202,))
+        self.assertEqual(facts.unresolved_order_ids, (303,))
 
     def test_non_settlement_commission_fails_closed(self) -> None:
         with self.assertRaises(PrivateFormatError):
@@ -165,7 +223,7 @@ class FillNormalizationTest(unittest.TestCase):
             )
 
     def test_missing_fields_fail_closed(self) -> None:
-        for field in ("id", "price", "qty", "commission", "time"):
+        for field in ("id", "price", "qty", "commission", "time"):  # noqa: B007
             raw = binance_trade_payload()
             del raw[field]
             with self.subTest(field=field):

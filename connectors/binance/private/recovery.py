@@ -96,6 +96,8 @@ class RecoveryReason(Enum):
     FILLS_READ_FAILED = "FILLS_READ_FAILED"
     FOREIGN_OPEN_ORDER = "FOREIGN_OPEN_ORDER"
     UNRESOLVED_ORDERS = "UNRESOLVED_ORDERS"
+    #: 存在**无法归属**的成交（既非已知 Probex 订单，也无法证明是外部订单）⇒ 未知成交不得被忽略（SC-2）
+    UNRESOLVED_FILLS = "UNRESOLVED_FILLS"
     RECONCILIATION_NOT_CONVERGED = "RECONCILIATION_NOT_CONVERGED"
     BASELINE_MISMATCH = "BASELINE_MISMATCH"
     BASELINE_ALREADY_APPLIED = "BASELINE_ALREADY_APPLIED"
@@ -137,7 +139,10 @@ class RecoverySnapshot:
     fills: tuple[ExternalFill, ...]
     foreign_open_orders: tuple[ExternalOrder, ...]
     foreign_ignored: int
-    unresolved_fill_orders: int
+    #: 已验证属于外部（非 Probex）订单的成交数量（不 adopt，仅审计）
+    foreign_fills: int
+    #: **不可归属**的成交 orderId：既非已知 Probex 也无法证明是外部 ⇒ 必须 BLOCKED（SC-2）
+    unresolved_fill_order_ids: tuple[int, ...]
 
     def baseline(self) -> ExternalAccountBaseline:
         """由账户 + 持仓快照构造 startup baseline（不使用任何 synthetic Fill）。"""
@@ -203,6 +208,23 @@ class StartupRecovery:
         self.state = RecoveryStatus.NOT_RECOVERED
         self._reason_log.append((reason, int(self.clock())))
 
+    def on_stream_discontinuity(self, reason: str) -> None:
+        """`PrivateAccountRuntime` 的真实断线回调入口（SC-4：不依赖调用方记得手工失效）。
+
+        签名与 `PrivateAccountRuntime.subscribe_discontinuity(listener)` 一致，可直接订阅。
+        """
+        self.invalidate(reason=f"stream discontinuity: {reason}")
+
+    def bind(self, runtime: object) -> "StartupRecovery":
+        """把本对象订阅到 private runtime 的断线事件（duck typing，不需要 import runtime）。"""
+        subscribe = getattr(runtime, "subscribe_discontinuity", None)
+        if not callable(subscribe):
+            raise PrivateFormatError(
+                "bind() requires a private runtime exposing subscribe_discontinuity(listener)"
+            )
+        subscribe(self.on_stream_discontinuity)
+        return self
+
     @property
     def reason_log(self) -> tuple[tuple[str, int], ...]:
         return tuple(self._reason_log)
@@ -267,7 +289,8 @@ class StartupRecovery:
             fills=fill_facts.fills,
             foreign_open_orders=facts.foreign_open_orders,
             foreign_ignored=facts.foreign_ignored,
-            unresolved_fill_orders=fill_facts.unresolved_order_ids,
+            foreign_fills=fill_facts.foreign_fill_count,
+            unresolved_fill_order_ids=fill_facts.unresolved_order_ids,
         )
 
     # ------------------------------------------------------------------ 编排
@@ -310,6 +333,14 @@ class StartupRecovery:
                 (RecoveryReason.FOREIGN_OPEN_ORDER,),
                 f"{len(snapshot.foreign_open_orders)} non-probex open order(s) present; "
                 "this system must not assume it owns the full account state",
+                snapshot=snapshot,
+            )
+
+        if snapshot.unresolved_fill_order_ids:
+            return self._blocked(
+                (RecoveryReason.UNRESOLVED_FILLS,),
+                f"{len(snapshot.unresolved_fill_order_ids)} trade(s) have orderIds that are "
+                "neither known probex orders nor proven foreign; unknown fills must not be ignored",
                 snapshot=snapshot,
             )
 

@@ -616,6 +616,15 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
 - **窄修一处既有缺口**：`reconciliation._apply_status` 原先只带 `filled_quantity` 不带 `avg_fill_price`，
   导致「外部已部分成交」的 RESTORE 路径构造出 `filled>0 && avg=0` 的非法订单；现补齐该字段（契约未改，仅补全事件载荷）。
 
+## D-038（修订，2026-09-28 / P0001.9.3.1）
+
+本条原写法「无法归属的成交**仅计入 telemetry**」与 P0001.9.3.1 的固定契约冲突，已作废，改为：
+
+- **已验证外部**（`orderId` 能映射到订单，且 `clientOrderId` 严格不匹配 `probex-`）→ 丢弃并计数 `foreign_fills`；
+- **不可归属**（`orderId` 不在 `openOrders ∪ allOrders` 窗口内）→ `BLOCKED: UNRESOLVED_FILLS`（**不得降级为 telemetry**）。
+
+其余内容（baseline 水位线不重复入账、`openOrders` 无窗口、恢复后复核持仓）继续有效。
+
 ## D-039 人类裁决（2026-09-28）：`RECOVERED` ≠ `LIVE TRADE READY`；`fact_limit` 只是 current-state 窗口
 
 **日期**：2026-09-28
@@ -631,3 +640,21 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
 - **`fact_limit` 只是 current-state 恢复窗口**：`allOrders` / `userTrades` 的限窗只能支撑
   「当前状态收敛」；startup baseline 只兜当前余额 / 持仓，**不兜**历史 PnL、历史手续费、funding 与 drawdown。
   未来若需要历史重建，必须走独立能力（独立提案），不得放宽 `fact_limit` 冒充历史恢复。
+
+## D-040 恢复契约收口：严格 ownership / 三分类成交 / 断线自动失效（P0001.9.3.1）
+
+**日期**：2026-09-28
+**状态**：生效
+
+1. **ownership 必须严格**：`OWNED_CLIENT_ORDER_ID_PREFIX = "probex-"`，且前缀后至少一个字符。
+   `probexevil-1` / `probex2` / `probex` / `probex-` 一律不是自有订单（P0001.9.3.1 SC-1）。
+   影响面：**未平挂单**若匹配碰撞前缀 ⇒ `BLOCKED: FOREIGN_OPEN_ORDER`（更早 fail closed）；
+   碰撞前缀的**成交** ⇒ 记入 `foreign_fills`（不 adopt、不按 0）。
+2. **成交三分类**（替换 D-038 的两分类）：自己的 / 已验证外部 / 不可归属；
+   只有「不可归属」触发 `BLOCKED: UNRESOLVED_FILLS`，且该判定发生在 reconcile 与 baseline **之前**
+   （阻塞时不得改账本、不得 adopt）。
+3. **断线自动失效必须有真实接线**：`PrivateAccountRuntime.subscribe_discontinuity(listener)` 在
+   断线重连 / listenKey 重建 / `stop()` 时广播 reason（`discontinuity_events` 可审计）；
+   `StartupRecovery.bind(runtime)` 订阅后**自动**回落 `NOT_RECOVERED`。
+   测试**不得**用 `recovery.invalidate()` 模拟接线（SC-4）；重连后必须重走完整恢复流程才可 `RECOVERED`（SC-5）。
+4. **不新增架构层、不引入依赖、不放宽任何既有 fail-closed 语义**；`fact_limit` 仍然只是 current-state 窗口（D-039）。

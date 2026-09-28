@@ -15,7 +15,7 @@ Provider identity 核实（决策 D，提案 §1.7）与授权探测 P1/P2（提
   P2 单条 `noul` 探针 → HTTP 200、604 ms、`answers.ok={type:noul,noul:0.99}`、cost 1.1634e-05。
 - **热路径 Jev 的真实目标应为 `/api/v1/systemone`**；实现 typed provider 需新提案（尚未授权、尚未改代码）。
 
-`context/status.json` 的 `currentProposal` 为 `null`（**P0001.9.3 已收口**，等待下一条正式 Proposal）。
+`context/status.json` 的 `currentProposal` 为 `null`（**P0001.9.3.1 已收口**，等待下一条正式 Proposal）。
 
 ## 已完成能力
 
@@ -205,6 +205,21 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
   `entryPrice` 必须为 0；有仓 mark 必须 >0」；并窄修 `reconciliation._apply_status` 缺失 `avg_fill_price` 的既有缺口。
 - 全量测试 **1387 passed / 0 failed / 19 skipped**；`context/status.json.currentProposal` 回到 `null`。
 
+### P0001.9.3.1 — Recovery Contract Closure（已完成）
+
+修复 P0001.9.3 审计发现的三处契约缺口（不含新能力）：
+
+- **严格 ownership**：`OWNED_CLIENT_ORDER_ID_PREFIX = "probex-"`（前缀 + 至少一个字符）；
+  `probexevil-1` / `probex2` / `probex` / `probex-` 全部归为 external（碰撞前缀的未平挂单 ⇒ `FOREIGN_OPEN_ORDER`）。
+- **成交三分类**（替换原两分类）：自己的 → reconcile；已验证外部 → `foreign_fills` 计数；
+  **不可归属** → `BLOCKED: UNRESOLVED_FILLS`，判定发生在 reconcile/baseline **之前**（阻塞时不改账本、不 adopt）。
+- **断线自动失效真实接线**：`PrivateAccountRuntime.subscribe_discontinuity(listener)`（断线重连 / listenKey 重建 /
+  `stop()` 广播 + `discontinuity_events` 审计）；`StartupRecovery.bind(runtime)` 订阅后自动回落 `NOT_RECOVERED`；
+  测试不再手工调用 `invalidate()` 模拟接线。
+- **真实测试网证据（SC-3）**：10 单中 5 自有（`probex-audit-*`）/ 5 外部（`web_*`）；7 笔成交 → 自有 2、
+  已验证外部 5、**不可归属 0** ⇒ `RECOVERED`（`foreign_fills=5`、`unresolved_fill_order_ids=[]`、`synthetic_fills=0`）。
+- 全量测试 **1405 passed / 0 failed / 19 skipped**；`context/status.json.currentProposal` 回到 `null`。
+
 ## 进行中能力
 
 无。
@@ -212,7 +227,7 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 
 ## 下一步
 
-- **无授权中的步骤**：P0001.9.3 已收口，`currentProposal = null`。下一阶段必须由人类/设计方落盘正式 Proposal，
+- **无授权中的步骤**：P0001.9.3 / P0001.9.3.1 均已收口，`currentProposal = null`。下一阶段必须由人类/设计方落盘正式 Proposal，
   再由人类下达「读取 … 实施」指令后才可实现（不得从 roadmap / handoff 推断任务）。
 - 待人类决定（不阻塞）：① adverse-selection 阈值 X（bps）；② 五分类 bucket 数值分档；
   ③ `RiskLimits` 全部限额数值；④ `MakerPolicyConfig` 生产数值；⑤ 是否补验**主网**私有链路（含 D-036 时钟校正口径）；
@@ -240,7 +255,8 @@ Git 仓库已初始化；P0001.1 – P0001.9.2.1 均已提交并推送（每个 
 | `c247fff` | P0001.4 Jev Prediction Runtime | 495 passed |
 | `2d7d508` | P0001.4.1 OpenRouter transport | 541 passed（4 skipped） |
 | `7053a70` … `aeb4ab8` | P0001.6 – P0001.9.2（含 1.9.1 / 1.9.1.1 / 1.9.2.1） | 1190 – 1327 passed |
-| （未提交） | **P0001.9.3** Startup Recovery + Account Reconciliation | 工作树 + 独立快照 1387 passed（见提案 §1.5） |
+| `1be451a` | **P0001.9.3** Startup Recovery + Account Reconciliation | 1387 passed（含 P0001.9.3.1 前的基线） |
+| （未提交） | **P0001.9.3.1** Recovery Contract Closure | 工作树 + 独立快照 1405 passed（见提案 §1.5） |
 
 `CLAUDE.md` 与 `.gitignore` 被使用者全局 gitignore（`~/.gitignore_global`）排除，未纳入版本控制。
-P0001.9.3 的改动**未提交**（人类本轮指令只授权实施，未授权 commit/push，见 CLAUDE.md §28）。
+P0001.9.3.1 的改动**未提交**（人类本轮指令只授权实施，未授权 commit/push，见 CLAUDE.md §28）。

@@ -22,6 +22,7 @@ P0001.9.1.1 Futures Depth Continuity Verification ← 已完成（pu 判据修�
 P0001.9.2 Private Account + User Stream Validation ← 已完成（TESTNET_PRIVATE_VALIDATED / MAINNET_PRIVATE_NOT_YET_VALIDATED）
 P0001.9.2.1 Private Connectivity Contract Audit & CCXT Fit ← 已完成（裁决 KEEP_NATIVE_PRIVATE）
 P0001.9.3 Startup Recovery + Account Reconciliation ← 已完成（测试网真实只读验收 PASS）
+P0001.9.3.1 Recovery Contract Closure             ← 已完成（ownership / unresolved fills / 断线接线收口）
 P0001.10  Product API / UI / Reports       ← 未启动（待正式 Proposal）
 ```
 
@@ -54,5 +55,6 @@ P0001.10  Product API / UI / Reports       ← 未启动（待正式 Proposal）
 | P0001.9.1.1 | 已完成（Futures 连续性判据 = `pu == prev.u`；锚点用跨锚点条件） |
 | P0001.9.2 | 已完成（测试网真实事件链 + 状态串 `TESTNET_PRIVATE_VALIDATED / MAINNET_PRIVATE_NOT_YET_VALIDATED`） |
 | P0001.9.2.1 | 已完成（裁决 `KEEP_NATIVE_PRIVATE`） |
-| P0001.9.3 | 已完成（测试网真实验收 PASS：RECOVERED / 无 synthetic Fill / foreign 0） |
+| P0001.9.3 | 已完成（测试网真实验收 PASS：RECOVERED / 无 synthetic Fill / foreign open 0） |
+| P0001.9.3.1 | 已完成（严格 ownership + `BLOCKED: UNRESOLVED_FILLS` + runtime→recovery 自动失效接线） |
 | P0001.10 | 未开始（待正式提案落盘） |

@@ -159,6 +159,8 @@ class PrivateAccountRuntime:
         self._latest_snapshot: AccountSnapshotObservation | None = None
         self._latest_position: PositionObservation | None = None
         self._continuity_assumed = False
+        self._discontinuity_listeners: list[Callable[[str], None]] = []
+        self._discontinuity_events: list[str] = []
 
     # ------------------------------------------------------------------ 只读状态
 
@@ -214,6 +216,27 @@ class PrivateAccountRuntime:
             server_time_offset_ms=counters.server_time_offset_ms,
             last_error=counters.last_error,
         )
+
+    @property
+    def discontinuity_events(self) -> tuple[str, ...]:
+        """真实发生过的连续性丢失事件（P0001.9.3.1 SC-4 的可审计证据）。"""
+        return tuple(self._discontinuity_events)
+
+    def subscribe_discontinuity(self, listener: Callable[[str], None]) -> None:
+        """订阅「stream 连续性丢失」事件（断线重连 / listenKey 重建 / 停止）。
+
+        P0001.9.3.1 SC-4：`StartupRecovery` 通过该契约**自动**失效，而不是靠调用方记得手工调用
+        `invalidate()`。listener 收到的人类可读 reason 只含事件类型，不含任何凭据。
+        """
+        if not callable(listener):
+            raise PrivateFormatError("subscribe_discontinuity(listener) requires a callable")
+        self._discontinuity_listeners.append(listener)
+
+    def _notify_discontinuity(self, reason: str) -> None:
+        """记录并广播一次连续性丢失（先落审计，再回调；回调异常不得破坏运行时）。"""
+        self._discontinuity_events.append(reason)
+        for listener in list(self._discontinuity_listeners):
+            listener(reason)
 
     def lag_within_threshold(self) -> bool:
         """SC-13 判定：已采样且 median 不超过配置阈值（样本不足视为未达标，不猜）。"""
@@ -301,6 +324,7 @@ class PrivateAccountRuntime:
         self._stream_connected_at_ms = None
         self._continuity_assumed = False
         self.lifecycle.stop()
+        self._notify_discontinuity("runtime stopped")
 
     def pump_once(self, *, timeout_s: float, max_messages: int = 1) -> PrivateBatch:
         """处理当前可用的事件（含 keepalive 调度）；超时返回 `timed_out=True`。"""
@@ -366,6 +390,7 @@ class PrivateAccountRuntime:
         """listenKey 失效（TTL 或 listenKeyExpired）：重建 + 重连，**不假设状态连续**。"""
         self.counters.listen_key_expired_count += 1
         self._continuity_assumed = False
+        self._notify_discontinuity(f"listenKey recreated: {reason}")
         if self._ws is not None:
             self._ws.close()
             self._ws = None
@@ -452,6 +477,7 @@ class PrivateAccountRuntime:
         """socket 断开：重连（复用未过期的 listenKey），并放弃 continuity 假设。"""
         self.counters.disconnect_count += 1
         self._continuity_assumed = False
+        self._notify_discontinuity("user data stream disconnected; reconnecting")
         if self._ws is not None:
             self._ws.close()
             self._ws = None
