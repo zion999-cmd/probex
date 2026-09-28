@@ -226,3 +226,31 @@ cost ≈1.1e-04/call、五分类求和 = 1、Noul 无 confidence（详见提案 
   未配置 `max_leverage` 时可用余额检查按 1.0（不允许杠杆）。
 - 时间边界（`now_ms` / `day_start_ts`）由调用方注入；`portfolio/**` 与 `risk/**` 不 import `time`/`datetime`。
 **影响**：真实下单、order lifecycle、partial-fill 状态机、多币种换算、强平价推导均属后续阶段（P0001.6+）。
+
+**人类裁决（2026-09-28，P0001.6 启动前）**：空仓无 mark 不允许新增仓位（保留 fail-closed）；
+反手按 INCREASING（保留，Policy 可自行拆「先平后开」，Risk 不猜意图）；kill switch 拆三态（在 P0001.6 实现）。
+
+## D-021 Execution 层契约（订单生命周期 / Paper 执行）
+
+**日期**：2026-09-28
+**状态**：生效（P0001.6 完成）
+**决策**：
+- `Order` 是不可变快照，`OrderStatus` 九态；终态（FILLED / CANCELED / FAILED / EXPIRED）不可回退，
+  `LOST` 是「本地不确定」而非事实终态，只能由 reconciliation 恢复。
+- **cancel request ≠ cancel success**：只有 `OrderCanceled` 进 CANCELED；PENDING_CANCEL 期间成交合法。
+- **late fill**：终态之后、成交时间 ≤ 终态时间的 fill 必须记账（终态不变，更新 `final_executed_quantity`）；
+  超出窗口或超量一律拒绝（fail closed）。
+- **双层去重**：execution 层 `(symbol, execution_id)` / `(symbol, trade_id)` + accounting 的 `FillLedger`。
+- **cancel-before-replace**：旧单必须确认终态才允许下新单（`OrderManager.replace`）。
+- **pending exposure**：active 订单未成交部分按**订单自身价格**计入 `open_order_exposure`（最坏情形），
+  由 `ExecutionEngine.snapshot()` 注入 RiskSnapshot（P0001.5 的 `open_order_exposure` 输入）。
+- **记账路径唯一**：`ExecutionEvent → OrderTracker → canonical Fill → AccountingCore`；
+  `ExecutionEngine` 是唯一接触 Accounting 的执行层组件。
+- **kill switch 三态**：`NORMAL` / `REDUCE_ONLY`（只放行真正降暴露）/ `HALT_ALL`（禁 submit、**允许 cancel**）；
+  P0001.5 的 `kill_switch: bool` 兼容为 HALT_ALL。
+- **adapter 接口第一版同步**：`ExecutionAdapter.submit/cancel/poll/open_orders/recent_fills`。
+  真实 Binance adapter（P0001.9）将引入异步 / user-stream 桥接，属新契约决策，不改 tracker 语义。
+- **restart/recovery 只做逻辑恢复**：load local orders + 外部 open orders/fills → `reconcile`；
+  `converged` 表示无需纠正动作（补记 fill 不算纠正）。
+**影响**：盘口撮合（P0001.8）、Maker 报价（P0001.7）、真实交易所 reconciliation 与持久化（P0001.9+）均未实现。
+

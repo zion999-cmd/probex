@@ -8,6 +8,8 @@
 2. **暴露分类**（INCREASING / REDUCING / REVERSING）
    - `reduce_only` 但实际会增大暴露 → `REDUCE_ONLY_WOULD_INCREASE`
 3. **降低暴露的 reduce-only 订单**：硬检查通过即 ALLOW（不受限额约束，§11 的明确要求）
+3b. **kill switch REDUCE_ONLY**：只放行真正降低暴露的订单
+
 4. **增加暴露的订单**（含反手）：`POSITION_LIMIT` → `NOTIONAL_LIMIT` → `OPEN_ORDER_EXPOSURE_LIMIT` →
    `INSUFFICIENT_AVAILABLE_BALANCE` → `DAILY_LOSS_LIMIT` → `DRAWDOWN_LIMIT` → `LEVERAGE_LIMIT` →
    `LIQUIDATION_DISTANCE`
@@ -22,6 +24,7 @@ from __future__ import annotations
 from risk.limits import RiskLimits
 from risk.types import (
     ExposureClass,
+    KillSwitchMode,
     OrderProposal,
     RiskDecision,
     RiskDecisionType,
@@ -69,14 +72,16 @@ class RiskGate:
             raise TypeError("book_healthy must be a bool")
         applied: list[str] = []
 
-        # ---- 1. 硬检查（reduce-only 也不能绕过） ----
         hard = self._hard_checks(proposal, snapshot, book_healthy=book_healthy, applied=applied)
         if hard is not None:
             return hard
 
-        # ---- 2. 暴露分类 ----
         exposure = classify_exposure(proposal, snapshot)
         applied.append(f"exposure_class:{exposure.value}")
+
+        kill_switch_decision = self._check_reduce_only_mode(proposal, exposure=exposure, applied=applied)
+        if kill_switch_decision is not None:
+            return kill_switch_decision
 
         if proposal.reduce_only and exposure is not ExposureClass.REDUCING:
             return self._reject(
@@ -86,15 +91,19 @@ class RiskGate:
                 applied,
             )
 
-        # ---- 3. 降低暴露的 reduce-only 订单：只要硬检查通过就放行 ----
         if proposal.reduce_only and exposure is ExposureClass.REDUCING:
             return self._allow_reduction(proposal, snapshot, applied)
 
-        # ---- 4. 增加暴露（含反手）：逐项限额 ----
         limit_decision = self._increasing_exposure_checks(proposal, snapshot, exposure=exposure, applied=applied)
         if limit_decision is not None:
             return limit_decision
 
+        return self._allow_increase(proposal, snapshot, exposure=exposure, applied=applied)
+
+    @staticmethod
+    def _allow_increase(
+        proposal: OrderProposal, snapshot: RiskSnapshot, *, exposure: ExposureClass, applied: list[str]
+    ) -> RiskDecision:
         return RiskDecision(
             decision=RiskDecisionType.ALLOW,
             reason_code=None,
@@ -106,7 +115,18 @@ class RiskGate:
             checks_applied=tuple(applied),
         )
 
-    # ------------------------------------------------------------------ 内部
+    def _check_reduce_only_mode(
+        self, proposal: OrderProposal, *, exposure: ExposureClass, applied: list[str]
+    ) -> RiskDecision | None:
+        if self._limits.effective_kill_switch_mode is not KillSwitchMode.REDUCE_ONLY:
+            return None
+        if proposal.reduce_only and exposure is ExposureClass.REDUCING:
+            return None
+        return self._reject(
+            RiskReasonCode.KILL_SWITCH,
+            "kill switch REDUCE_ONLY: only orders that truly reduce exposure are allowed",
+            applied,
+        )
 
     @staticmethod
     def _allow_reduction(
@@ -164,10 +184,11 @@ class RiskGate:
     def _check_market_data(
         self, snapshot: RiskSnapshot, *, book_healthy: bool, applied: list[str]
     ) -> RiskDecision | None:
-        if self._limits.kill_switch:
+        mode = self._limits.effective_kill_switch_mode
+        if mode is KillSwitchMode.HALT_ALL:
             return self._reject(
                 RiskReasonCode.KILL_SWITCH,
-                "kill switch is engaged (first version rejects every order, including reduce-only)",
+                "kill switch HALT_ALL: new submissions are blocked (existing orders can still be canceled)",
                 applied,
             )
         if not book_healthy:

@@ -15,6 +15,7 @@ import math
 from dataclasses import dataclass
 
 from market.events.types import Milliseconds
+from risk.types import KillSwitchMode
 
 
 def _require_positive(value: object, *, field: str) -> float:
@@ -38,7 +39,10 @@ class RiskLimits:
     max_leverage: float | None = None
     min_liquidation_distance_bps: float | None = None
     max_mark_age_ms: Milliseconds | None = None
+    #: 兼容位（P0001.5）：True 等价于 `kill_switch_mode = HALT_ALL`。
     kill_switch: bool = False
+    #: 三态语义（P0001.6）：NORMAL / REDUCE_ONLY / HALT_ALL
+    kill_switch_mode: KillSwitchMode = KillSwitchMode.NORMAL
 
     def __post_init__(self) -> None:
         for field in (
@@ -79,6 +83,13 @@ class RiskLimits:
 
         if not isinstance(self.kill_switch, bool):
             raise ValueError("RiskLimits.kill_switch must be a bool")
+        if not isinstance(self.kill_switch_mode, KillSwitchMode):
+            raise ValueError("RiskLimits.kill_switch_mode must be a KillSwitchMode")
+
+    @property
+    def effective_kill_switch_mode(self) -> KillSwitchMode:
+        """兼容位 `kill_switch=True` 一律视为 HALT_ALL（P0001.5 行为不变）。"""
+        return KillSwitchMode.HALT_ALL if self.kill_switch else self.kill_switch_mode
 
     @property
     def effective_leverage(self) -> float:
@@ -88,7 +99,7 @@ class RiskLimits:
     def enabled_checks(self) -> tuple[str, ...]:
         """已启用的限额名称（按 gate 的检查顺序）。"""
         checks: list[str] = []
-        if self.kill_switch:
+        if self.effective_kill_switch_mode is not KillSwitchMode.NORMAL:
             checks.append("kill_switch")
         if self.max_mark_age_ms is not None:
             checks.append("mark_age")

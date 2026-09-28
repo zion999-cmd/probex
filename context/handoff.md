@@ -1,10 +1,11 @@
 ## 当前 Proposal
 
-P0001.5 — Accounting + Risk Core：**已完成**。
+P0001.6 — Order Lifecycle + Paper Execution：**已完成**。
 
 `context/status.json` 中 `currentProposal` 为 `null`（无切换授权，等待人类指定下一 Proposal）。
 
-前序：P0001.1（`282ea61`）、P0001.2（`ac3975b`）、P0001.3（`ce2bb41`）、P0001.4（`c247fff`）、P0001.4.1（`43ead36`/`c721ecf`）、P0001.4.2（`920cb01`）。
+已提交历史：P0001.1 `282ea61`、P0001.2 `ac39975b`→`ac3975b`、P0001.3 `ce2bb41`、P0001.4 `c247fff`、
+P0001.4.1 `43ead36`/`c721ecf`、P0001.4.2 `920cb01`、P0001.5 `1c39e26`。
 
 ## 本次新增
 
@@ -230,3 +231,29 @@ python3 -m unittest -v tests.live.test_openrouter_live
 
 **下一步**：等待人类指定 Proposal（路线下一阶段 P0001.6 Paper Execution + Order Lifecycle，需先落盘独立提案）。
 本轮改动**未提交**（本轮仅授权提交 P0001.4.2）。
+
+
+## P0001.6 交付摘要（2026-09-28）
+
+**新增**
+- `execution/`：`types.py`（Order / OrderStatus / ExternalOrder / ExternalFill / 错误）、`events.py`（六类事件）、
+  `tracker.py`（OrderTracker + TrackerUpdate + ExecutionEventOutcome）、`reconciliation.py`、`manager.py`、`engine.py`、
+  `adapters/{base,paper}.py`
+- `risk/`：`KillSwitchMode`（三态）+ `RiskLimits.kill_switch_mode` + `RiskGate` 的 REDUCE_ONLY 分支
+- 测试：`tests/unit/{test_order,test_order_tracker,test_execution_events,test_paper_broker,test_execution_isolation}.py`、
+  `tests/integration/{test_paper_execution,test_execution_accounting,test_execution_risk}.py`、
+  `tests/fault/{test_cancel_race,test_late_fill,test_duplicate_execution,test_lost_order,test_reconciliation}.py`、
+  `tests/replay/test_execution_determinism.py`、`tests/execution_support.py`
+
+**Acceptance**：SC-1 – SC-18 全部 PASS（见提案 §2 / §2.1）。
+
+**测试**：`python3 -m unittest discover -s tests -t .` → **867 passed / 0 failed / 12 skipped**
+（unit 602、integration 80、fault 137、replay 36、live 12 skipped）。
+
+**实施中修掉的三个真实缺陷**（由测试暴露）
+1. `Order.with_status` 计算 `final_executed_quantity` 用了**转换前**的成交量；
+2. `PaperBroker.cancel` 的同步 ack 又被放进 outbox → 下一次 poll 二次投递；
+3. `PaperBroker.fill` 会把已 CANCELED 的外部状态改回 PARTIALLY_FILLED（late fill 复活终态）。
+
+**下一步**：等待人类指定 Proposal（路线下一阶段 P0001.7 Market Making / P0001.8 Fill Simulation，需先落盘独立提案）。
+本轮改动**未提交**（本轮仅授权提交 P0001.5）。

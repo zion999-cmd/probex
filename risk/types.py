@@ -24,6 +24,16 @@ class InvalidOrderProposalError(RiskError):
     """OrderProposal 构造失败。"""
 
 
+class KillSwitchMode(Enum):
+    """Kill switch 语义（P0001.6 §16 正式拆分）。"""
+
+    NORMAL = "NORMAL"
+    #: 只允许真正降低当前 exposure 的 proposal
+    REDUCE_ONLY = "REDUCE_ONLY"
+    #: 禁止新 submit（仍允许 cancel 已存在订单）
+    HALT_ALL = "HALT_ALL"
+
+
 class ExposureClass(Enum):
     """订单对暴露的影响方向（§11：提高风险与降低风险不能同等对待）。"""
 
@@ -155,6 +165,7 @@ class RiskSnapshot:
 
 __all__ = [
     "ExposureClass",
+    "KillSwitchMode",
     "InvalidOrderProposalError",
     "OrderProposal",
     "RiskDecision",

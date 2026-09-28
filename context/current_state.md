@@ -78,6 +78,20 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 - 时间边界由调用方注入（`now_ms` / `day_start_ts`）；`portfolio/**`、`risk/**` 不使用 wall-clock。
 - 确定性：同组 Fill/Funding/Mark 重放逐字段一致；重复交付（每笔两次）结果不变。
 
+### P0001.6 — Order Lifecycle + Paper Execution（已完成）
+
+- `execution/types.py`：`Order`（不可变快照）、`OrderStatus` 九态 + 转换表、`ExternalOrder` / `ExternalFill`。
+- `execution/events.py`：六类 `ExecutionEvent`。
+- `execution/tracker.py`：`OrderTracker` —— 本地状态权威；双键成交去重；cancel-pending；LOST；late fill；
+  active / recent_terminal / lost 视图；`open_order_exposure`（未成交部分按订单价格）。
+- `execution/adapters/{base,paper}.py`：`ExecutionAdapter` 契约 + `PaperBroker`（可控 accept/reject/fill/
+  duplicate/late/cancel-defer/status-update/drop-from-external + post-only 基本规则）。
+- `execution/reconciliation.py`：`reconcile(...) → ReconciliationReport(actions, converged)`（四类情形 + fail-closed 分支）。
+- `execution/manager.py`：`OrderManager`（submit / cancel / **cancel-before-replace**）。
+- `execution/engine.py`：`ExecutionEngine`（新鲜 RiskSnapshot → RiskGate → submit；事件 → tracker → canonical Fill → Accounting）。
+- `risk/`：kill switch 三态 `NORMAL / REDUCE_ONLY / HALT_ALL`（HALT_ALL 禁 submit、允许 cancel）。
+- 纪律：cancel request ≠ cancel success；终态不可回退；late fill 只更新成交事实；Execution 不 import Prediction/Jev/Strategy。
+
 ## 进行中能力
 
 无。
