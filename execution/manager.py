@@ -90,8 +90,20 @@ class OrderManager:
         return self.on_events(self.adapter.poll())
 
     def open_order_exposure(self) -> float:
-        """active 订单未成交部分的名义价值（供下一次 RiskSnapshot）。"""
-        return self.tracker.open_order_exposure()
+        """`confirmed + uncertain` 暴露（供下一次 RiskSnapshot）。"""
+        return self.tracker.total_pending_exposure()
+
+    @property
+    def confirmed_open_exposure(self) -> float:
+        return self.tracker.confirmed_open_exposure()
+
+    @property
+    def uncertain_exposure(self) -> float:
+        return self.tracker.uncertain_exposure()
+
+    @property
+    def unresolved_order_count(self) -> int:
+        return len(self.tracker.unresolved_orders())
 
     @property
     def active_orders(self) -> tuple[Order, ...]:

@@ -92,6 +92,15 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 - `risk/`：kill switch 三态 `NORMAL / REDUCE_ONLY / HALT_ALL`（HALT_ALL 禁 submit、允许 cancel）。
 - 纪律：cancel request ≠ cancel success；终态不可回退；late fill 只更新成交事实；Execution 不 import Prediction/Jev/Strategy。
 
+### P0001.6.1 — Uncertain Order Exposure（已完成）
+
+- 暴露三视图：`confirmed_open_exposure`（ACTIVE）/ `uncertain_exposure`（LOST）/ `total_pending_exposure`；
+  `RiskSnapshot.open_order_exposure` 使用总量。
+- 资料不足的订单（adopt 缺 side/quantity/price 等）→ `UnresolvedOrder`（**不按 0**）；`unresolved_order_count > 0`
+  时 RiskGate 拒绝新增暴露（`UNCERTAIN_EXPOSURE_UNKNOWN`），reduce-only 降暴露仍放行。
+- 释放条件：reconciliation 明确确认终态或补齐资料；仅「外部消失」不释放。
+- `Order` 状态机 / Accounting / late-fill 语义均未改动。
+
 ## 进行中能力
 
 无。

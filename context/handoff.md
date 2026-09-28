@@ -1,11 +1,8 @@
 ## 当前 Proposal
 
-P0001.6 — Order Lifecycle + Paper Execution：**已完成**。
+P0001.6.1 — Uncertain Order Exposure：**已完成**。
 
 `context/status.json` 中 `currentProposal` 为 `null`（无切换授权，等待人类指定下一 Proposal）。
-
-已提交历史：P0001.1 `282ea61`、P0001.2 `ac39975b`→`ac3975b`、P0001.3 `ce2bb41`、P0001.4 `c247fff`、
-P0001.4.1 `43ead36`/`c721ecf`、P0001.4.2 `920cb01`、P0001.5 `1c39e26`。
 
 ## 本次新增
 
@@ -257,3 +254,23 @@ python3 -m unittest -v tests.live.test_openrouter_live
 
 **下一步**：等待人类指定 Proposal（路线下一阶段 P0001.7 Market Making / P0001.8 Fill Simulation，需先落盘独立提案）。
 本轮改动**未提交**（本轮仅授权提交 P0001.5）。
+
+
+## P0001.6.1 交付摘要（2026-09-28）
+
+**新增**：`tests/fault/test_uncertain_exposure.py`（15 条：SC-1 – SC-5 + 快照一致性校验）
+**修改**：`execution/tracker.py`（暴露三视图 + `UnresolvedOrder`）、`execution/reconciliation.py`（adopt 失败 → 记录 unresolved；
+确认/补齐 → 清除）、`execution/manager.py`、`execution/engine.py`、`risk/types.py`（快照三字段 + `UNCERTAIN_EXPOSURE_UNKNOWN`）、
+`risk/snapshot.py`（三视图入参 + 自洽校验）、`risk/gate.py`（increasing-only 的 `_check_uncertain_exposure`）、
+`risk/limits.py`（`enabled_checks`）、`tests/unit/test_order_tracker.py`、`tests/fault/test_lost_order.py`（旧语义断言按新提案改写）、
+`tests/unit/test_risk_gate.py`（`enabled_checks` 期望）
+
+**Acceptance**：SC-1 – SC-6 全部 PASS（见提案 §2 / §2.1）。
+
+**测试**：`python3 -m unittest discover -s tests -t .` → **883 passed / 0 failed / 12 skipped**
+（unit 603、integration 80、fault 152、replay 36、live 12 skipped）。
+
+**下一步**：等待人类指定 Proposal（路线下一阶段 P0001.7 Market Making / P0001.8 Fill Simulation）。
+本轮改动**未提交**（本轮未获提交授权）。
+
+

@@ -254,3 +254,18 @@ cost ≈1.1e-04/call、五分类求和 = 1、Noul 无 confidence（详见提案 
   `converged` 表示无需纠正动作（补记 fill 不算纠正）。
 **影响**：盘口撮合（P0001.8）、Maker 报价（P0001.7）、真实交易所 reconciliation 与持久化（P0001.9+）均未实现。
 
+## D-022 不确定订单暴露：LOST 与「资料不足」都必须继续占用风险额度
+
+**日期**：2026-09-28
+**状态**：生效（P0001.6.1 完成；取代 D-021 中「LOST 不计入 pending exposure」的取舍）
+**决策**：
+- Exposure 拆三视：`confirmed_open_exposure`（ACTIVE）+ `uncertain_exposure`（LOST）= `total_pending_exposure`；
+  `RiskSnapshot.open_order_exposure` 使用 `total_pending_exposure`。
+- `OrderTracker.open_order_exposure()` 保留为 `total_pending_exposure()` 的兼容别名。
+- 资料不足、无法量化暴露的订单（例如 adopt 缺 side/quantity/price）**不按 0 处理**：记录为 `UnresolvedOrder`，
+  `unresolved_order_count > 0` 时 RiskGate 拒绝**新增暴露**（`UNCERTAIN_EXPOSURE_UNKNOWN`），放行 reduce-only。
+- 释放条件：只有 reconciliation 明确确认（CANCELED / FILLED / EXPIRED、恢复成功或资料补齐）才释放；
+  仅「外部不再列出」不释放。
+- 快照入参必须自洽（`total == confirmed + uncertain`），否则 `ValueError`（fail closed）。
+**影响**：LOST 期间新暴露会被更保守地挡住 —— 这是刻意的 fail-closed 取舍（宁可少开仓，不可漏算风险）。
+

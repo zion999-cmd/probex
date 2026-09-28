@@ -13,6 +13,7 @@ P0001.4.1 Real Jev Transport Validation         ← 已完成（CONTRACT_MISMATC
 P0001.4.2 Native Typed Jev Provider             ← 已完成（热路径 = /v1/systemone）
 P0001.5   Accounting + Risk Core                 ← 已完成
 P0001.6   Order Lifecycle + Paper Execution      ← 已完成
+P0001.6.1 Uncertain Order Exposure               ← 已完成
 P0001.5   Accounting + Risk
 P0001.6   Paper Execution + Order Lifecycle
 P0001.7   Market Making
@@ -34,5 +35,6 @@ P0001.10  Product API / UI / Reports
 | P0001.4.1 | 已完成（结论：`OpenRouterTransport` VALIDATED；`typesafe/jev-router` REJECTED_FOR_NOW） |
 | P0001.4.2 | 已完成（typed System One 热路径；真实 latency 409–462 ms） |
 | P0001.5 | 已完成（Fill 事实源 + 账本 + RiskGate） |
-| P0001.6 | 已完成（订单生命周期 + PaperBroker + reconciliation；867 条测试通过） |
+| P0001.6 | 已完成（订单生命周期 + PaperBroker + reconciliation） |
+| P0001.6.1 | 已完成（LOST/资料不足暴露 fail-closed） |
 | P0001.5 – P0001.10 | 未开始（待各自独立子提案落盘） |

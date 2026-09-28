@@ -164,6 +164,28 @@ class TrackerViewsTest(unittest.TestCase):
         with self.assertRaises(IllegalOrderTransition):
             self.tracker.mark_lost(order.client_order_id, timestamp=BASE_TS + 2, reason="x")
 
+    def test_exposure_split_and_unresolved_marker(self) -> None:
+        active = self.tracker.create(_proposal(quantity=2.0, price=100.0), timestamp=BASE_TS)
+        self.tracker.on_event(OrderAccepted(active.client_order_id, "ex-1", BASE_TS + 1))
+        lost = self.tracker.create(_proposal(quantity=1.0, price=50.0), timestamp=BASE_TS)
+        self.tracker.mark_lost(lost.client_order_id, timestamp=BASE_TS + 2, reason="ack timeout")
+
+        self.assertAlmostEqual(self.tracker.confirmed_open_exposure(), 200.0)
+        self.assertAlmostEqual(self.tracker.uncertain_exposure(), 50.0)
+        self.assertAlmostEqual(self.tracker.total_pending_exposure(), 250.0)
+        self.assertAlmostEqual(self.tracker.open_order_exposure(), 250.0)  # 兼容别名
+        self.assertEqual([order.client_order_id for order in self.tracker.uncertain_orders()], [lost.client_order_id])
+        self.assertFalse(self.tracker.has_unknown_exposure)
+
+        self.tracker.note_unresolved_order("probex-s1-000999", reason="adopt failed")
+        self.assertTrue(self.tracker.has_unknown_exposure)
+        self.assertEqual([item.client_order_id for item in self.tracker.unresolved_orders()], ["probex-s1-000999"])
+        self.assertTrue(self.tracker.clear_unresolved_order("probex-s1-000999"))
+        self.assertFalse(self.tracker.has_unknown_exposure)
+
+        with self.assertRaises(ValueError):
+            self.tracker.note_unresolved_order("", reason="x")
+
     def test_pending_exposure_covers_partial_orders(self) -> None:
         order = self.tracker.create(_proposal(quantity=2.0, price=100.0), timestamp=BASE_TS)
         self.tracker.on_event(OrderAccepted(order.client_order_id, "ex-1", BASE_TS + 1))

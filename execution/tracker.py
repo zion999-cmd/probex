@@ -76,6 +76,14 @@ class TrackerUpdate:
         return self.fill is not None
 
 
+@dataclass(frozen=True, slots=True)
+class UnresolvedOrder:
+    """资料不足、无法量化暴露的订单（fail closed：假设它仍然可能存在）。"""
+
+    client_order_id: str
+    reason: str
+
+
 @dataclass
 class OrderTracker:
     """本地订单状态权威。"""
@@ -90,6 +98,7 @@ class OrderTracker:
     duplicate_fill_count: int = 0
     late_fill_count: int = 0
     rejected_fill_count: int = 0
+    _unresolved: dict[str, UnresolvedOrder] = field(default_factory=dict)
 
     # ------------------------------------------------------------------ 创建
 
@@ -164,9 +173,47 @@ class OrderTracker:
         """需要 reconciliation 的订单。"""
         return tuple(order for order in self.orders if order.is_lost)
 
-    def open_order_exposure(self) -> float:
-        """active 订单未成交部分的名义价值（按订单价格计的最坏情形）。"""
+    def uncertain_orders(self) -> tuple[Order, ...]:
+        """LOST 订单：状态不确定，但风险必须假设它仍然存在。"""
+        return tuple(order for order in self.orders if order.is_lost)
+
+    def confirmed_open_exposure(self) -> float:
+        """ACTIVE 订单未成交部分的名义价值（按订单价格计的最坏情形）。"""
         return float(sum(order.notional for order in self.active()))
+
+    def uncertain_exposure(self) -> float:
+        """LOST 订单未成交部分的名义价值（`LOST` 不是终态，继续占用风险额度）。"""
+        return float(sum(order.notional for order in self.uncertain_orders()))
+
+    def total_pending_exposure(self) -> float:
+        """`confirmed + uncertain` —— 这是 RiskSnapshot 应当使用的暴露。"""
+        return self.confirmed_open_exposure() + self.uncertain_exposure()
+
+    def open_order_exposure(self) -> float:
+        """兼容别名：等于 `total_pending_exposure()`（P0001.6.1 起含 uncertain）。"""
+        return self.total_pending_exposure()
+
+    # ------------------------------------------------------------------ 资料不足的订单
+
+    def note_unresolved_order(self, client_order_id: str, *, reason: str) -> UnresolvedOrder:
+        """记录一个「已知存在但资料不足」的订单：暴露无法量化 → Risk 必须 fail closed。"""
+        if not isinstance(client_order_id, str) or not client_order_id:
+            raise ValueError("client_order_id must be a non-empty string")
+        entry = UnresolvedOrder(client_order_id=client_order_id, reason=reason or "insufficient order data")
+        self._unresolved[client_order_id] = entry
+        return entry
+
+    def clear_unresolved_order(self, client_order_id: str) -> bool:
+        """资料补齐（或 operator 确认）之后释放该标记。返回是否确有该标记。"""
+        return self._unresolved.pop(client_order_id, None) is not None
+
+    def unresolved_orders(self) -> tuple[UnresolvedOrder, ...]:
+        return tuple(self._unresolved[key] for key in sorted(self._unresolved))
+
+    @property
+    def has_unknown_exposure(self) -> bool:
+        """是否存在无法量化的订单暴露（→ RiskGate 必须拒绝新增暴露）。"""
+        return bool(self._unresolved)
 
     def pending_unacked(self, *, now_ms: Milliseconds, timeout_ms: Milliseconds) -> tuple[Order, ...]:
         """超时仍停留在 PENDING_CREATE 的订单（需要标记 LOST 或 reconcile）。"""
@@ -420,4 +467,5 @@ __all__ = [
     "ExecutionEventOutcome",
     "OrderTracker",
     "TrackerUpdate",
+    "UnresolvedOrder",
 ]

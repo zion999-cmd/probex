@@ -119,7 +119,7 @@ class ExecutionEngine:
     # ------------------------------------------------------------------ 快照
 
     def snapshot(self, symbol: str, *, now_ms: Milliseconds) -> RiskSnapshot:
-        """构建新鲜快照：pending exposure 来自 manager 的 active 订单（§15）。
+        """构建新鲜快照：pending exposure = confirmed(ACTIVE) + uncertain(LOST)（§15 / P0001.6.1）。
 
         mark price 由调用方通过 `AccountingCore.update_mark_price` 注入（本类不隐式改账户状态）。
         """
@@ -129,6 +129,9 @@ class ExecutionEngine:
             symbol=symbol,
             now_ms=now_ms,
             open_order_exposure=self.manager.open_order_exposure(),
+            confirmed_open_exposure=self.manager.confirmed_open_exposure,
+            uncertain_exposure=self.manager.uncertain_exposure,
+            unresolved_order_count=self.manager.unresolved_order_count,
             liquidation=liquidation,
             day_start_ts=self.day_start_fn(now_ms),
         )

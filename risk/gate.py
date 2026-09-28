@@ -235,6 +235,7 @@ class RiskGate:
         projected_notional = abs(projected_qty) * mark
 
         for check in (
+            self._check_uncertain_exposure,
             self._check_position_limits,
             self._check_open_order_and_balance,
             self._check_loss_limits,
@@ -251,6 +252,26 @@ class RiskGate:
             if decision is not None:
                 return decision
         return None
+
+    def _check_uncertain_exposure(
+        self,
+        proposal: OrderProposal,
+        snapshot: RiskSnapshot,
+        *,
+        projected_qty: float,  # noqa: ARG002 - 统一签名
+        projected_notional: float,  # noqa: ARG002 - 统一签名
+        applied: list[str],
+    ) -> RiskDecision | None:
+        """资料不足的订单暴露无法量化 → 不允许新增暴露（P0001.6.1；reduce-only 降暴露仍放行）。"""
+        if snapshot.unresolved_order_count <= 0:
+            return None
+        applied.append("uncertain_exposure")
+        return self._reject(
+            RiskReasonCode.UNCERTAIN_EXPOSURE_UNKNOWN,
+            f"{snapshot.unresolved_order_count} order(s) have insufficient data to size exposure; "
+            "assume they exist until reconciliation confirms otherwise (fail closed)",
+            applied,
+        )
 
     def _check_position_limits(
         self,

@@ -163,6 +163,7 @@ def _reconcile_local_orders(
 
         if order.is_lost:
             _apply_status(tracker, order, external, timestamp=timestamp)
+            tracker.clear_unresolved_order(order.client_order_id)
             actions.append(
                 ReconciliationAction(
                     ReconciliationActionKind.RESTORED, order.client_order_id, external.status.value
@@ -173,6 +174,9 @@ def _reconcile_local_orders(
         correction = _correct_order(tracker, order, external, timestamp=timestamp)
         if correction is not None:
             actions.append(correction)
+        if not correction or correction.kind is not ReconciliationActionKind.ADOPT_REJECTED:
+            # 外部事实已确认（终态或一致）→ 释放该订单的「资料不足」标记
+            tracker.clear_unresolved_order(order.client_order_id)
     return actions
 
 
@@ -237,24 +241,11 @@ def _apply_status(
 def _adopt(
     tracker: OrderTracker, external: ExternalOrder, *, timestamp: Milliseconds, venue: Venue
 ) -> ReconciliationAction:
-    if external.quantity is None or external.quantity <= 0.0:
-        return ReconciliationAction(
-            ReconciliationActionKind.ADOPT_REJECTED,
-            external.client_order_id,
-            "external order has no quantity; cannot adopt safely (fail closed)",
-        )
-    if external.filled_quantity > 0.0 and external.avg_fill_price <= 0.0:
-        return ReconciliationAction(
-            ReconciliationActionKind.ADOPT_REJECTED,
-            external.client_order_id,
-            "external order has fills but no avg_fill_price; cannot adopt safely (fail closed)",
-        )
-    if external.side is None or external.price is None or external.price <= 0.0:
-        return ReconciliationAction(
-            ReconciliationActionKind.ADOPT_REJECTED,
-            external.client_order_id,
-            "external order has no usable side/price; cannot adopt safely (fail closed)",
-        )
+    blocker = _adopt_blocker(external)
+    if blocker is not None:
+        # P0001.6.1：资料不足时**不按 0 处理**，而是记录为不确定暴露 → Risk 必须 fail closed
+        tracker.note_unresolved_order(external.client_order_id, reason=blocker)
+        return ReconciliationAction(ReconciliationActionKind.ADOPT_REJECTED, external.client_order_id, blocker)
     try:
         tracker.register(
             Order(
@@ -273,12 +264,25 @@ def _adopt(
             )
         )
     except IllegalOrderTransition as exc:  # 已存在 / 数据非法 → 如实报告
+        tracker.note_unresolved_order(external.client_order_id, reason=str(exc))
         return ReconciliationAction(
             ReconciliationActionKind.ADOPT_REJECTED, external.client_order_id, str(exc)
         )
+    tracker.clear_unresolved_order(external.client_order_id)
     return ReconciliationAction(
         ReconciliationActionKind.ADOPTED, external.client_order_id, external.status.value
     )
+
+
+def _adopt_blocker(external: ExternalOrder) -> str | None:
+    """返回无法 adopt 的原因；None 表示资料齐备。"""
+    if external.filled_quantity > 0.0 and external.avg_fill_price <= 0.0:
+        return "external order has fills but no avg_fill_price; cannot adopt safely (fail closed)"
+    if external.side is None or external.price is None or external.price <= 0.0:
+        return "external order has no usable side/price; cannot adopt safely (fail closed)"
+    if external.quantity is None or external.quantity <= 0.0:
+        return "external order has no quantity; cannot adopt safely (fail closed)"
+    return None
 
 
 __all__ = [

@@ -121,7 +121,7 @@ class OrderProposalTest(unittest.TestCase):
 class RiskLimitsTest(unittest.TestCase):
     def test_defaults_are_disabled(self) -> None:
         limits = RiskLimits()
-        self.assertEqual(limits.enabled_checks(), ("available_balance",))
+        self.assertEqual(limits.enabled_checks(), ("uncertain_exposure", "available_balance"))
         self.assertEqual(limits.effective_leverage, 1.0)
 
     def test_validation(self) -> None:
@@ -158,6 +158,7 @@ class RiskLimitsTest(unittest.TestCase):
                 "position_qty",
                 "position_notional",
                 "open_order_exposure",
+                "uncertain_exposure",
                 "available_balance",
                 "leverage",
                 "daily_loss",

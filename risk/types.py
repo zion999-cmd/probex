@@ -67,6 +67,8 @@ class RiskReasonCode(Enum):
     # 已配置限额但数据缺失 → fail closed
     MISSING_DAILY_PNL = "MISSING_DAILY_PNL"
     MISSING_LIQUIDATION_INFO = "MISSING_LIQUIDATION_INFO"
+    #: 存在资料不足、无法量化的订单暴露 → 不允许新增暴露（P0001.6.1）
+    UNCERTAIN_EXPOSURE_UNKNOWN = "UNCERTAIN_EXPOSURE_UNKNOWN"
 
 
 class RiskDecisionType(Enum):
@@ -147,6 +149,7 @@ class RiskSnapshot:
     position_notional: float | None
     gross_exposure: float | None
     net_exposure: float | None
+    #: `confirmed + uncertain`（P0001.6.1）
     open_order_exposure: float
     available_balance: float
     realized_pnl_today: float | None
@@ -161,6 +164,12 @@ class RiskSnapshot:
     trading_fees: float = 0.0
     funding: float = 0.0
     net_realized: float = 0.0
+    #: ACTIVE 订单的未成交名义价值（P0001.6.1）
+    confirmed_open_exposure: float = 0.0
+    #: LOST 订单的未成交名义价值（P0001.6.1：状态不确定仍占用风险额度）
+    uncertain_exposure: float = 0.0
+    #: 资料不足、无法量化的订单数量（> 0 时 Gate 拒绝新增暴露）
+    unresolved_order_count: int = 0
 
 
 __all__ = [

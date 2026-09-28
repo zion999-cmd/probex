@@ -109,7 +109,8 @@ class RiskLimits:
             checks.append("position_notional")
         if self.max_open_order_exposure is not None:
             checks.append("open_order_exposure")
-        # 可用余额检查始终生效（未配置杠杆时按 1.0，即不允许杠杆）
+        # 不确定暴露与可用余额检查始终生效（未配置杠杆时按 1.0，即不允许杠杆）
+        checks.append("uncertain_exposure")
         checks.append("available_balance")
         if self.max_leverage is not None:
             checks.append("leverage")

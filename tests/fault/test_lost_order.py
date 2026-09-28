@@ -51,14 +51,21 @@ class LostOrderTest(unittest.TestCase):
         self.assertTrue(second.converged)
         self.assertEqual(second.corrective_actions, ())
 
-    def test_lost_order_keeps_pending_exposure_out_of_risk(self) -> None:
-        stack = ExecutionStack.build(limits=RiskLimits(max_position_qty=10.0))
-        order = stack.submit_order(stack.proposal(quantity=1.0), now_ms=BASE_TS)
+    def test_lost_order_exposure_moves_to_uncertain(self) -> None:
+        """P0001.6.1 取代了 P0001.6 的「LOST 不计入暴露」：LOST 属于 uncertain，仍占用风险额度。"""
+        stack = ExecutionStack.build(limits=RiskLimits(max_position_qty=10.0, max_open_order_exposure=100.0))
+        order = stack.submit_order(stack.proposal(quantity=1.0, price=100.0), now_ms=BASE_TS)
         stack.tracker.mark_lost(order.client_order_id, timestamp=BASE_TS + 1, reason="manual")
 
-        # LOST 不是 active：不会计入 pending exposure（需要 reconciliation 才能确认）
-        self.assertEqual(stack.manager.open_order_exposure(), 0.0)
         self.assertEqual(stack.tracker.active(), ())
+        self.assertEqual(stack.manager.uncertain_exposure, 100.0)
+        self.assertEqual(stack.manager.confirmed_open_exposure, 0.0)
+        self.assertEqual(stack.manager.open_order_exposure(), 100.0)
+
+        # 仍然会挡住新增暴露（SC-2）
+        blocked = stack.submit(stack.proposal(quantity=0.5, price=100.0), now_ms=BASE_TS + 2)
+        self.assertTrue(blocked.rejected)
+        self.assertIs(blocked.rejection.reason_code.value, "OPEN_ORDER_EXPOSURE_LIMIT")  # type: ignore[union-attr]
 
     def test_terminal_orders_cannot_become_lost(self) -> None:
         from execution.types import IllegalOrderTransition
