@@ -42,19 +42,32 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 - `RECORDED` / `LIVE_REQUERY` 两种 Replay 语义：RECORDED 只查历史记录、不调用 provider、不触网。
 - 全部测试使用 `tests/fakes.py` 的 `FakeClock` / `FakeProvider`，无网络、无 Key、确定性。
 
-### P0001.4.1 — Real Jev Transport Validation（实现中）
+### P0001.4.1 — Real Jev Transport Validation（已完成，实验结论）
 
-- `prediction/providers/openrouter.py`：`OpenRouterTransport`（真实 HTTP，标准库 `urllib.request`）：
-  OpenRouter Chat Completions 请求构造、`Authorization: Bearer`、timeout、
-  `choices[0].message.content` 提取、HTTP 状态映射、调用 telemetry（request/response bytes、status、latency、error）。
-- 分层保持：`OpenRouterTransport → JevProvider → 既有 strict parser`；未修改 P0001.4 上层任何契约。
-- 网络与 wall-clock 能力收敛到该唯一模块（结构性测试保证）。
-- 离线验证：stub server（`tests/stub_server.py`，仅 `127.0.0.1`）+ 契约诊断器（`tests/live/contract_report.py`）。
-- 待完成：SC-1 / SC-2 / SC-5 需真实凭证执行 live test。
+- `OpenRouterTransport`：**VALIDATED**（外层契约 / HTTP 状态映射 / timeout / telemetry / Key 隔离）。
+- `typesafe/jev-router` 作为热路径 Jev Provider：**REJECTED_FOR_NOW**（model identity 不稳定：实测解析为
+  `stealth/space-bunny-alpha`；输出契约不稳定；latency 4.9–19 s）。
+- P0001.4.1 以 `CONTRACT_MISMATCH` / `PROVIDER_UNSUITABLE` 作为有效实验结论关闭；`jev-market-v1` 未改动。
+
+### P0001.4.2 — Native Typed Jev Provider（已完成）
+
+- 热路径改为 native typed System One：`POST https://openrouter.ai/api/v1/systemone`，model alias `jev-1.13`。
+- `prediction/systemone_wire.py`（端点 / question id / Choice+Noul 构造 / state / 请求体）、
+  `prediction/providers/systemone.py`（`SystemOneTransport` + `SystemOneProvider`）、
+  `prediction/parsing/systemone.py`（typed answers → `jev-market-v1` domain answers）。
+- 五分类未来收益 = 原生 **Choice**（`market_5s|15s|30s|60s`）；adverse selection / fill = 原生 **Noul**；
+  Noul 无 confidence 且永不伪造；`provider_confidence` 取最近 horizon Choice 的 confidence。
+- `PredictionRecord` 追加 `requested_model` / `resolved_model` / `response_id` / `usage`（向后兼容）。
+- 既有 `Prediction` / `PredictionRecord` / TTL / Scheduler / Archive / Backoff / stale 语义**未改**；
+  typed answers 经 domain JSON 交给**既有** strict parser。
+- Chat Completions 热路径正式废弃（模块保留为 P0001.4.1 实验记录，已从包命名空间移除并标记 `DEPRECATED`）。
+- 真实实测（3 次请求）：latency 409/462/413 ms、resolved `typesafe/jev-1.13-20260917`、provider `TypeSafe`、
+  cost ≈1.1e-04/call、五分类求和 = 1、Noul 无 confidence。
 
 ## 进行中能力
 
-- P0001.4.1 的 live 验证（SC-1 / SC-2 / SC-5）。
+无。
+0001.4.1 的 live 验证（SC-1 / SC-2 / SC-5）。
 
 ## 下一步
 
@@ -63,8 +76,9 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 
 ## Blocker
 
-无进行中的实现。Provider identity 五问已全部回答（Q3 = 可用，见提案 §1.8）。
-下一步实现 typed SystemOne provider **等待人类授权与新提案**（涉及 question schema 与 Choice/Noul 映射决策）。
+无进行中的实现。待人类/设计决定的**业务参数**（不阻塞验收）：
+1. adverse-selection 阈值 X（bps）——实现为必填构造参数，测试值 5.0 仅为测试参数；
+2. 五分类 bucket 是否需要数值分档（当前为定性描述，与 `jev-market-v1` 既有语义一致）。
 冻结项：在 Provider identity 五问全部回答前，不进入 P0001.5、不改 `jev-market-v1`、不加兼容 parser、不做 prompt engineering。
 
 ## 版本

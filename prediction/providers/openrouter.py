@@ -1,4 +1,14 @@
-"""OpenRouter transport：真实 Jev（`typesafe/jev-router`）的 HTTP adapter。
+"""**DEPRECATED（P0001.4.2 / D-017 / D-018）** —— Chat Completions 热路径已被正式废弃。
+
+结论：`OpenRouterTransport` 本身 VALIDATED，但 `typesafe/jev-router` 作为热路径 Jev Provider 为
+`REJECTED_FOR_NOW`（model identity 不稳定：实测解析为 `stealth/space-bunny-alpha`；输出契约不稳定；
+4.9–19 s latency）。热路径现为 `prediction.providers.systemone.SystemOneProvider`（`POST /api/v1/systemone`）。
+
+本模块**不再从包命名空间导出**，仅为 P0001.4.1 的实验记录而保留；请勿在新的热路径代码中使用。
+保留 `DEPRECATED` / `DEPRECATION_REASON` 常量，供结构性测试断言。
+
+原始说明（历史）：
+OpenRouter transport：真实 Jev（`typesafe/jev-router`）的 HTTP adapter。
 
 分层（P0001.4.1 确认契约）：
 
@@ -45,6 +55,16 @@ from prediction.errors import (
     PredictionTransportError,
 )
 from prediction.types import PredictionRequest
+
+#: 已废弃（P0001.4.2）：Chat Completions 热路径入口。
+DEPRECATED = True
+
+#: 废弃原因（供审计与结构性测试）。
+DEPRECATION_REASON = (
+    "D-017/D-018: typesafe/jev-router 解析为 stealth/space-bunny-alpha（model identity 不稳定）、"
+    "输出契约不稳定（自然语言/围栏 JSON/裸 JSON 漂移）、latency 4.9-19s；热路径改为 "
+    "SystemOneProvider (POST /api/v1/systemone)"
+)
 
 #: 确认的 OpenRouter endpoint（不得自行更换）。
 OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"

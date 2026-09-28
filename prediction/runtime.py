@@ -265,6 +265,10 @@ class PredictionRuntime:
             expires_at=request.expires_at,
             raw_response=response.raw_response,
             prediction=prediction,
+            requested_model=response.requested_model,
+            resolved_model=response.resolved_model,
+            response_id=response.response_id,
+            usage=response.usage,
         )
 
     def _submit_recorded(self, state: MarketState, now: Milliseconds) -> PredictionResult:

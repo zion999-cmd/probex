@@ -2,16 +2,12 @@
 
 ## 当前 Proposal
 
-P0001.4.1 — Real Jev Transport Validation：**实现中**。
+P0001.4.2 — Native Typed Jev Provider：**已完成**。
 
-`context/status.json` 中 `currentProposal` 为 `"P0001.4.1"`。
+`context/status.json` 中 `currentProposal` 为 `null`（无切换授权，等待人类指定下一 Proposal）。
 
-- SC-3 / SC-4 / SC-6：**PASS**（离线，stub server）。
-- SC-5：**PASS**（真实调用实测 latency 已记录）。
-- SC-2：**PASS（走报告分支）** —— 真实响应无法无改动进入现有 strict parser，契约差异已逐条报告（提案 §1.6）。
-- SC-1：**FAIL / 阻塞** —— 未产出 `PredictionRecord`，待人类决策契约路径。
-
-前序：P0001.1（已提交 `282ea61`）、P0001.2 / P0001.3 / P0001.4（**均未提交**，工作树中交织）。
+- 热路径 = `SystemOneProvider` → `POST https://openrouter.ai/api/v1/systemone`（model alias `jev-1.13`）。
+- 结论与实测见提案 §1.6 与 `context/decisions.md` D-019；P0001.4.1 的 Chat Completions 路径已正式废弃。
 
 ## 本次新增
 
@@ -176,3 +172,35 @@ python3 -m unittest -v tests.live.test_openrouter_live
 3. 是否保留 P0001.4 的 `Prediction`/`PredictionRecord` 上层契约不变（transport 换实现，schema 升级）。
 
 在上述授权前保持冻结：不动 `jev-market-v1`、不加兼容 parser、不做 prompt engineering、不进入 P0001.5。
+
+
+## P0001.4.2 交付摘要
+
+**新增**
+- `prediction/systemone_wire.py`：wire 契约单一来源（端点 / 模型别名 / question id / Choice+Noul 构造 / state / 请求体）
+- `prediction/providers/systemone.py`：`SystemOneTransport`（HTTP/Bearer/timeout/telemetry）、`SystemOneProvider`（wire ⇄ domain 适配）
+- `prediction/providers/http_errors.py`：provider transport 共用的 HTTP 状态 → failure type 映射
+- `prediction/parsing/systemone.py`：typed answers 严格解析 → `jev-market-v1` domain answers + provider 证据
+- 测试：`tests/unit/test_systemone.py`（39）、`tests/unit/test_provider_deprecation.py`（7）、
+  `tests/integration/test_systemone_provider.py`（9）、`tests/fault/test_systemone_failures.py`（15）、
+  `tests/live/test_systemone_live.py`（8，opt-in）
+
+**修改**
+- `prediction/types.py`：`ProviderUsage` + `PredictionRecord` 证据字段；`prediction/providers/base.py`：`ProviderResponse` 证据字段；
+  `prediction/runtime.py`：`_build_record` 透传证据（行为未变）
+- `prediction/providers/__init__.py` / `prediction/__init__.py`：热路径改为 SystemOne；Chat Completions 不再导出
+- `prediction/providers/openrouter.py`：标记 `DEPRECATED` + 原因（实验记录保留）
+- `tests/stub_server.py`：`choice_answer` / `noul_answer` / `systemone_answers` / `systemone_envelope` + `base_url` / `systemone_endpoint`
+- `tests/unit/test_prediction_isolation.py`：被授权的 transport 模块白名单加入 `systemone.py`
+
+**Acceptance**：SC-1 – SC-10 全部 PASS（见提案 §1.5/§1.6；SC-1/2/3/4/5/9 由真实调用支撑）。
+
+**测试**：`python3 -m unittest discover -s tests -t .` → **612 passed / 0 failed / 12 skipped**（live 需 opt-in + Key）。
+真实 live 套件：3 次真实请求、8 passed、transport latency 409/462/413 ms。
+
+**未决业务参数**（不阻塞验收）：
+1. adverse-selection 阈值 X（bps）：必填构造参数，无默认值（测试值 5.0 仅为测试参数）；
+2. 五分类是否需要数值分档（当前为定性描述）。
+
+**下一步**：等待人类指定 Proposal（路线下一阶段 P0001.5 Accounting + Risk，需先落盘独立提案）。
+本轮改动**未提交**（本轮未获提交授权）。

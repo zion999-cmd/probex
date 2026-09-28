@@ -172,6 +172,15 @@ class Prediction:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderUsage:
+    """provider 报告的 token / 成本用量（未知字段忽略，不向上污染）。"""
+
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class PredictionRecord:
     """一次成功预测的完整证据。生成后不可修改。"""
 
@@ -190,6 +199,11 @@ class PredictionRecord:
     expires_at: Milliseconds
     raw_response: str
     prediction: Prediction
+    #: provider 侧证据（P0001.4.2 追加，向后兼容默认 None）。
+    requested_model: str | None = None
+    resolved_model: str | None = None
+    response_id: str | None = None
+    usage: ProviderUsage | None = None
 
     def is_expired(self, at: Milliseconds) -> bool:
         """`at` 时刻该预测是否已过期（`at > expires_at`）。"""

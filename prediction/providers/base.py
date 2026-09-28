@@ -9,16 +9,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from prediction.types import PredictionRequest
+from prediction.types import PredictionRequest, ProviderUsage
 
 
 @dataclass(frozen=True, slots=True)
 class ProviderResponse:
-    """provider 的原始返回。`raw_response` 原样落进 `PredictionRecord` 作为证据。"""
+    """provider 的返回。
+
+    `raw_response` 是交给 strict parser 的文本；provider 侧证据（requested/resolved model、
+    response id、usage）随响应一起回流，最终写入 `PredictionRecord`（P0001.4.2）。
+    """
 
     provider: str
     model: str
     raw_response: str
+    requested_model: str | None = None
+    resolved_model: str | None = None
+    response_id: str | None = None
+    usage: ProviderUsage | None = None
 
 
 @runtime_checkable

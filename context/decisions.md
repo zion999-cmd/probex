@@ -190,3 +190,21 @@ typed `answers.<id>.{noul|choice|score}`、不生成文本。与 `typesafe/jev-r
 **含义**：Probex 热路径 Jev 的真实目标应是 `/api/v1/systemone`，而不是 chat completions 的 `typesafe/jev-router`。
 **边界**：本条只是事实认定，**尚未**修改任何代码或 schema；实现 typed SystemOne provider（含 question schema 与 Choice/Noul 映射）需要新的提案与授权。
 **不做**：不 fallback 到 chat completions、不修改 `jev-market-v1`、不增加兼容 parser、不做 prompt engineering。
+
+## D-019 热路径 Jev Provider 采用 native typed System One（Chat Completions 路径正式废弃）
+
+**日期**：2026-09-28
+**状态**：生效（P0001.4.2 完成；人类批准实施）
+**决策**：
+- 热路径：`SystemOneProvider` → `POST https://openrouter.ai/api/v1/systemone`，请求 model alias `jev-1.13`，
+  `{model, state, questions}`；resolved model / provider / response id / usage 写入 `PredictionRecord`。
+- 五分类未来收益用 **Choice**（`market_5s|15s|30s|60s`）；adverse selection 与 fill 用 **Noul**（不用 Score）。
+- `provider_confidence` 只取最近 horizon Choice 的 `confidence`；Noul 协议上无 confidence，**永不伪造**。
+- wire ⇄ domain 适配：typed answers → `jev-market-v1` domain answers → **既有 strict parser** →
+  `Prediction` 不变；`MarketState` / Scheduler / domain schema 语义均未改动。
+- Chat Completions 热路径（`prediction.providers.openrouter`）**正式废弃**：保留模块作为 P0001.4.1 实验记录，
+  但从包命名空间移除导出并标记 `DEPRECATED`（结构性测试保证不会被误用）。
+**实测支撑**：409/462/413 ms（transport）、resolved `typesafe/jev-1.13-20260917`、provider `TypeSafe`、
+cost ≈1.1e-04/call、五分类求和 = 1、Noul 无 confidence（详见提案 §1.6）。
+**待人类/设计决定的业务参数**：adverse-selection 阈值 X（bps，必填构造参数，无默认值）；五分类是否需要数值分档。
+**影响**：`PredictionRecord` 追加 `requested_model` / `resolved_model` / `response_id` / `usage`（均有默认值，向后兼容）。

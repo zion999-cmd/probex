@@ -81,8 +81,18 @@ class StubOpenRouterServer:
         return int(self._server.server_address[1])
 
     @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self.port}/api"
+
+    @property
     def endpoint(self) -> str:
-        return f"http://127.0.0.1:{self.port}/api/v1/chat/completions"
+        """Chat Completions 路径（P0001.4.1 已废弃的实验路径）。"""
+        return f"{self.base_url}/v1/chat/completions"
+
+    @property
+    def systemone_endpoint(self) -> str:
+        """System One typed 路径（P0001.4.2 热路径）。"""
+        return f"{self.base_url}/v1/systemone"
 
     def set_response(self, response: StubResponse) -> None:
         self.response = response
@@ -95,6 +105,83 @@ class StubOpenRouterServer:
 
     def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None) -> None:
         self.stop()
+
+
+def choice_answer(
+    *,
+    choice: str = "flat",
+    probabilities: dict[str, float] | None = None,
+    confidence: float | None = 0.42,
+) -> dict[str, object]:
+    """System One Choice 答案。"""
+    from prediction.types import FUTURE_RETURN_CATEGORIES
+
+    if probabilities is None:
+        probabilities = {
+            "strong_down": 0.05,
+            "down": 0.15,
+            "flat": 0.6,
+            "up": 0.15,
+            "strong_up": 0.05,
+        }
+    assert set(probabilities) >= set(FUTURE_RETURN_CATEGORIES)
+    answer: dict[str, object] = {"type": "choice", "choice": choice, "probabilities": probabilities}
+    if confidence is not None:
+        answer["confidence"] = confidence
+    return answer
+
+
+def noul_answer(probability: float = 0.73) -> dict[str, object]:
+    """System One Noul 答案（协议上没有 confidence）。"""
+    return {"type": "noul", "noul": probability}
+
+
+def systemone_answers(
+    *,
+    horizons_ms: tuple[int, ...] | None = None,
+    choice_probabilities: dict[str, float] | None = None,
+    confidence: float | None = 0.42,
+    noul_probability: float = 0.73,
+    overrides: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """构造一套完整的 4 Choice + 4 Noul typed answers。"""
+    from prediction.schema.market_v1 import FUTURE_RETURN_HORIZONS_MS
+    from prediction.systemone_wire import BINARY_QUESTION_WIRE_IDS, future_return_question_id
+
+    horizons = horizons_ms if horizons_ms is not None else FUTURE_RETURN_HORIZONS_MS
+    answers: dict[str, object] = {
+        future_return_question_id(horizon): choice_answer(
+            probabilities=choice_probabilities, confidence=confidence
+        )
+        for horizon in horizons
+    }
+    for wire_id in BINARY_QUESTION_WIRE_IDS.values():
+        answers[wire_id] = noul_answer(noul_probability)
+    if overrides:
+        answers.update(overrides)
+    return answers
+
+
+def systemone_envelope(
+    answers: dict[str, object] | None = None,
+    *,
+    model: str = "typesafe/jev-1.13-20260917",
+    provider: str = "TypeSafe",
+    response_id: str = "gen-dec-test-0001",
+    usage: dict[str, object] | None = None,
+    extra: dict[str, object] | None = None,
+) -> str:
+    """构造 System One 响应外层（含 provider 侧证据字段）。"""
+    payload: dict[str, object] = {
+        "id": response_id,
+        "model": model,
+        "provider": provider,
+        "answers": answers if answers is not None else systemone_answers(),
+        "usage": usage if usage is not None else {"input_tokens": 512, "output_tokens": 48, "cost": 1.2e-05},
+    }
+    if extra:
+        payload.update(extra)
+    return json.dumps(payload, separators=(",", ":"), allow_nan=False)
 
 
 def openrouter_envelope(content: str, *, model: str = "typesafe/jev-router") -> str:
@@ -154,5 +241,9 @@ __all__ = [
     "RecordedRequest",
     "StubOpenRouterServer",
     "StubResponse",
+    "choice_answer",
+    "noul_answer",
     "openrouter_envelope",
+    "systemone_answers",
+    "systemone_envelope",
 ]

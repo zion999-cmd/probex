@@ -2,8 +2,9 @@
 
 规则（P0001.4 + P0001.4.1）：
 
-- `prediction/**` 中**只有** `prediction/providers/openrouter.py` 允许使用真实网络
-  （标准库 `urllib`）与 wall-clock（仅用于 latency telemetry）；其余模块一律禁止。
+- `prediction/**` 中**只有被授权的 transport 模块**允许使用真实网络（标准库 `urllib`）与
+  wall-clock（仅用于 latency telemetry）：`providers/systemone.py`（P0001.4.2 热路径）与
+  `providers/openrouter.py`（P0001.4.1 已废弃的实验路径）。其余模块一律禁止。
 - 不得依赖 Strategy / Execution / Portfolio / Risk / Accounting / storage / connectors。
 """
 
@@ -29,8 +30,8 @@ STDLIB_ROOTS = {
 }
 LAYER_ROOTS = {"market", "prediction"}
 
-#: 唯一被授权进行真实网络调用的模块（P0001.4.1 确认契约）。
-TRANSPORT_MODULES = {"openrouter.py"}
+#: 被授权进行真实网络调用的模块（transport 层）。
+TRANSPORT_MODULES = {"openrouter.py", "systemone.py"}
 
 #: 该模块额外允许的依赖：环境变量、wall-clock（仅 latency）、真实网络出口。
 TRANSPORT_EXTRA_ROOTS = {"os", "time", "urllib"}
