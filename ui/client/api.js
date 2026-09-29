@@ -17,7 +17,25 @@ export const ENDPOINTS = {
   blockers: "/api/v1/blockers",
   runs: "/api/v1/runs",
   runCompare: "/api/v1/runs/compare",
+  marketTimeline: "/api/v1/market/timeline",
+  marketDepth: "/api/v1/market/depth",
+  marketTrades: "/api/v1/market/trades",
+  marketHealth: "/api/v1/market/health",
+  marketOverlays: "/api/v1/market/overlays",
+  replay: "/api/v1/replay",
 };
+
+/** 唯一允许的 POST：local replay session control（只作用于 REPLAY runtime）。 */
+export async function postReplay(verb, payload = {}) {
+  const response = await fetch(`${ENDPOINTS.replay}/${verb}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`${verb} -> HTTP ${response.status}: ${body.detail || ""}`);
+  return body;
+}
 
 export async function fetchJson(path) {
   const response = await fetch(path, { cache: "no-store" });

@@ -18,6 +18,12 @@ from pathlib import Path
 from api.capabilities import build_capabilities_manifest
 from api.routes import (
     CAPABILITIES_PATH,
+    MARKET_DEPTH_PATH,
+    MARKET_HEALTH_PATH,
+    MARKET_OVERLAYS_PATH,
+    MARKET_TIMELINE_PATH,
+    MARKET_TRADES_PATH,
+    REPLAY_PATH,
     METRICS_PATH,
     REPORT_PATH,
     ROUTES,
@@ -163,6 +169,117 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001 - 注册表错误必须显式，不返回空壳
             self._error(503, "run_registry_error", type(exc).__name__)
 
+    # ------------------------------------------------------------------ Market Visual Workbench
+
+    def _workbench(self):
+        """取有界展示缓冲 + 显示参数；未接线/未配置 ⇒ None（503，绝不无限加载）。"""
+        history = self.service.market_history_view()
+        config = self.service.projection_config_view()
+        if history is None:
+            self._error(503, "market_history_unavailable",
+                        "no bounded market history is wired (market workbench is UNKNOWN, not empty)")
+            return None
+        if config is None:
+            self._error(503, "projection_config_required",
+                        "workbench display bounds (window/bucket/max_points/price_levels) are not configured")
+            return None
+        return history, config
+
+    def _serve_market_workbench(self, path: str, query: str) -> None:
+        """timeline / depth / trades / health / overlays：全部来自同一个只读缓冲投影。"""
+        resolved = self._workbench()
+        if resolved is None:
+            return
+        history, config = resolved
+        from product.market_projection import project_depth, project_health, project_overlays, project_trades
+        from product.market_timeline import project_timeline
+        from product.serialization import to_jsonable
+
+        if path == MARKET_TIMELINE_PATH:
+            timeline = project_timeline(history.states(), bucket_ms=config.bucket_ms,
+                                        max_points=config.max_points, window_ms=config.window_ms)
+            payload = {"timeline": to_jsonable(timeline), "counts": history.counts,
+                       "bounds": self._bounds(config)}
+        elif path == MARKET_DEPTH_PATH:
+            heatmap = project_depth(history.snapshots(), config=config, max_snapshots=config.max_points)
+            payload = {"depth": to_jsonable(heatmap), "counts": history.counts,
+                       "bounds": self._bounds(config)}
+        elif path == MARKET_TRADES_PATH:
+            trades = project_trades(history.trades(), max_points=config.max_points)
+            payload = {"trades": to_jsonable(trades), "counts": history.counts,
+                       "bounds": self._bounds(config)}
+        elif path == MARKET_HEALTH_PATH:
+            health = project_health(history.health(), max_segments=config.max_points)
+            payload = {"health": to_jsonable(health), "counts": history.counts,
+                       "bounds": self._bounds(config)}
+        else:
+            overlays = project_overlays(history.decisions(), history.executions(),
+                                        max_points=config.max_points)
+            payload = {"overlays": to_jsonable(overlays), "counts": history.counts,
+                       "bounds": self._bounds(config)}
+        payload["run_id"] = history.run_id
+        self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE, **payload})
+
+    @staticmethod
+    def _bounds(config: object) -> dict[str, int]:
+        return {"window_ms": int(config.window_ms), "bucket_ms": int(config.bucket_ms),
+                "max_points": int(config.max_points), "price_levels": int(config.price_levels)}
+
+    def _serve_run_market(self, path: str) -> None:
+        """`GET /api/v1/runs/<run_id>/market`：RUN REVIEW 视图（必须有该 run 的有界历史）。"""
+        run_id = path[len(f"{RUNS_PATH}/"):-len("/market")]
+        resolved = self._workbench()
+        if resolved is None:
+            return
+        history, _config = resolved
+        if not run_id or history.run_id != run_id:
+            self._error(NOT_FOUND, "no_recorded_market_for_run",
+                        "the wired bounded history belongs to a different run (or none)")
+            return
+        from product.serialization import to_jsonable
+        from product.market_timeline import project_timeline
+
+        config = self.service.projection_config_view()
+        timeline = project_timeline(history.states(), bucket_ms=config.bucket_ms,
+                                    max_points=config.max_points, window_ms=config.window_ms)
+        self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE, "run_id": run_id,
+                              "timeline": to_jsonable(timeline), "counts": history.counts,
+                              "bounds": self._bounds(config)})
+
+    def _serve_replay_control(self, verb: str, body: dict) -> None:
+        """local replay control：只转发意图给 REPLAY owner（绝不作用于 LIVE/TESTNET execution）。"""
+        control = self.service.replay_control_view()
+        if control is None:
+            self._error(503, "replay_control_unavailable",
+                        "no replay control is wired (only REPLAY runtimes expose one)")
+            return
+        try:
+            if verb == "play":
+                command = control.play()
+            elif verb == "pause":
+                command = control.pause()
+            elif verb == "step":
+                command = control.step(count=int(body.get("count", 1) or 1))
+            elif verb == "speed":
+                command = control.set_speed(float(body.get("speed")))
+            elif verb == "seek":
+                ordinal = body.get("ordinal")
+                ts = body.get("ts")
+                command = control.seek(ordinal=None if ordinal is None else int(ordinal),
+                                       ts=None if ts is None else int(ts))
+            else:
+                self._error(NOT_FOUND, "unknown_replay_verb", verb)
+                return
+        except Exception as exc:  # noqa: BLE001 - 控制契约错误必须显式返回（含"非 REPLAY"拒绝）
+            self._send_json(409, {"error": "replay_control_refused", "detail": str(exc),
+                                  "status": 409})
+            return
+        from product.serialization import to_jsonable
+
+        self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE, "command": to_jsonable(command),
+                              "control": {"paused": control.paused, "speed": control.speed,
+                                          "position": control.position}})
+
     def _serve_report(self, query: str) -> None:
         """只读 Run Summary（json 默认 / markdown）。"""
         try:
@@ -198,6 +315,13 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         if path == REPORT_PATH:
             self._serve_report(query)
             return
+        if path in (MARKET_TIMELINE_PATH, MARKET_DEPTH_PATH, MARKET_TRADES_PATH, MARKET_HEALTH_PATH,
+                    MARKET_OVERLAYS_PATH):
+            self._serve_market_workbench(path, query)
+            return
+        if path.startswith(f"{RUNS_PATH}/") and path.endswith("/market"):
+            self._serve_run_market(path)
+            return
         if path == CAPABILITIES_PATH:
             self._serve_capabilities(query)
             return
@@ -225,7 +349,9 @@ class ProductApiHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"schema_version": snapshot["schema_version"],
                                   "endpoints": sorted([*ROUTES, SNAPSHOT_PATH, SCHEMA_VERSION_PATH,
                                                        REPORT_PATH, CAPABILITIES_PATH, METRICS_PATH,
-                                                       RUNS_PATH, RUNS_COMPARE_PATH])})
+                                                       RUNS_PATH, RUNS_COMPARE_PATH, MARKET_TIMELINE_PATH,
+                                                       MARKET_DEPTH_PATH, MARKET_TRADES_PATH,
+                                                       MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH])})
             return
         module = ROUTES.get(path)
         if module is None:
@@ -240,6 +366,19 @@ class ProductApiHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib 接口
         path = self.path.split("?", 1)[0]
+        if path.startswith(f"{REPLAY_PATH}/"):
+            verb = path[len(REPLAY_PATH) + 1:]
+            body: dict = {}
+            length = int(self.headers.get("Content-Length") or 0)
+            if length:
+                try:
+                    parsed = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                    body = parsed if isinstance(parsed, dict) else {}
+                except json.JSONDecodeError:
+                    self._error(400, "invalid_json_body", "request body must be JSON")
+                    return
+            self._serve_replay_control(verb, body)
+            return
         if path == STOP_PATH:
             # 预留：本 Proposal **不**实现控制面动作（即使 stop 也必须走既有安全语义，尚未接线）
             self._send_json(NOT_IMPLEMENTED, {

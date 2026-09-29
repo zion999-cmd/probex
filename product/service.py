@@ -72,10 +72,28 @@ class ProductService:
     run_registry: Callable[[], object | None] = lambda: None
     #: 编排层 notes（P0001.11 §4：统一 blocker 投影的输入之一）
     orchestrator_notes: Callable[[], tuple[str, ...]] = tuple
+    #: Market Visual Workbench（P0001.12）：有界展示缓冲（只读；不是 market truth）
+    market_history: Callable[[], object | None] = lambda: None
+    #: 显示参数（window/bucket/max_points/price_levels）；未配置 ⇒ 工作台端点 503（有界是硬要求）
+    projection_config: Callable[[], object | None] = lambda: None
+    #: local replay session control（只允许作用于 REPLAY runtime）
+    replay_control: Callable[[], object | None] = lambda: None
 
     def run_summary_view(self) -> object | None:
         """取当前 Run Summary；未接线 ⇒ None（调用方须按 UNKNOWN/503 处理，不得伪造空报告）。"""
         return self.run_summary()
+
+    def market_history_view(self) -> object | None:
+        """取有界市场展示缓冲；未接线 ⇒ None（端点须按 UNKNOWN/503 处理）。"""
+        return self.market_history()
+
+    def projection_config_view(self) -> object | None:
+        """取显示参数；未配置 ⇒ None（工作台端点必须 503，不得无限加载）。"""
+        return self.projection_config()
+
+    def replay_control_view(self) -> object | None:
+        """取 replay 控制对象（仅 REPLAY runtime 会提供）。"""
+        return self.replay_control()
 
     def run_registry_view(self) -> object | None:
         """取 Run Registry（只读）；未接线 ⇒ None（端点须按 UNKNOWN/503 处理）。"""

@@ -14,6 +14,12 @@ WRITE_UNAVAILABLE = "unavailable_by_design"
 #: 未实现但已预留的端点（返回 501，不提供任何能力）
 RESERVED_ENDPOINTS: tuple[str, ...] = ("/api/v1/runtime/stop",)
 
+#: P0001.12：simulation control（**不是**交易写路径；只作用于 REPLAY runtime）
+SIMULATION_CONTROL: tuple[str, ...] = (
+    "/api/v1/replay/play", "/api/v1/replay/pause", "/api/v1/replay/step",
+    "/api/v1/replay/speed", "/api/v1/replay/seek",
+)
+
 #: 明确"不提供"的能力类别（供 Agent/UI 直接回答"我能不能下单"）
 UNAVAILABLE_ACTIONS: tuple[str, ...] = (
     "place_order", "cancel_order", "modify_order", "flatten_position",
@@ -33,7 +39,13 @@ def build_capabilities_manifest(
     read_paths = sorted({*api_read, *extra_read})
     return {
         "schema_version": schema_version,
-        "api": {"read": read_paths, "write": WRITE_UNAVAILABLE, "reserved": sorted(RESERVED_ENDPOINTS)},
+        "api": {
+            "read": read_paths,
+            #: 交易写能力仍然不可用（产品边界）；replay 控制单独列出，且只作用于 REPLAY runtime
+            "write": WRITE_UNAVAILABLE,
+            "simulation_control": sorted(SIMULATION_CONTROL),
+            "reserved": sorted(RESERVED_ENDPOINTS),
+        },
         "cli": {"commands": dict(sorted(cli_commands.items())), "exit_codes": dict(sorted(exit_codes.items()))},
         "unavailable_actions": list(UNAVAILABLE_ACTIONS),
         "notes": (
@@ -45,6 +57,7 @@ def build_capabilities_manifest(
 
 __all__ = [
     "RESERVED_ENDPOINTS",
+    "SIMULATION_CONTROL",
     "UNAVAILABLE_ACTIONS",
     "WRITE_UNAVAILABLE",
     "build_capabilities_manifest",
