@@ -23,6 +23,8 @@ class AssistantService:
     gateway: ActionGateway
     raw_facts_provider: Callable[[str, str], object] | None = None
     evidence_provider: Callable[[], object | None] = None
+    #: P0001.13：执行安全投影（只读；未接线 ⇒ 上下文对应字段 UNKNOWN）
+    execution_safety: Callable[[], object | None] = lambda: None
 
     # ------------------------------------------------------------------ context
 
@@ -30,6 +32,36 @@ class AssistantService:
                 replay_position: int | None = None) -> AssistantContext:
         snapshot = self.snapshot_provider()
         selection = dict(selected or {})
+        projection = self.execution_safety()
+        from product.serialization import to_jsonable
+
+        if projection is None:
+            execution_facts: dict[str, Fact] = {}
+        else:
+            governor = projection.rate_limits()
+            execution_facts = {
+                "execution_health": Fact.of(projection.health().status.value),
+                "rate_limit_state": (Fact.unknown("execution safety policy not configured")
+                                     if governor is None
+                                     else Fact.of(to_jsonable({"request": governor.request.status.value,
+                                                               "order": governor.order.status.value,
+                                                               "allows_new_exposure": governor.allows_new_exposure}))),
+                "venue_facts_state": Fact.of(to_jsonable(projection.limits().age_ms.__dict__
+                                                         if False else
+                                                         {"known": projection.limits().age_ms.known,
+                                                          "value": projection.limits().age_ms.value,
+                                                          "source": projection.limits().source})),
+                "latency_state": (Fact.unknown("execution safety policy not configured")
+                                  if projection.latency() is None
+                                  else Fact.of(to_jsonable({s_.stage: s_.status
+                                                            for s_ in projection.latency().stages}))),
+                "reconciliation_state": Fact.of(to_jsonable(projection.reconciliation().state.__dict__
+                                                            if False else
+                                                            {"known": projection.reconciliation().state.known,
+                                                             "value": projection.reconciliation().state.value,
+                                                             "required": projection.reconciliation().required})),
+                "uncertain_exposure": Fact.of(projection.exposure().get("uncertain_exposure")),
+            }
         return AssistantContext(
             surface=surface,
             runtime=snapshot.runtime,
@@ -41,6 +73,7 @@ class AssistantService:
                              if replay_position is None else Fact.of(int(replay_position))),
             active_blockers=tuple(f"{b.owner.value}:{b.reason_code}" for b in snapshot.blockers),
             selection=selection,
+            **execution_facts,
         )
 
     def action_context(self, context: AssistantContext) -> ActionContext:
@@ -63,6 +96,14 @@ class AssistantService:
                 continue
             suggestions.append({"action_id": entry["action_id"], "level": entry["level"],
                                 "confirmation_required": entry["confirmation_required"]})
+        # 显式规则（不发明阈值）：出现 RECONCILIATION_REQUIRED blocker 时，若 Manifest 允许，
+        # 把受控 reconciliation 动作放在最前（它仍需 confirmation，由 Gateway 负责）
+        if any(blocker.endswith("RECONCILIATION_REQUIRED") for blocker in context.active_blockers):
+            reconciliation = [item for item in suggestions
+                              if item["action_id"] == "runtime.request_reconciliation"]
+            if reconciliation:
+                suggestions = reconciliation + [item for item in suggestions
+                                               if item["action_id"] != "runtime.request_reconciliation"]
         return tuple(suggestions)
 
     # ------------------------------------------------------------------ explain

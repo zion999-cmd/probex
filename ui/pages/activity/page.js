@@ -42,6 +42,12 @@ export async function render() {
     section("Inputs / gates", flow) +
     section("Decisions", decisionTable) +
     section("Exchange events", executionTable) +
+    section("Execution drill-down (P0001.13)", rows([
+      ["chain", "decision → risk → readiness authority → normalization → submit → ack latency → events → fill/cancel/unknown → reconciliation"],
+      ["normalization", '<a href="#/system/configuration">raw facts (G2) / System</a>'],
+      ["execution health", fact(snapshot.execution_safety.health_status)],
+      ["reconciliation", fact(snapshot.execution_safety.reconciliation)],
+    ])) +
     section("Raw facts drill-down (G2)", rows([
       ["drill-down", "Activity → detail → Evidence → raw facts"],
       ["fills", "the chain now ends at fill (G1)"],

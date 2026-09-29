@@ -555,3 +555,12 @@ P0001.9.5 已作为 `a2ab8da`（1631 passed）、P0001.9.6 已作为 `afc0196`�
   UI 全局可折叠 Assistant Drawer（按钮来自 Manifest，确认流程绑定 confirmation_id）。
 - 测试：全量 **2101 passed / 0 failed / 24 skipped**（+47）；`currentProposal = null`；未 commit。
 - 未做：P0001.13（rate limit / latency / reconciliation 后端）；未开放任何 CAPITAL 能力。
+
+### P0001.13 Execution Safety & Operations Surface（已完成）
+
+- `execution_safety/`：policy（阈值全必填无默认）/ venue facts（复用 TradingRules；rate/order 待真实证据 ⇒ UNKNOWN）/
+  governor（无 retry；EXHAUSTED 只挡新增暴露；降险永不被阻断）/ latency（五阶段，样本不足 ⇒ UNKNOWN 非 0ms）/
+  health（四态、policy 驱动、required UNKNOWN 不得 HEALTHY）/ projection（只读 + blockers + 受控 reconciliation 入口）。
+- 接线：BlockerOwner +EXECUTION/VENUE；snapshot.execution_safety；6 个只读端点；5 个 `execution.*` READ 动作；
+  `runtime.request_reconciliation` → AVAILABLE L2（需确认）；AssistantContext 6 字段；CLI `execution ...`；UI 三处落点。
+- 测试：全量 **2134 passed / 0 failed / 24 skipped**（+33）。未 commit。

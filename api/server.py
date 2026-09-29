@@ -18,6 +18,7 @@ from pathlib import Path
 from api.capabilities import build_capabilities_manifest
 from api.routes import (
     ACTIONS_AUDIT_PATH,
+    EXECUTION_SUB_PATHS,
     ACTIONS_PATH,
     ASSISTANT_CONTEXT_PATH,
     CAPABILITIES_PATH,
@@ -122,6 +123,7 @@ class ProductApiHandler(BaseHTTPRequestHandler):
             api_read=tuple(sorted([*ROUTES, SNAPSHOT_PATH, REPORT_PATH, METRICS_PATH, RUNS_PATH,
                                    RUNS_COMPARE_PATH, FACTS_PATH, PORTFOLIO_TIMELINE_PATH,
                                    ACTIONS_PATH, ACTIONS_AUDIT_PATH, ASSISTANT_CONTEXT_PATH,
+                                   *sorted(EXECUTION_SUB_PATHS),
                                    MARKET_TIMELINE_PATH, MARKET_DEPTH_PATH, MARKET_TRADES_PATH,
                                    MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH])),
             cli_commands=COMMAND_SPEC,
@@ -288,6 +290,42 @@ class ProductApiHandler(BaseHTTPRequestHandler):
                               "control": {"paused": control.paused, "speed": control.speed,
                                           "position": control.position}})
 
+    # ------------------------------------------------------------------ Execution Safety（P0001.13）
+
+    def _serve_execution_safety(self, path: str) -> None:
+        """执行安全事实（只读）：未接线 ⇒ 503；policy 缺失 ⇒ 事实保持 UNKNOWN。"""
+        projection = self.service.execution_safety_view()
+        if projection is None:
+            self._error(503, "execution_safety_unavailable",
+                        "no execution safety projection is wired (facts stay UNKNOWN)")
+            return
+        from product.serialization import to_jsonable
+
+        kind = EXECUTION_SUB_PATHS[path]
+        if kind == "health":
+            body = {"health": to_jsonable(projection.health())}
+        elif kind == "limits":
+            body = {"limits": to_jsonable(projection.limits())}
+        elif kind == "rate-limits":
+            governor = projection.rate_limits()
+            if governor is None:
+                self._error(503, "execution_safety_policy_not_configured",
+                            "rate-limit governance requires an explicit ExecutionSafetyPolicy")
+                return
+            body = {"governor": to_jsonable(governor)}
+        elif kind == "latency":
+            latency = projection.latency()
+            if latency is None:
+                self._error(503, "execution_safety_policy_not_configured",
+                            "latency budgets require an explicit ExecutionSafetyPolicy")
+                return
+            body = {"latency": to_jsonable(latency)}
+        elif kind == "anomalies":
+            body = {"blockers": to_jsonable(projection.blockers())}
+        else:
+            body = {"reconciliation": to_jsonable(projection.reconciliation())}
+        self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE, **body})
+
     # ------------------------------------------------------------------ Action Plane
 
     def _gateway(self):
@@ -298,10 +336,44 @@ class ProductApiHandler(BaseHTTPRequestHandler):
             return None
         return gateway
 
+    def _wire_execution_actions(self, gateway: object) -> None:
+        """把执行安全投影接到 Action Manifest 的只读动作与受控 reconciliation 动作上。
+
+        只读动作直接读同一 projection（单一事实源）；`runtime.request_reconciliation` 只在
+        projection 提供了受控入口时才注册（否则 Manifest 如实显示 UNAVAILABLE_NO_ENTRY_POINT）。
+        """
+        from actions import HandlerResult
+
+        projection = self.service.execution_safety_view()
+        if projection is None:
+            return
+        readers = {
+            "execution.health": lambda request, ctx: HandlerResult(result={"status": projection.health().status.value}),
+            "execution.limits": lambda request, ctx: HandlerResult(result={"source": projection.limits().source}),
+            "execution.rate_limits": lambda request, ctx: HandlerResult(
+                result={} if projection.rate_limits() is None else {"request": projection.rate_limits().request.status.value,
+                                                                    "order": projection.rate_limits().order.status.value}),
+            "execution.latency": lambda request, ctx: HandlerResult(result={} if projection.latency() is None else
+                                                                    {"stages": [s.stage for s in projection.latency().stages]}),
+            "execution.anomalies": lambda request, ctx: HandlerResult(
+                result={"count": len(projection.blockers())}),
+        }
+        for action_id, handler in readers.items():
+            try:
+                gateway.register(action_id, handler)          # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001 - 已注册或不可用时忽略（Manifest 会如实表达）
+                continue
+        requester = getattr(projection, "reconciliation_requester", None)
+        if callable(requester):
+            gateway.register("runtime.request_reconciliation",       # type: ignore[attr-defined]
+                             lambda request, ctx: HandlerResult(result=requester() or {"requested": True},
+                                                                fact_refs=("execution.reconciliation",)))
+
     def _serve_actions(self) -> None:
         gateway = self._gateway()
         if gateway is None:
             return
+        self._wire_execution_actions(gateway)
         self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE, "actions": list(gateway.manifest()),
                               "levels": {"L0_READ": "auto", "L1_PRODUCT": "auto",
                                          "L2_RUNTIME": "confirmation_per_action",
@@ -323,6 +395,10 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         if assistant is None:
             self._error(503, "assistant_unavailable", "no assistant service is wired")
             return
+        gateway = self.service.action_gateway_view()
+        if gateway is not None:
+            # 幂等：让只读执行动作在任何调用顺序下都可见（Manifest 反映真实可用性）
+            self._wire_execution_actions(gateway)
         params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
         surface = params.get("surface", "monitor")
         selection = {key: params[key] for key in ("run", "decision", "order", "fill") if params.get(key)}
@@ -452,6 +528,9 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         if path == ASSISTANT_CONTEXT_PATH:
             self._serve_assistant_context(query)
             return
+        if path in EXECUTION_SUB_PATHS:
+            self._serve_execution_safety(path)
+            return
         if path == PORTFOLIO_TIMELINE_PATH:
             self._serve_account_timeline()
             return
@@ -490,7 +569,8 @@ class ProductApiHandler(BaseHTTPRequestHandler):
                                                        MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH,
                                                        FACTS_PATH, PORTFOLIO_TIMELINE_PATH,
                                                        ACTIONS_PATH, ACTIONS_AUDIT_PATH,
-                                                       ASSISTANT_CONTEXT_PATH])})
+                                                       ASSISTANT_CONTEXT_PATH,
+                                                       *sorted(EXECUTION_SUB_PATHS)])})
             return
         module = ROUTES.get(path)
         if module is None:

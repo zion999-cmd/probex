@@ -28,6 +28,12 @@ export const ENDPOINTS = {
   actions: "/api/v1/actions",
   actionsAudit: "/api/v1/actions/audit",
   assistantContext: "/api/v1/assistant/context",
+  executionHealth: "/api/v1/execution/health",
+  executionLimits: "/api/v1/execution/limits",
+  executionRateLimits: "/api/v1/execution/rate-limits",
+  executionLatency: "/api/v1/execution/latency",
+  executionAnomalies: "/api/v1/execution/anomalies",
+  executionReconciliation: "/api/v1/execution/reconciliation",
 };
 
 /** 唯一允许的 POST：local replay session control（只作用于 REPLAY runtime）。 */

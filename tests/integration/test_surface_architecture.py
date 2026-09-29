@@ -11,6 +11,7 @@ from api.routes import (
     ACTIONS_PATH,
     ASSISTANT_CONTEXT_PATH,
     CAPABILITIES_PATH,
+    EXECUTION_SUB_PATHS,
     FACTS_PATH,
     MARKET_DEPTH_PATH,
     MARKET_HEALTH_PATH,
@@ -112,6 +113,7 @@ class SurfaceArchitectureTest(unittest.TestCase):
                  RUNS_PATH, RUNS_COMPARE_PATH, REPLAY_PATH, MARKET_TIMELINE_PATH, MARKET_DEPTH_PATH,
                  MARKET_TRADES_PATH, MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH, FACTS_PATH,
                  PORTFOLIO_TIMELINE_PATH, ACTIONS_PATH, ACTIONS_AUDIT_PATH, ASSISTANT_CONTEXT_PATH}
+        known |= set(EXECUTION_SUB_PATHS)
         known |= set(ROUTES)
         known |= {"/api/v1/execution"}   # execution 路由别名（orders 的兼容路径）
         for path in sorted(UI_ROOT.rglob("*.js")):

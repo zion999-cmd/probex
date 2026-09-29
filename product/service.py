@@ -22,6 +22,7 @@ from product.types import (
     FillView,
     ConfigEntryView,
     ConfigView,
+    ExecutionSafetyView,
     EvidenceView,
     ExecutionView,
     Fact,
@@ -94,6 +95,8 @@ class ProductService:
     #: P0001.12.3：Action Plane（Action Gateway）与 Assistant（只读上下文/解释）
     action_gateway: Callable[[], object | None] = lambda: None
     assistant: Callable[[], object | None] = lambda: None
+    #: P0001.13：执行安全投影（venue facts / governor / latency / health / reconciliation）
+    execution_safety: Callable[[], object | None] = lambda: None
 
     def run_summary_view(self) -> object | None:
         """取当前 Run Summary；未接线 ⇒ None（调用方须按 UNKNOWN/503 处理，不得伪造空报告）。"""
@@ -110,6 +113,10 @@ class ProductService:
     def replay_control_view(self) -> object | None:
         """取 replay 控制对象（仅 REPLAY runtime 会提供）。"""
         return self.replay_control()
+
+    def execution_safety_view(self) -> object | None:
+        """执行安全投影；未接线 ⇒ None（相关端点 503，事实保持 UNKNOWN）。"""
+        return self.execution_safety()
 
     def action_gateway_view(self) -> object | None:
         """Action Plane 入口；未接线 ⇒ None（动作端点 503，绝不静默成功）。"""
@@ -162,6 +169,7 @@ class ProductService:
             health=self._health(health),
             evidence=self._evidence(market_state, prediction, decision, readiness, tracker),
             config=self._config(),
+            execution_safety=self._execution_safety(),
             blockers=(),
         )
         # Unified Blockers 是**只读投影**：由已组装的事实推导，再替换回快照（不重排、不丢弃）
@@ -386,8 +394,38 @@ class ProductService:
         )
 
     def _blockers(self, snapshot: SystemSnapshot) -> tuple[BlockerView, ...]:
-        """统一 blocker 投影（readiness / risk / strategy / orchestrator / market / prediction）。"""
-        return project_blockers(snapshot=snapshot, orchestrator_notes=tuple(self.orchestrator_notes()))
+        """统一 blocker 投影（readiness / risk / strategy / orchestrator / market / prediction / execution）。"""
+        base = project_blockers(snapshot=snapshot, orchestrator_notes=tuple(self.orchestrator_notes()))
+        projection = self.execution_safety()
+        if projection is None:
+            return base
+        from product.blockers import dedupe_blockers
+
+        return dedupe_blockers((*base, *projection.blockers()))
+
+    def _execution_safety(self) -> ExecutionSafetyView:
+        """把执行安全投影映射成产品视图（只搬运；未接线 ⇒ 全 UNKNOWN）。"""
+        projection = self.execution_safety()
+        if projection is None:
+            return ExecutionSafetyView()
+        from product.serialization import to_jsonable
+
+        health = projection.health()
+        governor = projection.rate_limits()
+        latency = projection.latency()
+        return ExecutionSafetyView(
+            health_status=Fact.of(health.status.value),
+            health_reasons=tuple(health.reasons),
+            request_budget=(Fact.unknown("execution safety policy not configured") if governor is None
+                            else Fact.of(to_jsonable(governor.request))),
+            order_budget=(Fact.unknown("execution safety policy not configured") if governor is None
+                          else Fact.of(to_jsonable(governor.order))),
+            venue_limits=Fact.of(to_jsonable(projection.limits())),
+            latency=(Fact.unknown("execution safety policy not configured") if latency is None
+                     else Fact.of(to_jsonable(latency))),
+            reconciliation=Fact.of(to_jsonable(projection.reconciliation())),
+            anomalies=Fact.of(to_jsonable(projection.blockers())),
+        )
 
     # ------------------------------------------------------------------ evidence
 

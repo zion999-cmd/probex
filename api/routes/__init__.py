@@ -14,6 +14,7 @@ from api.routes import (
     market_timeline,
     market_trades,
     execution,
+    execution_safety,
     facts,
     market,
     metrics,
@@ -46,6 +47,7 @@ FACTS_PATH = facts.PATH
 ACTIONS_PATH = actions.PATH
 ACTIONS_AUDIT_PATH = actions.AUDIT_PATH
 ASSISTANT_CONTEXT_PATH = assistant.PATH
+EXECUTION_SUB_PATHS = execution_safety.SUB_PATHS
 PORTFOLIO_TIMELINE_PATH = portfolio_timeline.PATH
 
 

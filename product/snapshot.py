@@ -15,6 +15,7 @@ from product.types import (
     BlockerView,
     ConfigView,
     EvidenceView,
+    ExecutionSafetyView,
     ExecutionView,
     HealthView,
     MarketView,
@@ -41,5 +42,6 @@ class SystemSnapshot:
     health: HealthView
     evidence: EvidenceView
     config: ConfigView
+    execution_safety: ExecutionSafetyView = ExecutionSafetyView()
     blockers: tuple[BlockerView, ...] = ()
     schema_version: str = SCHEMA_VERSION

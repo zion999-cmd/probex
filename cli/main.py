@@ -55,6 +55,14 @@ BLOCKERS_PATH = "/api/v1/blockers"
 ACTIONS_PATH = "/api/v1/actions"
 ACTIONS_AUDIT_PATH = "/api/v1/actions/audit"
 ASSISTANT_CONTEXT_PATH = "/api/v1/assistant/context"
+EXECUTION_SUBCOMMANDS = {
+    "health": "/api/v1/execution/health",
+    "limits": "/api/v1/execution/limits",
+    "rate-limits": "/api/v1/execution/rate-limits",
+    "latency": "/api/v1/execution/latency",
+    "anomalies": "/api/v1/execution/anomalies",
+    "reconciliation": "/api/v1/execution/reconciliation",
+}
 
 #: 机器可读命令表（供 `GET /api/v1/capabilities` 生成；**单一事实来源**）
 COMMAND_SPEC: dict[str, str] = {}
@@ -130,6 +138,10 @@ def build_parser() -> argparse.ArgumentParser:
                              help="exit 20 when any BLOCKING blocker is present")
         if name == "runs":
             sub.add_argument("--limit", type=int, default=None)
+
+    execution = subparsers.add_parser("execution", help="execution safety facts (read-only)")
+    execution.add_argument("topic", choices=sorted(EXECUTION_SUBCOMMANDS))
+    execution.add_argument("--json", action="store_true")
 
     actions = subparsers.add_parser("actions", help="list the action manifest (what an agent may do)")
     actions.add_argument("--json", action="store_true")
@@ -257,6 +269,11 @@ def main(argv: Sequence[str] | None = None, *, stdout=None, stderr=None,
                     stderr.write(f"error: {len(blocking)} BLOCKING blocker(s) present\n")
                     return EXIT_BLOCKED
                 return EXIT_OK
+            _emit(payload, as_json=args.json, stdout=stdout, stderr=stderr)
+            return EXIT_OK
+
+        if command == "execution":
+            payload = fetch(api_url, EXECUTION_SUBCOMMANDS[args.topic], opener=opener)
             _emit(payload, as_json=args.json, stdout=stdout, stderr=stderr)
             return EXIT_OK
 
@@ -447,6 +464,7 @@ def run() -> None:  # pragma: no cover - console entry
 
 
 COMMAND_SPEC.update({
+    **{f"execution {topic}": path for topic, path in EXECUTION_SUBCOMMANDS.items()},
     "actions": ACTIONS_PATH,
     "action describe": ACTIONS_PATH,
     "action invoke": ACTIONS_PATH,
@@ -461,6 +479,7 @@ COMMAND_SPEC.update({
 })
 
 __all__ = ["ACTIONS_AUDIT_PATH", "ACTIONS_PATH", "ASSISTANT_CONTEXT_PATH", "BLOCKERS_PATH",
+           "EXECUTION_SUBCOMMANDS",
            "CAPABILITIES_PATH", "COMMAND_SPEC", "EXIT_BLOCKED", "EXIT_CODES",
            "EXIT_INTERNAL", "EXIT_OK", "EXIT_UNAVAILABLE", "EXIT_UNKNOWN", "EXIT_USAGE", "METRICS_PATH",
            "RUNS_COMPARE_PATH", "RUNS_PATH", "CliUnavailable", "build_parser", "fetch", "main", "run"]

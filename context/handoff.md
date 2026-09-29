@@ -1721,3 +1721,39 @@ CLI：`actions` / `action describe` / `action invoke [--confirm]`；UI：可折�
 `runtime.stop_replay` 未确认 ⇒ 409 且 handler 未调用、确认后 ⇒ 200 且真实执行；重放确认 ⇒ `CONFIRMATION_INVALID`；
 审计记录 7 条（含拒绝）；assistant context + 3 条建议动作；CLI 与 UI 共用同一 Gateway。
 全量 **2101 passed / 0 failed / 24 skipped**（+47）。**未进入 P0001.13**。未 commit / 未 push（本阶段未授权）。
+
+## 2026-09-29（续 22）：P0001.12.3 提交推送 + P0001.13 待授权（未实施）
+
+**提交/推送**：`697253c`（P0001.12.3，detached worktree 复验 **2101 passed**）已 push（`78dce93..697253c`）。
+
+**人类确认的架构判断（记录，避免后续漂移）**：当前 Assistant 是"确定性 explain"、**尚未接入 LLM** —— 这是**正确顺序**：
+先建 Action Gateway 控制边界，再接模型。后续接入模型时，模型只消费 `AssistantContext` + `Action Manifest`，
+**不需要改控制边界**（CAPITAL 仍不可用、确认仍由 Gateway 负责）。
+
+**P0001.13 Execution Safety & Operations Surface**：提案已在 `proposals/P0001.13-execution-safety-operations-surface.md`，
+状态 **已提议** ⇒ 依 CLAUDE.md §3.1 **不得实施**；等待人类明确授权（置"已批准"并下达实施指令）后才启动。
+本阶段**未实施、未改动任何代码**。
+
+## 2026-09-29（续 23）：P0001.13 Execution Safety & Operations Surface 实施完成
+
+新增 `execution_safety/`（`policy`（全部阈值必填、无默认值）/ `venue`（复用 TradingRules + 待证据的 rate/order facts）/
+`rate_limit`（governor，无 retry、降险不被阻断）/ `latency`（五阶段 + 有界采样）/ `health`（四态，policy 驱动，required UNKNOWN 不得 HEALTHY）/
+`projection`（只读投影 + blockers + 可选受控 reconciliation 入口））。
+接线：`BlockerOwner` 新增 EXECUTION/VENUE；`SystemSnapshot.execution_safety` 新段并入统一 `BlockerView`；
+6 个只读执行端点（未接线/缺 policy ⇒ 503）；Action Manifest 新增 5 个 `execution.*` READ 动作并把
+`runtime.request_reconciliation` 升为 AVAILABLE L2（confirmation 必需，handler 调既有 Owner）；
+AssistantContext 增加 6 个执行字段 + `RECONCILIATION_REQUIRED` 时前置建议；CLI 增加 `execution ...` 六个子命令；
+UI：System→Execution 七段、Monitor 执行摘要、Activity 执行 drill-down；`RunSummary` 支持 `execution.*` 指标。
+
+真实证据：venue limits 与 normalization 同源（0.1 / 0.0001 / 50.0）；governor NEAR_LIMIT/EXHAUSTED 可测试且
+`allows_de_risking=True`；latency 五阶段 OK/BUDGET_EXCEEDED/UNKNOWN（含 "not 0 ms"）；health `DEGRADED` 且可解释来源；
+执行端点 POST ⇒ 405（无新写路径）；reconciliation 未确认 409 且 Owner 未被调用、确认后 200 SUCCEEDED。
+全量 **2134 passed / 0 failed / 24 skipped**（+33）。未 commit / 未 push（未授权）。
+
+### P0001.13 收口说明（2026-09-29）
+
+- 人类确认：**真实 venue rate-limit fact source 与具体 policy 数值尚未给出，因此生产环境下部分执行安全状态仍为 `UNKNOWN`** ——
+  这是设计使然（`ExecutionSafetyPolicy` 无默认值、venue 证据缺失即 UNKNOWN），**不是假完成**；待人类提供数值与证据后再变绿。
+- **待单独排查（不阻塞本阶段）**：一次性验证脚本中出现过 `runtime.request_reconciliation` 确认后返回 409 的现象；
+  与之相同构造的独立复现为 **409 CONFIRMATION_REQUIRED → 200 SUCCEEDED**，且集成测试
+  `test_11_reconciliation_action_requires_confirmation_and_runs` 稳定通过 ⇒ 判定为脚本构造差异，未复现产品缺陷，另行排查。

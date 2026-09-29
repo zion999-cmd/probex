@@ -1,5 +1,5 @@
 /** Monitor：30 秒理解当前系统状态（P0001.12.1 §1）。 */
-import { ENDPOINTS, fetchJson, fetchSnapshot } from "/ui/client/api.js";
+import { ENDPOINTS, fetchJson, fetchOrUnavailable, fetchSnapshot } from "/ui/client/api.js";
 import { escapeHtml, fact, rows, section } from "/ui/client/render.js";
 import { SURFACES } from "/ui/app/surfaces.js";
 
@@ -43,12 +43,29 @@ export async function render() {
     ? orders.map((o) => `<div class="row"><span class="k">${escapeHtml(o.client_order_id)}</span>` +
         `<span class="v">${escapeHtml(o.side)} ${escapeHtml(o.status)} @ ${fact(o.price)}</span></div>`).join("")
     : '<div class="row"><span class="k">orders</span><span class="v known">0</span></div>';
+  const [execHealth, execRate, execReconciliation] = await Promise.all([
+    fetchOrUnavailable(ENDPOINTS.executionHealth), fetchOrUnavailable(ENDPOINTS.executionRateLimits),
+    fetchOrUnavailable(ENDPOINTS.executionReconciliation),
+  ]);
+  const execSummary = rows([
+    ["execution health", execHealth.unavailable
+      ? `<span class="unknown">UNKNOWN (${escapeHtml(execHealth.unavailable)})</span>`
+      : `<span class="${execHealth.health.status === "HEALTHY" ? "known" : "bad"}">${escapeHtml(execHealth.health.status)}</span>`],
+    ["request budget", execRate.unavailable ? '<span class="unknown">UNKNOWN</span>'
+      : fact(execRate.governor.request.remaining)],
+    ["order budget", execRate.unavailable ? '<span class="unknown">UNKNOWN</span>'
+      : fact(execRate.governor.order.remaining)],
+    ["uncertain exposure", fact(snapshot.execution.uncertain_exposure)],
+    ["reconciliation", execReconciliation.unavailable ? '<span class="unknown">UNKNOWN</span>'
+      : fact(execReconciliation.reconciliation.state)],
+  ]);
   const recent = decisions.slice(-5).reverse().map((d) =>
     `<div class="row"><span class="k">${d.ts}</span><span class="v">${escapeHtml(d.action)} ${escapeHtml(d.side)} ` +
     `${fact(d.decision_id)}</span></div>`).join("") ||
     '<div class="row"><span class="k">activity</span><span class="v unknown">UNKNOWN (nothing recorded)</span></div>';
   const surfaceNav = SURFACES.map((s) => `<a href="#/${s.slug}">${escapeHtml(s.title)}</a>`).join(" · ");
   return section("System now", metrics) +
+    section("Execution safety", execSummary) +
     section("Blockers / warnings", rows(blockers)) +
     section("Market / current quotes", market + quotes) +
     section("Position / active orders", orderRows) +

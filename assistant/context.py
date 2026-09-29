@@ -1,10 +1,14 @@
-"""Assistant Context（P0001.12.3 §1）：只引用 Product facts，不复制领域状态。"""
+"""Assistant Context（P0001.12.3 §1 / P0001.13）：只引用 Product facts，不复制领域状态。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
 from product.types import Fact, RuntimeIdentity
+
+
+def _unknown(reason: str) -> Fact:
+    return Fact.unknown(reason)
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +24,13 @@ class AssistantContext:
     replay_position: Fact
     active_blockers: tuple[str, ...] = ()
     selection: dict[str, str] = field(default_factory=dict)
+    #: P0001.13：执行安全事实（未接线 ⇒ UNKNOWN）
+    execution_health: Fact = field(default_factory=lambda: _unknown("execution safety not wired"))
+    rate_limit_state: Fact = field(default_factory=lambda: _unknown("execution safety not wired"))
+    venue_facts_state: Fact = field(default_factory=lambda: _unknown("execution safety not wired"))
+    latency_state: Fact = field(default_factory=lambda: _unknown("execution safety not wired"))
+    reconciliation_state: Fact = field(default_factory=lambda: _unknown("execution safety not wired"))
+    uncertain_exposure: Fact = field(default_factory=lambda: _unknown("execution safety not wired"))
 
     def as_payload(self) -> dict[str, object]:
         from product.serialization import to_jsonable
@@ -34,6 +45,12 @@ class AssistantContext:
             "replay_position": to_jsonable(self.replay_position),
             "active_blockers": list(self.active_blockers),
             "selection": dict(self.selection),
+            "execution_health": to_jsonable(self.execution_health),
+            "rate_limit_state": to_jsonable(self.rate_limit_state),
+            "venue_facts_state": to_jsonable(self.venue_facts_state),
+            "latency_state": to_jsonable(self.latency_state),
+            "reconciliation_state": to_jsonable(self.reconciliation_state),
+            "uncertain_exposure": to_jsonable(self.uncertain_exposure),
         }
 
 

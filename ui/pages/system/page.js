@@ -7,6 +7,38 @@ export const slug = "system";
 
 export const SECTIONS = ["health", "risk", "readiness", "execution", "configuration", "capabilities"];
 
+async function executionSections() {
+  const [limits, rateLimits, latency, reconciliation, anomalies] = await Promise.all([
+    fetchOrUnavailable(ENDPOINTS.executionLimits), fetchOrUnavailable(ENDPOINTS.executionRateLimits),
+    fetchOrUnavailable(ENDPOINTS.executionLatency), fetchOrUnavailable(ENDPOINTS.executionReconciliation),
+    fetchOrUnavailable(ENDPOINTS.executionAnomalies),
+  ]);
+  const unknownRow = (label, payload) => rows([[label,
+    payload.unavailable ? `<span class="unknown">UNKNOWN (${escapeHtml(payload.unavailable)})</span>` : "ok"]]);
+  const limitsRows = limits.unavailable ? unknownRow("venue limits", limits)
+    : factRows(limits.limits);
+  const rateRows = rateLimits.unavailable ? unknownRow("rate limits", rateLimits)
+    : factRows({ request_budget: rateLimits.governor.request.remaining,
+                 order_budget: rateLimits.governor.order.remaining,
+                 request_status: rateLimits.governor.request.status,
+                 order_status: rateLimits.governor.order.status,
+                 allows_new_exposure: rateLimits.governor.allows_new_exposure,
+                 allows_de_risking: rateLimits.governor.allows_de_risking });
+  const latencyRows = latency.unavailable ? unknownRow("latency", latency)
+    : table(["stage", "status", "samples", "p50", "p95", "budget_ms"],
+        latency.latency.stages.map((stage_) => [escapeHtml(stage_.stage), escapeHtml(stage_.status),
+          String(stage_.sample_count), fact(stage_.p50), fact(stage_.p95), fact(stage_.budget_ms)]));
+  const reconciliationRows = reconciliation.unavailable ? unknownRow("reconciliation", reconciliation)
+    : factRows(reconciliation.reconciliation);
+  const anomalyRows = anomalies.unavailable ? unknownRow("anomalies", anomalies)
+    : table(["owner", "reason", "severity", "source"],
+        anomalies.blockers.map((b) => [escapeHtml(b.owner), escapeHtml(b.reason_code),
+          escapeHtml(b.severity), escapeHtml(b.source_ref)]));
+  return section("Venue Limits", limitsRows) + section("Rate Limits", rateRows) +
+    section("Latency", latencyRows) + section("Reconciliation", reconciliationRows) +
+    section("Execution anomalies", anomalyRows);
+}
+
 export async function render(rest = []) {
   const active = SECTIONS.includes(rest[0]) ? rest[0] : "health";
   const snapshot = await fetchSnapshot();
@@ -41,18 +73,15 @@ export async function render(rest = []) {
         `<span class="bad">${escapeHtml(r)}</span>`])) || rows([["reasons", "none"]]));
   if (active === "execution") {
     const execution = snapshot.execution || {};
-    return header + section("Execution health (P0001.13 slot)", rows([
+    return header + await executionSections() + section("Execution health (summary)", rows([
       ["active orders", String((execution.active_orders || []).length)],
       ["uncertain exposure", fact(execution.uncertain_exposure)],
       ["open order exposure", fact(execution.open_order_exposure)],
       ["unknown exposure flag", String(Boolean(execution.has_unknown_exposure))],
       ["unknown submit count", fact(execution.unknown_submit_count)],
       ["unknown cancel count", fact(execution.unknown_cancel_count)],
-      ["rate limits", '<span class="unknown">UNKNOWN (P0001.13)</span>'],
-      ["venue limits", '<span class="unknown">UNKNOWN (P0001.13)</span>'],
-      ["latency", '<span class="unknown">UNKNOWN (P0001.13)</span>'],
-      ["reconciliation", '<span class="unknown">UNKNOWN (P0001.13)</span>'],
     ]));
+  }
   }
   if (active === "configuration") {
     const config = snapshot.config || {};

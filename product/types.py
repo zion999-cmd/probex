@@ -116,6 +116,9 @@ class BlockerOwner(Enum):
     ORCHESTRATOR = "ORCHESTRATOR"
     MARKET = "MARKET"
     PREDICTION = "PREDICTION"
+    #: P0001.13：执行安全与交易所限额
+    EXECUTION = "EXECUTION"
+    VENUE = "VENUE"
 
 
 class BlockerSeverity(Enum):
@@ -150,6 +153,20 @@ class BlockerView:
     def key(self) -> str:
         """去重键 = owner + reason_code + source_ref（裁决 D）。"""
         return f"{self.owner.value}|{self.reason_code}|{self.source_ref}"
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionSafetyView:
+    """执行安全投影（P0001.13；未接线 ⇒ 全部 UNKNOWN，绝不 green）。"""
+
+    health_status: Fact = field(default_factory=lambda: Fact.unknown("execution safety not wired"))
+    health_reasons: tuple[str, ...] = ()
+    request_budget: Fact = field(default_factory=lambda: Fact.unknown("execution safety not wired"))
+    order_budget: Fact = field(default_factory=lambda: Fact.unknown("execution safety not wired"))
+    venue_limits: Fact = field(default_factory=lambda: Fact.unknown("execution safety not wired"))
+    latency: Fact = field(default_factory=lambda: Fact.unknown("execution safety not wired"))
+    reconciliation: Fact = field(default_factory=lambda: Fact.unknown("execution safety not wired"))
+    anomalies: Fact = field(default_factory=lambda: Fact.unknown("execution safety not wired"))
 
 
 @dataclass(frozen=True, slots=True)
