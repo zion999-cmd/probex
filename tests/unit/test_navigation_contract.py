@@ -80,6 +80,12 @@ class UiMirrorTest(unittest.TestCase):
             with self.subTest(page=page):
                 self.assertIn(page, routed, f"{page} is a dead page (no detail route)")
 
+    def test_run_to_activity_links_carry_the_run_id(self) -> None:
+        for page in ("performance", "runs"):
+            source = (UI_ROOT / "pages" / page / "page.js").read_text(encoding="utf-8")
+            with self.subTest(page=page):
+                self.assertIn("#/activity/run/", source)
+
     def test_blocker_section_mapping_matches(self) -> None:
         source = (UI_ROOT / "app" / "navigation.js").read_text(encoding="utf-8")
         block = source.split("export const BLOCKER_SECTION = {", 1)[1].split("};", 1)[0]

@@ -21,7 +21,7 @@ export async function render(rest = []) {
     runs.map((run) => [escapeHtml(run.run_id || ""), escapeHtml((run.runtime || {}).mode || ""),
       escapeHtml(run.status || ""), String(run.started_at ?? ""), fact(run.config_fingerprint),
       `<a href="#/market/run-review/${encodeURIComponent(run.run_id)}">run review</a> · ` +
-      `<a href="#/activity">activity</a>`]));
+      `<a href="#/activity/run/${encodeURIComponent(run.run_id)}">activity</a>`]));
   const prev = offset - PAGE_LIMIT >= 0
     ? `<a href="#/performance/runs/${offset - PAGE_LIMIT}">prev</a>` : "none";
   const next = pagination.has_more && pagination.next_offset !== null && pagination.next_offset !== undefined

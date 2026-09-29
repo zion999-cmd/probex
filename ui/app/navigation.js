@@ -11,7 +11,8 @@ export const SURFACE_SLUGS = ["monitor", "market", "activity", "performance", "s
 export const DETAIL_ROUTES = {
   monitor: { overview: "overview", portfolio: "portfolio", orders: "orders" },
   market: { live: "market", replay: "market", "run-review": "market" },
-  activity: { prediction: "prediction", strategy: "strategy", orders: "orders", evidence: "evidence" },
+  activity: { prediction: "prediction", strategy: "strategy", orders: "orders", evidence: "evidence",
+    run: "activity" },
   performance: { runs: "runs", metrics: "metrics" },
   system: {
     health: "system", risk: "system", readiness: "system",

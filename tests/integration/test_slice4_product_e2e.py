@@ -277,6 +277,13 @@ class D_NavigationTest(Slice4RuntimeTestCase):
         self.assertEqual(status, 200, payload)
         self.assertEqual(payload["action"]["result"]["target"], "#/system/readiness")
 
+        # Run → Activity 携带 canonical run id（与 UI 链接同一 contract）
+        status, payload = self.post(base, "/api/v1/actions/navigate.surface",
+                                    {"parameters": {"surface": "activity", "detail": "run",
+                                                    "identity": "run-3"}})
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["action"]["result"]["target"], "#/activity/run/run-3")
+
         status, _ = self.post(base, "/api/v1/actions/navigate.surface",
                               {"parameters": {"surface": "not-a-surface"}})
         self.assertEqual(status, 502)                          # handler 拒绝（不猜 surface）

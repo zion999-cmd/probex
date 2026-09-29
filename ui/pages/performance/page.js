@@ -20,7 +20,7 @@ export async function render() {
       escapeHtml(run.status || ""), String(run.started_at ?? ""), fact(run.config_id),
       fact(run.config_fingerprint),
       `<a href="#/market/run-review/${encodeURIComponent(run.run_id)}">run review</a> · ` +
-      `<a href="#/activity">activity</a>`]));
+      `<a href="#/activity/run/${encodeURIComponent(run.run_id)}">activity</a>`]));
   const paginationBlock = rows([
     ["offset / limit", `${escapeHtml(String(pagination.offset ?? 0))} / ${escapeHtml(String(pagination.limit ?? PAGE_LIMIT))}`],
     ["total", escapeHtml(String(pagination.total ?? runs.length))],

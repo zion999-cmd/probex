@@ -21,7 +21,7 @@ DETAIL_ROUTES: dict[str, dict[str, str]] = {
     "monitor": {"overview": "overview", "portfolio": "portfolio", "orders": "orders"},
     "market": {"live": "market", "replay": "market", "run-review": "market"},
     "activity": {"prediction": "prediction", "strategy": "strategy", "orders": "orders",
-                 "evidence": "evidence"},
+                 "evidence": "evidence", "run": "activity"},
     "performance": {"runs": "runs", "metrics": "metrics"},
     "system": {"health": "system", "risk": "system", "readiness": "system",
                "execution": "system", "configuration": "system", "capabilities": "system"},

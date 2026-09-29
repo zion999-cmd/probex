@@ -29,7 +29,9 @@ function identityCell(entry) {
   return `${escapeHtml(value)} <span class="muted">(${escapeHtml(kind)})</span>`;
 }
 
-export async function render() {
+export async function render(rest = []) {
+  // F-16：Run → Activity 携带 canonical run id（`#/activity/run/<run_id>`）
+  const selectedRun = rest[0] === "run" && rest[1] ? String(rest[1]) : null;
   const snapshot = await fetchSnapshot();
   const evidence = await fetchJson(ENDPOINTS.evidence);
   const overlays = await fetchJson(ENDPOINTS.marketOverlays);
@@ -73,7 +75,11 @@ export async function render() {
     executions.map((e) => [String(e.ts), escapeHtml(e.client_order_id), escapeHtml(e.event),
       escapeHtml(e.detail || "")]));
   const runLinks = rows([
-    ["Run → Activity", "open a run in Performance, then drill into this trace"],
+    ["selected run", selectedRun
+      ? `<code>${escapeHtml(selectedRun)}</code> · ` +
+        `<a href="#/market/run-review/${encodeURIComponent(selectedRun)}">Run Review</a>`
+      : "none (open a run from Performance → Runs)"],
+    ["trace scope", "the trace is the live session causal chain (per-run persisted traces are not in Slice 4)"],
     ["Run → Run Review", `<a href="#/market/run-review">Market / Run Review</a>`],
   ]);
   return section("Causal chain (time-ordered, F-08)", timeline) +
