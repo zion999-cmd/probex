@@ -51,6 +51,13 @@ export async function render(rest = []) {
         ["prediction provider", fact(snapshot.health.prediction_provider)],
         ["accounting", fact(snapshot.health.accounting)],
       ])) +
+      section("Runtime / loop", rows([
+        ["state", fact(snapshot.health.runtime_state)],
+        ["detail", fact(snapshot.health.runtime_detail)],
+        ["quoting", fact(snapshot.health.runtime_quoting)],
+        ["run id", fact(snapshot.health.runtime_run_id)],
+        ["since (ms)", fact(snapshot.health.runtime_since_ms)],
+      ])) +
       section("Market / stream", rows([
         ["market healthy", fact(snapshot.market.healthy)],
         ["market tradeable", fact(snapshot.market.tradeable)],

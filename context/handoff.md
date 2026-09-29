@@ -1757,3 +1757,23 @@ UI：System→Execution 七段、Monitor 执行摘要、Activity 执行 drill-do
 - **待单独排查（不阻塞本阶段）**：一次性验证脚本中出现过 `runtime.request_reconciliation` 确认后返回 409 的现象；
   与之相同构造的独立复现为 **409 CONFIRMATION_REQUIRED → 200 SUCCEEDED**，且集成测试
   `test_11_reconciliation_action_requires_confirmation_and_runs` 稳定通过 ⇒ 判定为脚本构造差异，未复现产品缺陷，另行排查。
+
+## 2026-09-29（续 24）：Closure Slice 1（Product Assembly）完成并复验
+
+按人类授权（closure / wiring 补齐，**不新建 Proposal 编号**）实施 Slice 1，关闭审计 F-01（BLOCKER）与 F-11（部分）。
+
+**新增/修改**：`runtime/assembly.py`（唯一产品装配入口 + `python3 -m runtime.assembly` + SIGINT/SIGTERM 优雅关闭）、
+`runtime/state.py`（RuntimeState + RuntimeStatusTracker）、`product/types.py`+`product/service.py`（HealthView 增加 runtime 字段，经 provider 注入）、
+`ui/pages/{monitor,system}/page.js`（Runtime / loop 段）、`tests/integration/test_runtime_assembly_startup.py`（16 条，含真实 HTTP）。
+
+**真实启动证据**（仓库命令，非 harness）：`PROBEX_RUN_REGISTRY_DIR=… python3 -m runtime.assembly --symbol BTCUSDT --port 8796`
+⇒ 启动 JSON（REPLAY / 127.0.0.1 / run_id / env 目录生效）；`/api/v1/snapshot` 返回真 identity + `runtime_state=RUNNING` + `runtime_quoting=false`；
+UI HTML 可打开；`/api/v1/actions` 10 个基线 handler 可用；`inspect.snapshot`⇒SUCCEEDED 且入审计；`capital.place_order`⇒409；
+**SIGTERM ⇒ `index.jsonl` = ['start','finalize']、durable RunRecord = COMPLETED、shutdown 日志 state=STOPPED**。
+
+**过程中修的 2 个缺陷**（属本 Slice 范围）：① `PROBEX_RUN_REGISTRY_DIR` 未生效；② SIGINT/SIGTERM 未 finalize（同线程 `shutdown()` 死锁）⇒ 改 worker 线程 + handler 只 stop/置事件。
+修复后全量 **2150 passed / 0 failed / 24 skipped**。
+
+**治理**：`currentProposal` 临时回开为 `"P0001.11.2"`（本 closure 对应原提案）；Slice 2 完成后恢复 `null`。
+
+**仍属 Slice 2**：F-02（真实 run 路径调用 RuntimeSession：REPLAY/PAPER host）与 F-10（运行中不再读作 INCOMPLETE → active/liveness 读侧语义）。

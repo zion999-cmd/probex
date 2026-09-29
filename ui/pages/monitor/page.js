@@ -47,6 +47,12 @@ export async function render() {
     fetchOrUnavailable(ENDPOINTS.executionHealth), fetchOrUnavailable(ENDPOINTS.executionRateLimits),
     fetchOrUnavailable(ENDPOINTS.executionReconciliation),
   ]);
+  const runtimeRow = rows([
+    ["runtime state", fact(snapshot.health.runtime_state)],
+    ["runtime detail", fact(snapshot.health.runtime_detail)],
+    ["quoting", fact(snapshot.health.runtime_quoting)],
+    ["run", fact(snapshot.health.runtime_run_id)],
+  ]);
   const execSummary = rows([
     ["execution health", execHealth.unavailable
       ? `<span class="unknown">UNKNOWN (${escapeHtml(execHealth.unavailable)})</span>`
@@ -64,7 +70,7 @@ export async function render() {
     `${fact(d.decision_id)}</span></div>`).join("") ||
     '<div class="row"><span class="k">activity</span><span class="v unknown">UNKNOWN (nothing recorded)</span></div>';
   const surfaceNav = SURFACES.map((s) => `<a href="#/${s.slug}">${escapeHtml(s.title)}</a>`).join(" · ");
-  return section("System now", metrics) +
+  return section("Runtime / loop", runtimeRow) + section("System now", metrics) +
     section("Execution safety", execSummary) +
     section("Blockers / warnings", rows(blockers)) +
     section("Market / current quotes", market + quotes) +

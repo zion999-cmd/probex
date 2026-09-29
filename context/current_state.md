@@ -564,3 +564,14 @@ P0001.9.5 已作为 `a2ab8da`（1631 passed）、P0001.9.6 已作为 `afc0196`�
 - 接线：BlockerOwner +EXECUTION/VENUE；snapshot.execution_safety；6 个只读端点；5 个 `execution.*` READ 动作；
   `runtime.request_reconciliation` → AVAILABLE L2（需确认）；AssistantContext 6 字段；CLI `execution ...`；UI 三处落点。
 - 测试：全量 **2134 passed / 0 failed / 24 skipped**（+33）。未 commit。
+
+### Closure Slice 1 — Product Assembly（已完成并复验）
+
+- `runtime/assembly.py` 是唯一 in-repo 装配入口（默认 REPLAY / 127.0.0.1；TESTNET/LIVE 需显式）；组装 ConfigSnapshot、RunRegistry、
+  RuntimeSession/SessionHost、ProductService、AssistantService、ActionGateway（10 个基线只读/产品态 handler）、API/UI server。
+- `runtime/state.py`：RuntimeState（STARTING/RUNNING/STOPPING/STOPPED/FAILED）+ 唯一 Owner；`quoting` 仅在已知时给出。
+- 投影：Snapshot.health 增加 runtime_state/detail/quoting/run_id/since_ms；Monitor 与 System/Health 可见。
+- 真实证据：仓库命令启动 ⇒ snapshot 真 identity + RUNNING + quoting=false；UI 可开；actions 可用；inspect.snapshot SUCCEEDED；capital 409；
+  SIGTERM ⇒ index `start`+`finalize`、durable run COMPLETED、shutdown state=STOPPED。
+- 修复 2 缺陷：env 目录未生效、signal 未 finalize（同线程 shutdown 死锁）。
+- 测试：全量 **2150 passed / 0 failed / 24 skipped**；F-01 CLOSED、F-11 PARTIAL（quoting/loop 真实数据属 Slice 2）。

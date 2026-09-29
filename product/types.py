@@ -303,6 +303,12 @@ class HealthView:
     #: G4：prediction provider 状态（HEALTHY / DEGRADED / BACKING_OFF）与 accounting 健康
     prediction_provider: Fact = field(default_factory=lambda: Fact.unknown("not_provided"))
     accounting: Fact = field(default_factory=lambda: Fact.unknown("not_provided"))
+    #: closure Slice 1 / F-11：runtime / loop 状态（STARTING/RUNNING/STOPPING/STOPPED/FAILED）
+    runtime_state: Fact = field(default_factory=lambda: Fact.unknown("runtime state not provided"))
+    runtime_detail: Fact = field(default_factory=lambda: Fact.unknown("runtime state not provided"))
+    runtime_quoting: Fact = field(default_factory=lambda: Fact.unknown("runtime state not provided"))
+    runtime_run_id: Fact = field(default_factory=lambda: Fact.unknown("runtime state not provided"))
+    runtime_since_ms: Fact = field(default_factory=lambda: Fact.unknown("runtime state not provided"))
 
 
 @dataclass(frozen=True, slots=True)

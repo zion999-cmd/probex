@@ -97,6 +97,8 @@ class ProductService:
     assistant: Callable[[], object | None] = lambda: None
     #: P0001.13：执行安全投影（venue facts / governor / latency / health / reconciliation）
     execution_safety: Callable[[], object | None] = lambda: None
+    #: closure Slice 1 / F-11：runtime / loop 状态的只读来源（Owner 是装配入口）
+    runtime_status: Callable[[], object | None] = lambda: None
 
     def run_summary_view(self) -> object | None:
         """取当前 Run Summary；未接线 ⇒ None（调用方须按 UNKNOWN/503 处理，不得伪造空报告）。"""
@@ -355,7 +357,19 @@ class ProductService:
     def _health(self, health: Mapping[str, object]) -> HealthView:
         prediction_status = self.prediction_provider_status()
         accounting_status = self.accounting_health()
+        runtime = self.runtime_status()
+        unknown = Fact.unknown("runtime state not provided")
+        runtime_facts = {
+            "runtime_state": Fact.of(getattr(getattr(runtime, "state", None), "value", None)),
+            "runtime_detail": Fact.of(getattr(runtime, "detail", None)),
+            "runtime_quoting": Fact.of(getattr(runtime, "quoting", None)),
+            "runtime_run_id": Fact.of(getattr(runtime, "run_id", None)),
+            "runtime_since_ms": Fact.of(getattr(runtime, "since_ms", None)),
+        } if runtime is not None else {"runtime_state": unknown, "runtime_detail": unknown,
+                                       "runtime_quoting": unknown, "runtime_run_id": unknown,
+                                       "runtime_since_ms": unknown}
         return HealthView(
+            **runtime_facts,
             prediction_provider=Fact.of(
                 getattr(prediction_status, "value", prediction_status)
                 if prediction_status is not None else health.get("prediction_provider"),
