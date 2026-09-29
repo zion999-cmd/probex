@@ -35,6 +35,7 @@ export const ENDPOINTS = {
   executionAnomalies: "/api/v1/execution/anomalies",
   executionReconciliation: "/api/v1/execution/reconciliation",
   reasons: "/api/v1/reasons",
+  ops: "/api/v1/ops",
 };
 
 /** F-09：reason catalog 只取一次（UI/Assistant/CLI 共用同一来源）。 */

@@ -106,6 +106,46 @@ class AssistantService:
                                                if item["action_id"] != "runtime.request_reconciliation"]
         return tuple(suggestions)
 
+    # ------------------------------------------------------------------ ops explain (F-12/F-15)
+
+    def explain_ops(self, topic: str) -> dict[str, object]:
+        """解释 operational posture（只读；不新增写型 action）。
+
+        topic：`network_exposure` / `auth_required` / `retention_unbounded` /
+        `process_live_readiness_blocked`。
+        """
+        from product.reason_catalog import explain_reason
+
+        snapshot = self.snapshot_provider()
+        ops = snapshot.ops
+        network = ops.network.value if ops.network.known and isinstance(ops.network.value, dict) else {}
+        retention = (ops.retention.value if ops.retention.known and isinstance(ops.retention.value, dict)
+                     else {})
+        topics: dict[str, tuple[str, dict[str, object]]] = {
+            "network_exposure": ("NON_LOOPBACK_NOT_ALLOWED", {
+                "bind_host": network.get("bind_host"), "loopback": network.get("loopback"),
+                "allow_non_loopback": network.get("allow_non_loopback")}),
+            "auth_required": ("AUTH_TOKEN_REQUIRED", {
+                "auth_required": network.get("auth_required"),
+                "auth_token_ref": network.get("auth_token_ref"),
+                "scheme": network.get("scheme")}),
+            "retention_unbounded": ("RETENTION_UNBOUNDED", {
+                "policy": retention.get("policy"), "bounded": retention.get("bounded")}),
+            "process_live_readiness_blocked": ("PROCESS_LIVE_READINESS_BLOCKED", {
+                "process_live": ops.process_live.value if ops.process_live.known else None,
+                "runtime_state": ops.runtime_state.value if ops.runtime_state.known else None,
+                "trade_readiness": ops.trade_readiness.value if ops.trade_readiness.known else None,
+                "trade_readiness_reasons": list(ops.trade_readiness_reasons),
+                "execution_health": (ops.execution_health.value if ops.execution_health.known else None),
+                "operational_warning": (ops.operational_warning.value
+                                        if ops.operational_warning.known else None)}),
+        }
+        if topic not in topics:
+            raise ValueError(f"unknown ops topic {topic!r} (allowed: {sorted(topics)})")
+        reason_code, evidence = topics[topic]
+        return {"topic": topic, "reason_code": reason_code,
+                "explanation": explain_reason(reason_code).to_payload(), "evidence": evidence}
+
     # ------------------------------------------------------------------ explain
 
     def explain(self, kind: str, identity: str) -> dict[str, object]:

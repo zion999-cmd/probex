@@ -28,6 +28,7 @@ from reports.builder import build_run_summary
 from reports.json import summary_to_jsonable
 from reports.metrics import EquitySample, RealizedTradeResult, compute_metrics, metrics_payload
 from reports.types import RunRecord, RunStatus
+from runtime.observability import log_event
 from storage.run_registry import JsonRunRegistry
 
 
@@ -128,6 +129,10 @@ class RuntimeSession:
                                      config=self.config, data_range=self.data_range)
         self._identity = identity
         self._record = record
+        log_event("runtime", "run_start", runtime_id=runtime_id, run_id=runtime_id,
+                  mode=self.mode.value, environment=self.environment, venue=self.venue,
+                  symbol=self.symbol,
+                  config_fingerprint=(None if self.config is None else self.config.fingerprint))
         return record
 
     def stop(self, *, facts: SessionSummaryFacts | None = None,
@@ -150,6 +155,10 @@ class RuntimeSession:
         record = self.registry.finalize(run_id=self._record.run_id, ended_at=int(self.clock()),
                                         summary=summary, status=status)
         self._record = record
+        event = "run_finalize" if status is RunStatus.COMPLETED else "run_failure"
+        log_event("runtime", event, level=(20 if status is RunStatus.COMPLETED else 40),
+                  runtime_id=self._identity.runtime_id if self._identity else None,
+                  run_id=record.run_id, mode=self.mode.value, run_status=status.value)
         return record
 
     def _summary_payload(self, facts: SessionSummaryFacts) -> dict[str, object]:

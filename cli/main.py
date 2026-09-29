@@ -56,6 +56,9 @@ ACTIONS_PATH = "/api/v1/actions"
 ACTIONS_AUDIT_PATH = "/api/v1/actions/audit"
 ASSISTANT_CONTEXT_PATH = "/api/v1/assistant/context"
 REASONS_PATH = "/api/v1/reasons"
+#: F-12/F-15：operational posture（只读；单一端点 + 客户端选择子话题）
+OPS_PATH = "/api/v1/ops"
+OPS_TOPICS = ("status", "retention", "logging", "network")
 EXECUTION_SUBCOMMANDS = {
     "health": "/api/v1/execution/health",
     "limits": "/api/v1/execution/limits",
@@ -148,6 +151,10 @@ def build_parser() -> argparse.ArgumentParser:
     execution = subparsers.add_parser("execution", help="execution safety facts (read-only)")
     execution.add_argument("topic", choices=sorted(EXECUTION_SUBCOMMANDS))
     execution.add_argument("--json", action="store_true")
+
+    ops = subparsers.add_parser("ops", help="operational posture (network/auth/logging/retention/liveness)")
+    ops.add_argument("topic", choices=list(OPS_TOPICS))
+    ops.add_argument("--json", action="store_true")
 
     actions = subparsers.add_parser("actions", help="list the action manifest (what an agent may do)")
     actions.add_argument("--json", action="store_true")
@@ -301,6 +308,25 @@ def main(argv: Sequence[str] | None = None, *, stdout=None, stderr=None,
         if command == "execution":
             payload = fetch(api_url, EXECUTION_SUBCOMMANDS[args.topic], opener=opener)
             _emit(payload, as_json=args.json, stdout=stdout, stderr=stderr)
+            return EXIT_OK
+
+        if command == "ops":
+            payload = fetch(api_url, OPS_PATH, opener=opener)
+            ops_payload = payload.get("ops") or {}
+            topic = args.topic
+            if topic == "status":
+                selected = {key: ops_payload.get(key) for key in
+                            ("process_live", "runtime_state", "runtime_detail", "trade_readiness",
+                             "trade_readiness_reasons", "execution_health", "operational_warning",
+                             "ts")}
+            else:
+                selected = ops_payload.get(topic) or {}
+            _emit({topic: selected} if args.json else {
+                key: (str(value) if not isinstance(value, (dict, list)) else "...") for key, value in selected.items()},
+                as_json=args.json, stdout=stdout, stderr=stderr)
+            if not args.json:
+                for key, value in selected.items():
+                    stdout.write(f"- {key}: {value}\n")
             return EXIT_OK
 
         if command == "actions":
@@ -513,6 +539,10 @@ COMMAND_SPEC.update({
     "run show": RUNS_PATH,
     "run compare": RUNS_COMPARE_PATH,
     "explain": "/api/v1/evidence",
+    "ops status": OPS_PATH,
+    "ops retention": OPS_PATH,
+    "ops logging": OPS_PATH,
+    "ops network": OPS_PATH,
     "report run": REPORT_PATH,
 })
 

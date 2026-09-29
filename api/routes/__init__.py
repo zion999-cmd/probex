@@ -18,6 +18,7 @@ from api.routes import (
     facts,
     market,
     metrics,
+    ops,
     portfolio,
     portfolio_timeline,
     prediction,
@@ -30,7 +31,8 @@ from api.routes import (
     strategy,
 )
 
-MODULES = (status, market, prediction, strategy, risk, execution, portfolio, readiness, evidence, blockers)
+MODULES = (status, market, prediction, strategy, risk, execution, portfolio, readiness, evidence,
+           blockers, ops)
 #: 需要 service / 注册表事实的端点（不参与 snapshot 组合）
 REPORT_PATH = reports.PATH
 CAPABILITIES_PATH = capabilities.PATH
@@ -50,6 +52,7 @@ ASSISTANT_CONTEXT_PATH = assistant.PATH
 ASSISTANT_EXPLAIN_PATH = assistant.EXPLAIN_PATH
 EXECUTION_SUB_PATHS = execution_safety.SUB_PATHS
 PORTFOLIO_TIMELINE_PATH = portfolio_timeline.PATH
+OPS_PATH = ops.PATH
 
 
 #: path -> 模块（第一版全部为 GET，只读）

@@ -28,7 +28,7 @@ import signal
 import threading
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from dataclasses import dataclass, field
 from dataclasses import replace as dataclasses_replace
@@ -51,10 +51,13 @@ from product.types import Fact, RuntimeIdentity, RuntimeMode
 from reports import build_run_summary
 from reports.json import summary_to_json
 from reports.types import RunStatus
+from runtime.observability import configure_logging, log_event, register_secret
 from runtime.session import RuntimeSession, SessionSummaryFacts
 from runtime.state import RuntimeState, RuntimeStatus, RuntimeStatusTracker
 from runtime.wiring import SessionHost
-from storage.run_registry import DEFAULT_RUN_REGISTRY_DIR, RUN_REGISTRY_ENV, JsonRunRegistry
+from storage.retention import RetentionPolicy, prune_finished_runs
+from storage.run_registry import (DEFAULT_RUN_REGISTRY_DIR, INDEX_FILE, RUNS_DIR, RUN_REGISTRY_ENV,
+                                  JsonRunRegistry, process_start_epoch_ms)
 
 DEFAULT_HOST = "127.0.0.1"
 
@@ -102,6 +105,35 @@ class _FillFact:
     trade_id: str
 #: 允许的启动模式（默认 REPLAY；TESTNET/LIVE 必须显式指定）
 ALLOWED_MODES = (RuntimeMode.REPLAY, RuntimeMode.PAPER, RuntimeMode.TESTNET, RuntimeMode.LIVE)
+#: loopback bind（不强制认证）；其它 bind 必须显式 opt-in + bearer token
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"})
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def is_loopback_host(host: str) -> bool:
+    """判断 bind host 是否 loopback（fail closed：无法判定时按非 loopback 处理）。"""
+    import ipaddress
+
+    text = str(host or "").strip().lower()
+    if text in LOOPBACK_HOSTS or text.startswith("127."):
+        return True
+    try:
+        return ipaddress.ip_address(text).is_loopback
+    except ValueError:
+        return False
+
+
+def resolve_secret_ref(ref: str, environ: Mapping[str, str]) -> str:
+    """解析 secret 引用（当前只支持 `env:NAME`）；缺失 ⇒ fail closed（不静默继续）。"""
+    if not isinstance(ref, str) or not ref:
+        raise AssemblyError("secret reference must be a non-empty string")
+    if ref.startswith("env:"):
+        name = ref[len("env:"):]
+        value = environ.get(name)
+        if not value:
+            raise AssemblyError(f"secret reference {ref!r} is not present in the environment (fail closed)")
+        return str(value)
+    raise AssemblyError(f"unsupported secret reference scheme in {ref!r} (allowed: env:)")
 
 
 class AssemblyError(RuntimeError):
@@ -152,6 +184,10 @@ class RuntimeProfile:
     clock: Callable[[], int] = clock_now_ms
     #: 真实 feed（提供后 REPLAY/PAPER 会真正消费事件并产生市场事实）
     feed: FeedProfile | None = None
+    #: F-12：non-loopback 必须显式 opt-in + bearer token（缺任一 ⇒ 拒绝启动）
+    allow_non_loopback: bool = False
+    #: F-12：auth token 的 secret 引用（如 `env:PROBEX_API_TOKEN`）；值永不进 provenance/snapshot/logs
+    auth_token_ref: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.symbol, str) or not self.symbol:
@@ -167,6 +203,20 @@ class RuntimeProfile:
         for entry in self.config_entries:
             if not isinstance(entry, ConfigEntry):
                 raise AssemblyError("RuntimeProfile.config_entries must be ConfigEntry values")
+        if not isinstance(self.allow_non_loopback, bool):
+            raise AssemblyError("RuntimeProfile.allow_non_loopback must be a bool")
+        if self.auth_token_ref is not None and (
+                not isinstance(self.auth_token_ref, str) or not self.auth_token_ref):
+            raise AssemblyError("RuntimeProfile.auth_token_ref must be a non-empty string when given")
+        # F-12：非 loopback 的启动姿态必须显式（警告后继续是不允许的）
+        if not is_loopback_host(self.host):
+            if not self.allow_non_loopback:
+                raise AssemblyError(
+                    "non-loopback bind requires explicit opt-in (--allow-non-loopback); refusing to start")
+            if not self.auth_token_ref:
+                raise AssemblyError(
+                    "non-loopback bind requires an auth token reference (--auth-token-ref env:NAME); "
+                    "refusing to start")
 
 
 @dataclass
@@ -202,20 +252,37 @@ class ProductRuntime:
     _usage_collector: object | None = field(default=None, init=False)
     #: F-13：**唯一**解析结果（CLI > ENV > FILE > CONSTRUCTOR）；装配只消费它
     _resolved_config: tuple[ConfigEntry, ...] = field(default_factory=tuple, init=False)
+    _auth_token: str | None = field(default=None, init=False)
     _prediction_runtime: object | None = field(default=None, init=False)
     _private_runtime: object | None = field(default=None, init=False)
     _latency_observer: object | None = field(default=None, init=False)
     _execution: object | None = field(default=None, init=False)
     _reconciliation_events: list[object] = field(default_factory=list, init=False)
+    _retention_policy: RetentionPolicy = field(default_factory=RetentionPolicy, init=False)
+    _last_prune: dict[str, object] | None = field(default=None, init=False)
+    _readiness_provider: object | None = field(default=None, init=False)
     _feed_error: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         now = int(self.profile.clock())
         self._registry = JsonRunRegistry(pathlib_path(self.profile.run_registry_dir))
         # F-13：唯一次解析（provenance resolver）；后续所有消费方只读这个结果
-        self._resolved_config = resolve_config(self.profile.config_entries)
+        resolved = list(resolve_config(self.profile.config_entries))
+        # F-12：auth token **只记录引用名**（值永不进 snapshot / provenance）
+        if self.profile.auth_token_ref:
+            from product.provenance import secret_entry
+
+            resolved.append(secret_entry("api.auth_token", source=ConfigSource.ENV,
+                                         secret_ref=self.profile.auth_token_ref))
+        self._resolved_config = tuple(resolved)
         self._cfg = build_config_snapshot(config_id=f"runtime-{self.profile.mode.value.lower()}",
                                          entries=self._resolved_config, created_at=now)
+        # token 只在**非 loopback**时强制；值登记到 redactor，任何日志/异常都会遮蔽它
+        if self.profile.auth_token_ref:
+            self._auth_token = resolve_secret_ref(self.profile.auth_token_ref, os.environ)
+            register_secret(self._auth_token)
+        # F-15：retention 全部显式（缺键 ⇒ 该项 UNBOUNDED，不偷偷删）
+        self._retention_policy = self._build_retention_policy()
         self._tracker = RuntimeStatusTracker(mode=self.profile.mode)
         self._identity = RuntimeIdentity(
             mode=self.profile.mode, environment=self.profile.environment, venue=self.profile.venue,
@@ -262,10 +329,129 @@ class ProductRuntime:
     def assistant(self) -> AssistantService:
         return self._assistant
 
+    @property
+    def loopback(self) -> bool:
+        """是否 loopback bind（F-12）。"""
+        return is_loopback_host(self.profile.host)
+
+    @property
+    def auth_required(self) -> bool:
+        """非 loopback ⇒ 所有 /api/v1/* 需要 bearer token；loopback 不强制。"""
+        return not self.loopback
+
+    @property
+    def auth_token(self) -> str | None:
+        """仅在需要认证时暴露给 server；**不得**写入任何 snapshot/log。"""
+        return self._auth_token if self.auth_required else None
+
     # ------------------------------------------------------------------ assembly
 
     def _facts_provider(self) -> SessionSummaryFacts:
         return self._facts
+
+    def _build_retention_policy(self) -> RetentionPolicy:
+        """从 `retention.*` 构造显式 policy（没有任何隐式生产数值）。"""
+        values = self._config_values()
+        known: dict[str, int] = {}
+        for key, field_name in (("retention.run_max_runs", "run_max_runs"),
+                                ("retention.run_max_age_ms", "run_max_age_ms"),
+                                ("retention.event_store_max_bytes", "event_store_max_bytes"),
+                                ("retention.log_max_bytes", "log_max_bytes"),
+                                ("retention.log_backup_count", "log_backup_count")):
+            if key in values:
+                known[field_name] = int(values[key])
+        return RetentionPolicy(**known)  # type: ignore[arg-type]
+
+    @property
+    def retention_policy(self) -> RetentionPolicy:
+        return self._retention_policy
+
+    def attach_readiness(self, provider: object) -> "ProductRuntime":
+        """显式接入既有 readiness gate 的只读结果（F-15：不新增业务判断）。"""
+        self._readiness_provider = provider
+        self._service.readiness = provider  # type: ignore[assignment]
+        return self
+
+    def _current_run_id(self) -> str | None:
+        """当前 run id；session 尚未 start ⇒ None（不抛错）。"""
+        try:
+            return self._session.run_id
+        except Exception:  # noqa: BLE001 - session 未启动
+            return None
+
+    def _readiness_result(self) -> object | None:
+        provider = self._readiness_provider
+        if provider is None:
+            return None
+        try:
+            return provider()  # type: ignore[operator]
+        except Exception:  # noqa: BLE001 - 读不到就是 NOT_EVALUATED，不是 READY
+            return None
+
+    def run_retention(self, *, now_ms: int | None = None) -> object:
+        """执行一次显式 retention（只删已完成旧 run；active run 永不删）并记录日志。"""
+        now = int(self.profile.clock()) if now_ms is None else int(now_ms)
+        report = prune_finished_runs(self._registry, self._retention_policy, now_ms=now)
+        self._last_prune = report.to_payload()
+        log_event("storage", "retention_prune",
+                  runtime_id=self._identity.runtime_id, run_id=self._current_run_id(),
+                  mode=self.profile.mode.value,
+                  reason_code=("RETENTION_PRUNED" if report.removed_run_ids else "RETENTION_NOOP"),
+                  applied=report.applied, removed=len(report.removed_run_ids),
+                  removed_record_files=report.removed_record_files, kept_runs=report.kept_runs,
+                  skipped_active_run_id=report.skipped_active_run_id,
+                  bounded=not report.policy.is_unbounded)
+        return report
+
+    def ops_posture(self) -> object | None:
+        """F-12/F-15：operational posture（network/auth/logging/retention + 四层健康）。"""
+        from runtime.observability import logging_posture
+        from runtime.ops import (NetworkPosture, build_health_split, build_ops_payload,
+                                 build_retention_posture)
+
+        now = int(self.profile.clock())
+        status = self._tracker.status()
+        readiness = self._readiness_result()
+        readiness_status = None
+        readiness_reasons: tuple[str, ...] = ()
+        if readiness is not None:
+            raw_status = getattr(readiness, "status", None)
+            readiness_status = str(getattr(raw_status, "value", raw_status))
+            readiness_reasons = tuple(str(getattr(reason, "value", reason))
+                                      for reason in (getattr(readiness, "reasons", ()) or ()))
+        execution_health = None
+        if self._safety_projection is not None:
+            execution_health = self._safety_projection.health().status.value  # type: ignore[attr-defined]
+        health = build_health_split(runtime_state=status.state.value, runtime_detail=status.detail,
+                                    readiness_status=readiness_status,
+                                    readiness_reasons=readiness_reasons,
+                                    execution_health=execution_health)
+        logging_payload = logging_posture().to_payload()
+        runs = self._registry.list()
+        index_path = self._registry.root / INDEX_FILE
+        runs_dir = self._registry.root / RUNS_DIR
+        record_bytes = sum(path.stat().st_size for path in runs_dir.glob("*.json"))
+        event_store_bytes = None
+        if self.profile.feed is not None:
+            event_path = pathlib_path(self.profile.feed.event_store)
+            if event_path.exists():
+                event_store_bytes = event_path.stat().st_size
+        retention = build_retention_posture(
+            policy=self._retention_policy, runs_total=len(runs),
+            index_bytes=(index_path.stat().st_size if index_path.exists() else 0),
+            record_bytes=record_bytes, event_store_bytes=event_store_bytes,
+            audit_entries=len(self._gateway.audit.entries()),
+            audit_capacity=self._gateway.audit.capacity,
+            latency_samples=len(self._latency_log.samples()),
+            latency_capacity=self._latency_log.capacity,
+            logging_bounded=bool(logging_payload.get("bounded")), last_prune=self._last_prune)
+        network = NetworkPosture(bind_host=self.profile.host, loopback=self.loopback,
+                                 allow_non_loopback=self.profile.allow_non_loopback,
+                                 auth_required=self.auth_required,
+                                 auth_token_ref=self.profile.auth_token_ref)
+        return build_ops_payload(process_started_at_ms=process_start_epoch_ms(os.getpid()),
+                                 network=network, health=health, logging=logging_payload,
+                                 retention=retention, now_ms=now)
 
     def _config_values(self) -> dict[str, object]:
         """已解析的非敏感配置值（**只消费 resolver 输出**，不重新解析一套配置）。"""
@@ -478,6 +664,9 @@ class ProductRuntime:
                 identity_kind="reconciliation_id", outcome="requested",
                 reason_code="RECONCILIATION_REQUIRED",
                 detail="controlled reconciliation entry point invoked"))
+            log_event("execution", "reconciliation_requested", runtime_id=self._identity.runtime_id,
+                      run_id=self._session.run_id, mode=self.profile.mode.value,
+                      reason_code="RECONCILIATION_REQUIRED", count=self._reconciled_count)
             return {"requested": True, "count": self._reconciled_count}
 
         # F-05：真实边界的延迟观测（旁路；不改交易语义）
@@ -569,6 +758,7 @@ class ProductRuntime:
             fills=self._fill_views,
             recent_fill_limit=(20 if self._accounting is not None else 0),
             market_state_hash=self._market_identity,
+            ops=self.ops_posture,
             readiness=lambda: None,
             health=lambda: {"notes": (f"mode={self.profile.mode.value}",)},
             clock=self.profile.clock,
@@ -630,7 +820,9 @@ class ProductRuntime:
             identity = str(request.parameters.get("identity") or context.selected.get("order") or "")
             if not identity:
                 raise ValueError("explain.entity requires an identity")
-            explanation = self._assistant.explain(kind, identity)
+            # F-12/F-15：`kind=ops` 解释 operational posture；其余走既有 entity explain
+            explanation = (self._assistant.explain_ops(identity) if kind == "ops"
+                           else self._assistant.explain(kind, identity))
             return HandlerResult(result=explanation, fact_refs=(f"explain:{kind}:{identity}",))
 
         def navigate_handler(request: ActionRequest, context: ActionContext) -> HandlerResult:
@@ -695,6 +887,10 @@ class ProductRuntime:
         detail = "running" if self.profile.feed is not None else "idle: no market data source configured"
         status = self._tracker.mark_running(now_ms=now, run_id=self._session.run_id, quoting=False,
                                             detail=detail)
+        log_event("runtime", "runtime_start", runtime_id=self._identity.runtime_id,
+                  run_id=self._session.run_id, mode=self.profile.mode.value,
+                  state=status.state.value, bind_host=self.profile.host,
+                  quoting=status.quoting)
         if self.profile.feed is not None:
             self._start_feed()
         return status
@@ -799,6 +995,11 @@ class ProductRuntime:
             provider.stop()
             self._feed_stats = provider.stats
             self._feed_error = provider.error
+            if provider.error is not None:
+                log_event("market", "external_fact_source_failure", level=40,
+                          runtime_id=self._identity.runtime_id, run_id=self._session.run_id,
+                          mode=self.profile.mode.value, reason_code="FEED_SOURCE_FAILED",
+                          error=provider.error)
             if provider.data_timestamp_ms is not None:
                 self._identity = dataclasses_replace(
                     self._identity, data_timestamp=Fact.of(provider.data_timestamp_ms))
@@ -810,19 +1011,28 @@ class ProductRuntime:
         self._stop_feed()
         if self._session.record.status.value == "RUNNING":
             self._host.finish(facts=self._facts)
-        return self._tracker.mark_stopped(now_ms=now, detail="graceful stop completed")
+        status = self._tracker.mark_stopped(now_ms=now, detail="graceful stop completed")
+        log_event("runtime", "runtime_stop", runtime_id=self._identity.runtime_id,
+                  run_id=self._session.run_id, mode=self.profile.mode.value,
+                  state=status.state.value)
+        return status
 
     def fail(self, error: str) -> RuntimeStatus:
         """异常终止：run 记 INCOMPLETE（不伪造 COMPLETED），runtime 置 FAILED。"""
         now = int(self.profile.clock())
         if self._session.record.status.value == "RUNNING":
             self._session.stop(status=RunStatus.INCOMPLETE, facts=self._facts)
-        return self._tracker.mark_failed(now_ms=now, error=error)
+        status = self._tracker.mark_failed(now_ms=now, error=error)
+        log_event("runtime", "runtime_failure", level=40, runtime_id=self._identity.runtime_id,
+                  run_id=self._session.run_id, mode=self.profile.mode.value,
+                  state=status.state.value, reason_code="RUNTIME_FAILED", error=error)
+        return status
 
     # ------------------------------------------------------------------ serving
 
     def create_server(self) -> object:
-        self._server = create_server(self._service, host=self.profile.host, port=self.profile.port)
+        self._server = create_server(self._service, host=self.profile.host, port=self.profile.port,
+                                     auth_token=self.auth_token)
         return self._server
 
     def server_url(self) -> str:
@@ -871,8 +1081,15 @@ def build_profile_from_args(argv: Sequence[str] | None = None) -> RuntimeProfile
     parser.add_argument("--symbol", required=True, help="traded symbol, e.g. BTCUSDT")
     parser.add_argument("--environment", default="local")
     parser.add_argument("--venue", default="binance")
-    parser.add_argument("--host", default=DEFAULT_HOST, help="bind address (default 127.0.0.1)")
+    parser.add_argument("--host", default=os.environ.get("PROBEX_BIND_HOST", DEFAULT_HOST),
+                        help="bind address (default 127.0.0.1; non-loopback requires opt-in + token)")
     parser.add_argument("--port", type=int, default=0, help="0 = ephemeral port")
+    parser.add_argument("--allow-non-loopback", action="store_true",
+                        default=str(os.environ.get("PROBEX_ALLOW_NON_LOOPBACK", "")).lower() in _TRUE_VALUES,
+                        help="explicitly allow binding to a non-loopback address (fail closed otherwise)")
+    parser.add_argument("--auth-token-ref",
+                        default=os.environ.get("PROBEX_AUTH_TOKEN_REF") or None,
+                        help="secret reference for the API bearer token, e.g. env:PROBEX_API_TOKEN")
     parser.add_argument("--run-registry-dir",
                         default=os.environ.get(RUN_REGISTRY_ENV, DEFAULT_RUN_REGISTRY_DIR),
                         help=f"durable run registry dir (env {RUN_REGISTRY_ENV})")
@@ -926,7 +1143,9 @@ def build_profile_from_args(argv: Sequence[str] | None = None) -> RuntimeProfile
         raise AssemblyError(f"--event-store is required for a real {mode.value.lower()} run")
     return RuntimeProfile(symbol=args.symbol, config_entries=entries, mode=mode,
                           environment=args.environment, venue=args.venue, host=args.host, port=args.port,
-                          run_registry_dir=args.run_registry_dir, feed=feed)
+                          run_registry_dir=args.run_registry_dir, feed=feed,
+                          allow_non_loopback=bool(args.allow_non_loopback),
+                          auth_token_ref=(str(args.auth_token_ref) if args.auth_token_ref else None))
 
 
 def _install_stop_signals(runtime: "ProductRuntime", server: object,
@@ -952,16 +1171,31 @@ def _install_stop_signals(runtime: "ProductRuntime", server: object,
 
 def main(argv: Sequence[str] | None = None) -> int:
     profile = build_profile_from_args(argv)
+    # F-15：日志 sink 可选文件 + 显式轮转配置（未配置 size ⇒ 不轮转，姿态如实报告）
+    startup_values = {entry.name: entry.value.value
+                      for entry in resolve_config(profile.config_entries) if entry.value.known}
+    configure_logging(level=os.environ.get("PROBEX_LOG_LEVEL", "INFO"),
+                      file_path=os.environ.get("PROBEX_LOG_FILE") or None,
+                      file_max_bytes=(int(startup_values["retention.log_max_bytes"])
+                                      if "retention.log_max_bytes" in startup_values else None),
+                      backup_count=(int(startup_values["retention.log_backup_count"])
+                                    if "retention.log_backup_count" in startup_values else None))
     runtime = ProductRuntime(profile=profile)
     status = runtime.start()
     server = runtime.create_server()
     url = runtime.server_url()
+    log_event("runtime", "startup", runtime_id=runtime.identity.runtime_id, run_id=runtime.run_id,
+              mode=profile.mode.value, symbol=profile.symbol, state=status.state.value,
+              bind_host=profile.host, url=url, run_registry_dir=profile.run_registry_dir,
+              auth_required=runtime.auth_required)
     print(json.dumps({"event": "startup", "runtime_id": runtime.identity.runtime_id,
                       "mode": profile.mode.value, "symbol": profile.symbol,
                       "run_id": runtime.run_id, "state": status.state.value,
                       "url": url, "run_registry_dir": profile.run_registry_dir}, ensure_ascii=False),
           flush=True)
     runtime.serve_forever()
+    log_event("runtime", "shutdown", runtime_id=runtime.identity.runtime_id, run_id=runtime.run_id,
+              mode=profile.mode.value, state=runtime.status.state.value)
     print(json.dumps({"event": "shutdown", "run_id": runtime.run_id,
                       "state": runtime.status.state.value}, ensure_ascii=False), flush=True)
     return 0

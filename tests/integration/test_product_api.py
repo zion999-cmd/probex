@@ -182,7 +182,7 @@ class ProductOperationsApiTest(unittest.TestCase):
     def test_schema_version_is_bumped(self) -> None:
         """P0001.11 → 2；P0001.12.2（G1–G5）→ 3；closure Slice 4（F-08 trace 字段）→ 4。"""
         _, payload = self.get("/api/v1/snapshot")
-        self.assertEqual(payload["schema_version"], "4")
+        self.assertEqual(payload["schema_version"], "5")
         self.assertEqual(payload["schema_version"], SCHEMA_VERSION)
 
     def test_capabilities_endpoint_reports_read_only_by_design(self) -> None:

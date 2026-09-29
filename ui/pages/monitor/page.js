@@ -2,6 +2,7 @@
 import { ENDPOINTS, fetchJson, fetchOrUnavailable, fetchSnapshot, reasonCatalog } from "/ui/client/api.js";
 import { escapeHtml, fact, reasonCell, rows, section } from "/ui/client/render.js";
 import { BLOCKER_SECTION, surfaceHash } from "/ui/app/navigation.js";
+import { SURFACES } from "/ui/app/surfaces.js";
 
 export const title = "Monitor";
 export const slug = "monitor";
@@ -72,7 +73,17 @@ export async function render() {
     `${fact(d.decision_id)}</span></div>`).join("") ||
     '<div class="row"><span class="k">activity</span><span class="v unknown">UNKNOWN (nothing recorded)</span></div>';
   const surfaceNav = SURFACES.map((s) => `<a href="#/${s.slug}">${escapeHtml(s.title)}</a>`).join(" · ");
-  return section("Runtime / loop", runtimeRow) + section("System now", metrics) +
+  // F-12/F-15：四层健康必须可区分（liveness 不暗示可交易）
+  const ops = snapshot.ops || {};
+  const opsRow = rows([
+    ["process live", fact(ops.process_live)],
+    ["runtime state", fact(ops.runtime_state)],
+    ["trade readiness", fact(ops.trade_readiness)],
+    ["execution health", fact(ops.execution_health)],
+    ["operational warning", fact(ops.operational_warning)],
+  ]);
+  return section("Process / runtime / readiness / execution", opsRow) +
+    section("Runtime / loop", runtimeRow) + section("System now", metrics) +
     section("Execution safety", execSummary) +
     section("Blockers / warnings", rows(blockers)) +
     section("Market / current quotes", market + quotes) +

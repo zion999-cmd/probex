@@ -645,3 +645,30 @@ P0001.9.5 已作为 `a2ab8da`（1631 passed）、P0001.9.6 已作为 `afc0196`�
   SIGTERM ⇒ durable `COMPLETED` + active 清空。
 - 测试：全量 **2232 passed / 0 failed / 24 skipped**（+46 新测试）。
 - `context/status.json.currentProposal = null`。
+
+### Closure Slice 5 — Operational Posture（F-12/F-15，已完成）
+
+人类授权（本会话）：closure 继续，关闭 F-12 / F-15，并补齐 network exposure/auth、structured logging、
+retention/growth policy、process liveness、crash/restart 最小闭环（**不新增交易能力**）。
+
+- **遗留清理**：上一轮遗留的 `runtime.assembly --port 8793`（PID 47249，修复前旧代码，shutdown 卡死、HTTP 无响应）
+  经 SIGTERM/SIGINT 无效后 SIGKILL；端口释放；durable run `replay-1790694780015` 保持 **COMPLETED**（未删除/改写）；
+  无 active marker 指向它。
+- **F-12 CLOSED（Network/Auth）**：默认 loopback 不强制认证；非 loopback 必须 `--allow-non-loopback` + token 的
+  secret 引用，缺任一拒绝启动；token 值不进 snapshot/provenance/logs/audit/异常（provenance 只留 `env:NAME`）；
+  所有 `/api/v1/*` 需 `Authorization: Bearer`（含 actions/execution，无匿名旁路）；`/health/live` 免认证。
+- **F-15 CLOSED（Logging）**：`runtime/observability.py`（stdlib logging，单行 JSON：ts/level/event/component/
+  runtime_id/run_id/mode/reason_code）；secret/signature/bearer 一律 redact；文件 sink 支持显式轮转；
+  覆盖 startup/shutdown/run/action/api/auth/reconciliation/retention/feed failure 等事件。
+- **F-15 CLOSED（Retention）**：`storage/retention.py` 显式 policy（默认 **UNBOUNDED**，不隐式删除）；
+  只删有 finalize 的旧 run（record + 原子索引压缩），active run 永不删；event store 永不自动删除；
+  `run_retention()` 记录 `retention_prune`；System→Ops→Retention 暴露 bounded/unbounded/policy/last prune。
+- **Health split**：`runtime/ops.py` 四层互不替代（PROCESS_LIVE / RUNTIME_RUNNING / TRADE_READINESS /
+  EXECUTION_HEALTH）；`GET /health/live`（免认证）+ `GET /api/v1/ops` + `snapshot.ops`。
+- **Crash/restart**：graceful ⇒ COMPLETED + marker 清除；SIGKILL ⇒ INCOMPLETE（不伪造 COMPLETED）；
+  `active_run_id` 增加 PID 复用（启动时刻）与僵尸进程防护（仍未使用 TTL）；restart 后 run history / HWM / config 仍在。
+- **表面**：System→Ops section、Monitor 四层摘要、CLI `ops status|retention|logging|network`、
+  Assistant `explain.entity(kind=ops)`（复用 F-09 catalog，无新写 action）；顺带修复 Monitor 丢失 `SURFACES` import
+  （Slice 4 引入），新增 UI 模块静态守卫测试。
+- 测试：全量 **2271 passed / 0 failed / 24 skipped**（+38 新测试）。
+- `context/status.json.currentProposal = null`。

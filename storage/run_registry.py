@@ -13,9 +13,12 @@
 
 from __future__ import annotations
 
+import calendar
 import json
 import json as _json
 import os
+import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -45,6 +48,73 @@ class RunRegistryError(RuntimeError):
 
 def _canonical(payload: object) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+
+
+#: PID 复用判据的允许偏差（进程启动时间的解析误差）
+_PID_START_TOLERANCE_MS = 5_000
+
+
+def process_is_alive(pid: int) -> bool:
+    """进程是否**可运行**存活（僵尸进程视为已死）。
+
+    仅用 `os.kill(pid, 0)` 会把已退出但未被 reaped 的僵尸进程当作存活 ⇒
+    stale marker 会被误判为 RUNNING。这里额外检查进程状态（Linux `/proc`、macOS `ps -o stat=`）。
+    """
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except (OSError, ProcessLookupError):
+        return False
+    try:
+        stat_path = Path(f"/proc/{pid}/stat")
+        if stat_path.exists():
+            state = stat_path.read_text(encoding="utf-8").rsplit(")", 1)[-1].split()[0]
+            return state != "Z"
+        result = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True,
+                                text=True, timeout=2)
+        state = result.stdout.strip()
+        if state:
+            return not state.startswith("Z")
+    except Exception:  # noqa: BLE001 - 探测失败时不阻塞（回退到 os.kill 结果）
+        pass
+    return True
+
+
+def process_start_epoch_ms(pid: int) -> int | None:
+    """读取某个 PID 的**进程启动时刻**（epoch ms）；不可得 ⇒ None。
+
+    用于 F-15 的 PID 复用防护（不是 TTL）：陈旧 marker 的 pid 被新进程复用时，
+    启动时刻会明显不同，因此不能据此判为 RUNNING。
+    """
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    # Linux：/proc/<pid>/stat 第 22 个字段（clock ticks since boot）+ /proc/stat btime
+    try:
+        stat = Path(f"/proc/{pid}/stat")
+        if stat.exists():
+            fields = stat.read_text(encoding="utf-8").rsplit(")", 1)[-1].split()
+            start_ticks = int(fields[19])
+            btime = None
+            for line in Path("/proc/stat").read_text(encoding="utf-8").splitlines():
+                if line.startswith("btime "):
+                    btime = int(line.split()[1])
+                    break
+            if btime is not None:
+                return int((btime + start_ticks / os.sysconf("SC_CLK_TCK")) * 1000)
+    except Exception:  # noqa: BLE001 - 探测失败不得影响读侧
+        pass
+    # macOS/BSD：`ps -o lstart=`（本地时间）
+    try:
+        result = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True,
+                                text=True, timeout=2)
+        text = result.stdout.strip()
+        if text:
+            parsed = time.strptime(text, "%a %b %d %H:%M:%S %Y")
+            return int(time.mktime(parsed) * 1000)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 def _fact_from_payload(payload: object, *, name: str) -> Fact:
@@ -147,8 +217,10 @@ class JsonRunRegistry:
         """
         import os as _os
 
+        actual_pid = int(pid if pid is not None else _os.getpid())
         marker = {"run_id": run_id, "runtime_id": runtime_id, "mode": mode, "symbol": symbol,
-                  "started_at_ms": int(now_ms), "pid": int(pid if pid is not None else _os.getpid())}
+                  "started_at_ms": int(now_ms), "pid": actual_pid,
+                  "process_started_at_ms": process_start_epoch_ms(actual_pid)}
         target = self.root / ACTIVE_FILE
         temp = target.with_suffix(".json.tmp")
         handle = _os.open(temp, _os.O_CREAT | _os.O_WRONLY | _os.O_TRUNC, 0o600)
@@ -199,10 +271,15 @@ class JsonRunRegistry:
         pid = marker.get("pid")
         if not isinstance(pid, int):
             return None
-        try:
-            os.kill(pid, 0)                    # 进程存活探测（不发送信号）
-        except (OSError, ProcessLookupError):
+        if not process_is_alive(pid):          # 存活探测（僵尸视为已死）
             return None
+        # F-15：PID 复用防护 —— 若 marker 记录了进程启动时刻，则必须与当前该 pid 的启动时刻一致；
+        # 不一致 ⇒ 陈旧 marker（pid 被复用），不得判为 RUNNING。无法探测 ⇒ 保留 pid-only（不回退 TTL）。
+        recorded_start = marker.get("process_started_at_ms")
+        if isinstance(recorded_start, int):
+            actual_start = process_start_epoch_ms(pid)
+            if actual_start is not None and abs(actual_start - recorded_start) > _PID_START_TOLERANCE_MS:
+                return None
         return str(marker.get("run_id"))
 
     def start(
@@ -336,6 +413,73 @@ class JsonRunRegistry:
         status = RunStatus.RUNNING if self.active_run_id() == run_id else RunStatus.INCOMPLETE
         return self._record_from_payload(started, status=status)
 
+    def finalized_runs(self) -> tuple[RunRecord, ...]:
+        """有 finalize 事件的 run（即已有 durable 最终记录），按 started_at 从旧到新。
+
+        供 retention 使用；未 finalize 的 run（RUNNING / 崩溃残留）**不在其中**，因此不会被 prune。
+        """
+        finals: dict[str, dict[str, object]] = {}
+        for event in self._read_index():
+            payload = event.get("record")
+            if event.get("event") == "finalize" and isinstance(payload, dict) and "run_id" in payload:
+                finals[str(payload["run_id"])] = payload
+        records: list[RunRecord] = []
+        for payload in finals.values():
+            raw = str(payload.get("status") or RunStatus.COMPLETED.value)
+            try:
+                status = RunStatus(raw)
+            except ValueError:
+                status = RunStatus.COMPLETED
+            records.append(self._record_from_payload(payload, status=status))
+        records.sort(key=lambda record: (record.started_at, record.run_id))
+        return tuple(records)
+
+    def remove_runs(self, run_ids: tuple[str, ...] | list[str] | set[str]) -> int:
+        """删除给定 run 的 record 文件并**原子压缩索引**（保留其余事件顺序）。
+
+        - active run 永不被删除（即使调用方传入）；
+        - 返回被删除的 record 文件数；索引压缩后 `load()` / `list()` 保持一致（被删 run ⇒ 不再可见）。
+        """
+        targets = {str(item) for item in run_ids if str(item)}
+        active = self.active_run_id()
+        if active is not None:
+            targets.discard(active)
+        if not targets:
+            return 0
+        removed_files = 0
+        for run_id in targets:
+            record_file = self.root / RUNS_DIR / f"{run_id}.json"
+            if record_file.exists():
+                record_file.unlink()
+                removed_files += 1
+        kept: list[dict[str, object]] = []
+        for event in self._read_index():
+            payload = event.get("record")
+            run_id = str(payload.get("run_id")) if isinstance(payload, dict) else ""
+            if run_id in targets:
+                continue
+            kept.append(event)
+        self._write_index(kept)
+        return removed_files
+
+    def _write_index(self, events: list[dict[str, object]]) -> None:
+        """原子重写索引（temp → fsync → replace → fsync(dir)）；保留给定顺序。"""
+        target = self.root / INDEX_FILE
+        temp = target.with_suffix(".jsonl.tmp")
+        payload = "".join(_canonical(event) + "\n" for event in events)
+        handle = os.open(temp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        try:
+            os.write(handle, payload.encode("utf-8"))
+            os.fsync(handle)
+        finally:
+            os.close(handle)
+        os.replace(temp, target)
+        dir_fd = os.open(self.root, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+
     def page(self, *, limit: int, offset: int = 0) -> RunPage:
         """分页读取（F-19）：`limit` 必填且有安全上限；`offset` 为简单游标（复用现有排序）。
 
@@ -425,4 +569,6 @@ __all__ = [
     "JsonRunRegistry",
     "RunPage",
     "RunRegistryError",
+    "process_is_alive",
+    "process_start_epoch_ms",
 ]

@@ -95,6 +95,15 @@ class CliTest(unittest.TestCase):
                 payload = json.loads(out)
                 self.assertTrue(payload)
 
+    def test_ops_topics_and_reason_catalog_are_read_only(self) -> None:
+        for argv in (("ops", "status"), ("ops", "retention"), ("ops", "logging"),
+                     ("ops", "network"), ("reasons",)):
+            with self.subTest(argv=argv):
+                code, out, err = run_cli("--api-url", self.api, *argv, "--json")
+                self.assertEqual(code, EXIT_OK, err)
+                self.assertEqual(err, "")
+                self.assertTrue(json.loads(out))
+
     def test_stdout_is_data_and_stderr_is_diagnostics(self) -> None:
         code, out, err = run_cli("--api-url", self.api, "market")
         self.assertEqual(code, EXIT_OK)

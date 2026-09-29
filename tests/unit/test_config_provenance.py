@@ -115,7 +115,7 @@ class ProvenanceFingerprintTest(unittest.TestCase):
             provenance.PROVENANCE_SCHEMA_VERSION = original
         self.assertNotEqual(mutated, config_fingerprint(resolve_config([entry("a", 1)])))
         self.assertEqual(original, "1")
-        self.assertEqual(SCHEMA_VERSION, "4")
+        self.assertEqual(SCHEMA_VERSION, "5")
 
     def test_snapshot_records_id_and_sources(self) -> None:
         snapshot = build_config_snapshot(

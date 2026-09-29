@@ -1930,3 +1930,69 @@ AssertionError: 0 not greater than or equal to 1   # account_sampling_errors
 未新增交易能力 / 策略 / Risk 规则 / Execution 状态机 / evidence store / 第二套 config system / LLM / CAPITAL action；
 未改 `OrderNormalizer` 逻辑、未放松任何 fail-closed。`context/status.json.currentProposal = null`；
 **不自动进入 Slice 5**（retention / logging 等留待授权）。
+
+## 2026-09-29（续 30）：Closure Slice 5 —— F-12 / F-15 + Operational Posture（全部 CLOSED）
+
+人类授权（本会话）：closure 继续，**不新建 Proposal 编号**；关闭 F-12（network/auth）与 F-15（logging/retention），
+补齐 liveness / crash-restart。**不新增交易能力**。
+
+### 0. 遗留 runtime 清理（先做）
+
+`runtime.assembly --symbol BTCUSDT --port 8793`（PID 47249，启动于修复前旧代码，registry `/tmp/probex_s1/runs`，
+run `replay-1790694780015` 早已 COMPLETED）HTTP 无响应、SIGTERM/SIGINT 无效（shutdown 卡死）⇒ **SIGKILL**；
+端口 8793 释放；durable RunRecord 未被触碰（kill 前后均 COMPLETED）；无 active marker。
+
+### F-12 Network / Auth
+
+- `RuntimeProfile` 新增 `allow_non_loopback` / `auth_token_ref`；`__post_init__` 对非 loopback **fail closed**
+  （缺 opt-in 或缺 token 引用 ⇒ `AssemblyError`）。`build_profile_from_args` 新增 `--allow-non-loopback` /
+  `--auth-token-ref`（ENV：`PROBEX_ALLOW_NON_LOOPBACK` / `PROBEX_AUTH_TOKEN_REF` / `PROBEX_BIND_HOST`）。
+- token 只经 `resolve_secret_ref`（`env:NAME`）解析；值 `register_secret` 到 redactor；
+  provenance 只写 `secret_entry("api.auth_token", env:NAME)`。
+- `api/server.py`：`ProductApiHandler.auth_token` + `_authorize`（`hmac.compare_digest`）；所有 `/api/v1/*` 需 bearer
+  （actions/execution/replay 同样，无匿名旁路），缺/错 401 + `WWW-Authenticate`；`/health/live` 与 `/ui/*` 免认证；
+  失败日志只记 reason code。
+
+### F-15 Structured logging
+
+- 新增 `runtime/observability.py`：`configure_logging`（stderr 或文件 + 显式轮转）、`log_event`、
+  `register_secret` / `sanitize` / `redact_text`、`logging_posture`；未配置时 `NullHandler`（不泄漏半结构化输出）。
+- 接线：assembly（startup/shutdown/runtime_*/retention_prune）、session（run_start/run_finalize/run_failure）、
+  server（auth_failure/api_5xx/http_request_error）、gateway（action_invoke/result/refusal/confirmation）。
+
+### F-15 Retention
+
+- 新增 `storage/retention.py`（`RetentionPolicy` / `PruneReport` / `prune_finished_runs`）；
+  `JsonRunRegistry` 新增 `finalized_runs()` 与 `remove_runs()`（删除 record + 原子压缩索引，active 双保险）。
+- 配置键：`retention.run_max_runs|run_max_age_ms|event_store_max_bytes|log_max_bytes|log_backup_count`；
+  默认全 None ⇒ UNBOUNDED；`run_retention()` 显式触发并记日志。
+
+### Liveness / health split / crash-restart
+
+- `runtime/ops.py`（`build_health_split` / `build_retention_posture` / `build_ops_payload` / `NetworkPosture`）；
+  `product.types.OpsView` + `snapshot.ops`；`GET /health/live`（免认证）+ `GET /api/v1/ops`。
+- `storage/run_registry.py`：marker 记录 `process_started_at_ms`；`active_run_id` 校验 PID 复用；
+  新增 `process_is_alive`（僵尸视为已死）。仍不使用 TTL。
+
+### 表面
+
+- UI：System→Ops section、Monitor 四层摘要；修复 Monitor 丢失 `SURFACES` import（Slice 4 引入，浏览器会 ReferenceError）。
+- CLI：`ops status|retention|logging|network`。
+- Assistant：`explain.entity(kind=ops)` → `network_exposure|auth_required|retention_unbounded|process_live_readiness_blocked`。
+- 新测试（+38）：`test_observability` / `test_retention` / `test_ops_posture` / `test_ui_module_hygiene` /
+  `test_slice5_ops_e2e`（A 本地 / B 非 loopback auth / C retention / D crash-restart / E health split）；
+  CLI ops 断言。全量 **2271 passed / 0 failed / 24 skipped**。
+
+### 真实启动证据（仓库命令）
+
+- A loopback：`/health/live` 200；`/api/v1/ops` 显示 loopback/无 auth、retention UNBOUNDED、logging posture（文件无 size ⇒ UNBOUNDED）；
+  日志依次 `run_start → runtime_start → startup → run_finalize → runtime_stop → shutdown`；SIGTERM ⇒ `shutdown`。
+- B 非 loopback：未 opt-in / opt-in 无 token 均拒绝启动；opt-in + token ⇒ 401/401/200；token 不在日志/snapshot；
+  `secret_refs=['env:PROBEX_API_TOKEN']`。
+- D crash/restart：SIGKILL ⇒ 无 finalize ⇒ 读侧 `INCOMPLETE`（正常 reaping 后 `active_run_id=None`）；
+  restart 后历史含该 `INCOMPLETE`、HWM 文件仍在。
+
+### 边界与下一步
+
+未引入第三方 logging / backup / archival / cloud / Docker / Prometheus；未改 HWM/RunRecord/Risk 语义；
+未设置隐式 retention 数值。`currentProposal = null`；**不自动进入任何新阶段**。

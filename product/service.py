@@ -28,6 +28,7 @@ from product.types import (
     Fact,
     HealthView,
     MarketView,
+    OpsView,
     OrderView,
     PortfolioView,
     PredictionView,
@@ -111,6 +112,8 @@ class ProductService:
     ack_latency: Callable[[], object | None] = lambda: None
     #: F-08：MarketState 的 canonical 指纹（既有 prediction.schema.market_state_hash，经注入避免反向依赖）
     market_state_hash: Callable[[], object | None] = lambda: None
+    #: F-12/F-15：operational posture（network/auth/logging/retention + 四层健康拆分）
+    ops: Callable[[], Mapping[str, object] | None] = lambda: None
 
     def run_summary_view(self) -> object | None:
         """取当前 Run Summary；未接线 ⇒ None（调用方须按 UNKNOWN/503 处理，不得伪造空报告）。"""
@@ -184,6 +187,7 @@ class ProductService:
             evidence=self._evidence(market_state, prediction, decision, readiness, tracker),
             config=self._config(),
             execution_safety=self._execution_safety(),
+            ops=self._ops(),
             blockers=(),
         )
         # Unified Blockers 是**只读投影**：由已组装的事实推导，再替换回快照（不重排、不丢弃）
@@ -410,6 +414,26 @@ class ProductService:
             clock_offset_ms=Fact.of(health.get("clock_offset_ms")),
             uptime_ms=Fact.of(health.get("uptime_ms")),
             notes=tuple(str(n) for n in (health.get("notes") or ())),
+        )
+
+    def _ops(self) -> OpsView:
+        """F-12/F-15：ops 姿态（未接线 ⇒ 全 UNKNOWN；四层健康彼此独立）。"""
+        payload = self.ops()
+        if not isinstance(payload, Mapping):
+            return OpsView()
+        reasons = payload.get("trade_readiness_reasons")
+        return OpsView(
+            process_live=Fact.of(payload.get("process_live")),
+            runtime_state=Fact.of(payload.get("runtime_state")),
+            runtime_detail=Fact.of(payload.get("runtime_detail")),
+            trade_readiness=Fact.of(payload.get("trade_readiness")),
+            trade_readiness_reasons=tuple(str(item) for item in (reasons or ())),
+            execution_health=Fact.of(payload.get("execution_health")),
+            operational_warning=Fact.of(payload.get("operational_warning")),
+            network=Fact.of(payload.get("network")),
+            logging=Fact.of(payload.get("logging")),
+            retention=Fact.of(payload.get("retention")),
+            ts=Fact.of(payload.get("ts")),
         )
 
     def _config(self) -> ConfigView:

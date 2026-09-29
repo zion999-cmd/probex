@@ -15,8 +15,9 @@ from enum import Enum
 from market.events.types import Milliseconds
 
 #: 产品 schema 版本（API 契约版本；内部 Python 类型不得裸序列化）
-#: F-08：TraceEntry 增加 ts / identity_kind / latency_ms ⇒ schema 3 → 4
-SCHEMA_VERSION = "4"
+#: F-08：TraceEntry 增加 ts / identity_kind / latency_ms ⇒ 3 → 4；
+#: Closure Slice 5：snapshot 新增 `ops` 段（network/auth/logging/retention/liveness）⇒ 4 → 5
+SCHEMA_VERSION = "5"
 
 #: 未知原因码（用于 `Fact.reason`）
 UNKNOWN_NOT_PROVIDED = "not_provided"
@@ -168,6 +169,26 @@ class ExecutionSafetyView:
     latency: Fact = field(default_factory=lambda: Fact.unknown("execution safety not wired"))
     reconciliation: Fact = field(default_factory=lambda: Fact.unknown("execution safety not wired"))
     anomalies: Fact = field(default_factory=lambda: Fact.unknown("execution safety not wired"))
+
+
+@dataclass(frozen=True, slots=True)
+class OpsView:
+    """Operational posture（closure Slice 5 / F-12 / F-15）：四层健康 + network/logging/retention。
+
+    四层语义**互不替代**：`process_live` 只回答"进程活着"，不代表可交易。
+    """
+
+    process_live: Fact = field(default_factory=lambda: Fact.unknown("ops posture not wired"))
+    runtime_state: Fact = field(default_factory=lambda: Fact.unknown("ops posture not wired"))
+    runtime_detail: Fact = field(default_factory=lambda: Fact.unknown("ops posture not wired"))
+    trade_readiness: Fact = field(default_factory=lambda: Fact.unknown("ops posture not wired"))
+    trade_readiness_reasons: tuple[str, ...] = ()
+    execution_health: Fact = field(default_factory=lambda: Fact.unknown("ops posture not wired"))
+    operational_warning: Fact = field(default_factory=lambda: Fact.unknown("ops posture not wired"))
+    network: Fact = field(default_factory=lambda: Fact.unknown("ops posture not wired"))
+    logging: Fact = field(default_factory=lambda: Fact.unknown("ops posture not wired"))
+    retention: Fact = field(default_factory=lambda: Fact.unknown("ops posture not wired"))
+    ts: Fact = field(default_factory=lambda: Fact.unknown("ops posture not wired"))
 
 
 @dataclass(frozen=True, slots=True)

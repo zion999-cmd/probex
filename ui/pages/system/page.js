@@ -5,7 +5,24 @@ import { escapeHtml, fact, factRows, reasonCell, rows, section, table } from "/u
 export const title = "System";
 export const slug = "system";
 
-export const SECTIONS = ["health", "risk", "readiness", "execution", "configuration", "capabilities"];
+export const SECTIONS = ["health", "risk", "readiness", "execution", "configuration", "capabilities", "ops"];
+
+/** F-12/F-15：operational posture（network / auth / logging / retention / liveness）。 */
+function opsSection(ops) {
+  const nested = (label, factValue) => rows([[label, fact(factValue)]]);
+  return section("Process liveness / health split", rows([
+    ["process live", fact(ops.process_live)],
+    ["runtime state", fact(ops.runtime_state)],
+    ["runtime detail", fact(ops.runtime_detail)],
+    ["trade readiness", fact(ops.trade_readiness)],
+    ["readiness reasons", escapeHtml((ops.trade_readiness_reasons || []).join(", ") || "none")],
+    ["execution health", fact(ops.execution_health)],
+    ["operational warning", fact(ops.operational_warning)],
+  ])) +
+    section("Network / auth posture", nested("network", ops.network)) +
+    section("Logging posture", nested("logging", ops.logging)) +
+    section("Retention posture", nested("retention", ops.retention));
+}
 
 async function executionSections() {
   const [limits, rateLimits, latency, reconciliation, anomalies] = await Promise.all([
@@ -103,6 +120,9 @@ export async function render(rest = []) {
       ["unknown submit count", fact(execution.unknown_submit_count)],
       ["unknown cancel count", fact(execution.unknown_cancel_count)],
     ]));
+  }
+  if (active === "ops") {
+    return header + opsSection(snapshot.ops || {});
   }
   if (active === "configuration") {
     const config = snapshot.config || {};

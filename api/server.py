@@ -11,15 +11,19 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote
 
+from runtime.observability import log_event
+
 from api.capabilities import build_capabilities_manifest
 from api.routes import (
     ACTIONS_AUDIT_PATH,
     EXECUTION_SUB_PATHS,
+    OPS_PATH,
     ACTIONS_PATH,
     ASSISTANT_CONTEXT_PATH,
     ASSISTANT_EXPLAIN_PATH,
@@ -52,6 +56,14 @@ SCHEMA_VERSION_PATH = "/api/v1/schema"
 SNAPSHOT_PATH = "/api/v1/snapshot"
 #: F-09：reason code 解释目录（presentation-only；UI/CLI/Assistant 共用）
 REASONS_PATH = "/api/v1/reasons"
+#: F-12/F-15：process liveness（不依赖交易所/行情/provider；免认证）
+HEALTH_LIVE_PATH = "/health/live"
+#: F-15：operational posture（network/auth/logging/retention/liveness/health split）
+OPS_PATH = "/api/v1/ops"
+#: 已认证的 API 前缀（F-12：不能给 actions/execution 开匿名旁路）
+PROTECTED_PREFIX = "/api/v1/"
+#: 免认证的静态资源（不含任何事实：事实必须经 /api/v1/*）
+UNAUTHENTICATED_PATHS = ("/", "/index.html")
 STOP_PATH = "/api/v1/runtime/stop"
 NOT_IMPLEMENTED = 501
 METHOD_NOT_ALLOWED = 405
@@ -59,11 +71,40 @@ NOT_FOUND = 404
 
 
 class ProductApiHandler(BaseHTTPRequestHandler):
-    """只读 JSON handler。`service` 由 `create_handler(service)` 注入。"""
+    """只读 JSON handler。`service` 与可选 `auth_token` 由 `create_handler` 注入。"""
 
     service: ProductService
+    #: F-12：非 loopback 部署的 bearer token；None ⇒ 不强制（loopback）
+    auth_token: str | None = None
     server_version = "probex-product-api/1"
     sys_version = ""
+
+    # ------------------------------------------------------------------ auth (F-12)
+
+    def _authorize(self, path: str) -> bool:
+        """非 loopback：所有 /api/v1/* 一律需要 `Authorization: Bearer <token>`。
+
+        免认证：`/health/live`（纯进程 liveness）与静态 UI 资源（不含事实）。
+        **不记录** Authorization header / 提供的 token / token 长度。
+        """
+        token = type(self).auth_token
+        if not token:
+            return True
+        if path == HEALTH_LIVE_PATH or path in UNAUTHENTICATED_PATHS or path.startswith("/ui/"):
+            return True
+        header = self.headers.get("Authorization") or ""
+        provided = header[7:].strip() if header.lower().startswith("bearer ") else ""
+        if not provided:
+            log_event("api", "auth_failure", level=30, reason_code="AUTH_TOKEN_MISSING", path=path)
+            self._send_json(401, {"error": "auth_required", "detail": "bearer token required",
+                                  "status": 401}, headers={"WWW-Authenticate": "Bearer"})
+            return False
+        if not hmac.compare_digest(provided, token):
+            log_event("api", "auth_failure", level=30, reason_code="AUTH_TOKEN_INVALID", path=path)
+            self._send_json(401, {"error": "auth_invalid", "detail": "bearer token rejected",
+                                  "status": 401}, headers={"WWW-Authenticate": "Bearer"})
+            return False
+        return True
 
     #: 不向 stderr 打裸日志（§20）；访问信息由调用方按需自行采集
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002 - 覆盖父类签名
@@ -71,12 +112,15 @@ class ProductApiHandler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------------ helpers
 
-    def _send_json(self, status: int, payload: object) -> None:
+    def _send_json(self, status: int, payload: object, *,
+                   headers: dict[str, str] | None = None) -> None:
         body = json.dumps(payload, ensure_ascii=False, allow_nan=False, sort_keys=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -92,6 +136,11 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         return snapshot_to_jsonable(self.service.snapshot())
 
     def _error(self, status: int, code: str, detail: str) -> None:
+        if status >= 500:
+            log_event("api", "api_5xx", level=40, reason_code=code, status=status, detail=detail)
+        elif status == 404:
+            log_event("api", "http_request_error", level=30, reason_code=code, status=status,
+                      detail=detail)
         self._send_json(status, {"error": code, "detail": detail, "status": status})
 
     # ------------------------------------------------------------------ GET
@@ -127,7 +176,8 @@ class ProductApiHandler(BaseHTTPRequestHandler):
             api_read=tuple(sorted([*ROUTES, SNAPSHOT_PATH, REPORT_PATH, METRICS_PATH, RUNS_PATH,
                                    RUNS_COMPARE_PATH, FACTS_PATH, PORTFOLIO_TIMELINE_PATH,
                                    ACTIONS_PATH, ACTIONS_AUDIT_PATH, ASSISTANT_CONTEXT_PATH,
-                                   ASSISTANT_EXPLAIN_PATH, REASONS_PATH, *sorted(EXECUTION_SUB_PATHS),
+                                   ASSISTANT_EXPLAIN_PATH, REASONS_PATH, OPS_PATH,
+                                   *sorted(EXECUTION_SUB_PATHS),
                                    MARKET_TIMELINE_PATH, MARKET_DEPTH_PATH, MARKET_TRADES_PATH,
                                    MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH])),
             cli_commands=COMMAND_SPEC,
@@ -141,6 +191,13 @@ class ProductApiHandler(BaseHTTPRequestHandler):
 
         self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE,
                               "definitions": list(definitions_payload())})
+
+    def _serve_health_live(self) -> None:
+        """F-15：process liveness（纯进程事实；不依赖交易所/行情/provider；免认证）。"""
+        identity = self.service.identity
+        self._send_json(200, {"live": True, "runtime_id": identity.runtime_id,
+                              "started_at_ms": identity.started_at,
+                              "ts": int(self.service.clock())})
 
     def _serve_reasons(self, path: str) -> None:
         """F-09：reason code → 人类解释（catalog 或单个 code；原始 code 永远保留）。"""
@@ -561,6 +618,11 @@ class ProductApiHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib 接口
         raw_path = self.path
         path, _, query = raw_path.partition("?")
+        if not self._authorize(path):
+            return
+        if path == HEALTH_LIVE_PATH:
+            self._serve_health_live()
+            return
         if self._serve_ui(path):
             return
         if path == REPORT_PATH:
@@ -631,6 +693,7 @@ class ProductApiHandler(BaseHTTPRequestHandler):
                                                        ACTIONS_PATH, ACTIONS_AUDIT_PATH,
                                                        ASSISTANT_CONTEXT_PATH,
                                                        ASSISTANT_EXPLAIN_PATH, REASONS_PATH,
+                                                       OPS_PATH, HEALTH_LIVE_PATH,
                                                        *sorted(EXECUTION_SUB_PATHS)])})
             return
         module = ROUTES.get(path)
@@ -646,6 +709,8 @@ class ProductApiHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib 接口
         path = self.path.split("?", 1)[0]
+        if not self._authorize(path):
+            return
         if path.startswith(f"{ACTIONS_PATH}/"):
             action_id = path[len(ACTIONS_PATH) + 1:]
             body: dict = {}
@@ -686,16 +751,20 @@ class ProductApiHandler(BaseHTTPRequestHandler):
     do_PUT = do_DELETE = do_PATCH = do_POST
 
 
-def create_handler(service: ProductService):
-    """把 service 绑定进 handler 类（每个 server 一个独立子类，避免全局状态）。"""
+def create_handler(service: ProductService, *, auth_token: str | None = None):
+    """把 service（+ 可选 bearer token）绑定进 handler 类（每 server 一个子类，避免全局状态）。"""
     if not isinstance(service, ProductService):
         raise TypeError("create_handler requires a ProductService")
-    return type("BoundProductApiHandler", (ProductApiHandler,), {"service": service})
+    if auth_token is not None and not isinstance(auth_token, str):
+        raise TypeError("auth_token must be a string when given")
+    return type("BoundProductApiHandler", (ProductApiHandler,),
+                {"service": service, "auth_token": auth_token})
 
 
-def create_server(service: ProductService, *, host: str = "127.0.0.1", port: int = 0) -> ThreadingHTTPServer:
+def create_server(service: ProductService, *, host: str = "127.0.0.1", port: int = 0,
+                  auth_token: str | None = None) -> ThreadingHTTPServer:
     """创建（未启动的）HTTP server；`port=0` 时由系统分配（便于测试）。"""
-    return ThreadingHTTPServer((host, port), create_handler(service))
+    return ThreadingHTTPServer((host, port), create_handler(service, auth_token=auth_token))
 
 
 def serve(service: ProductService, *, host: str = "127.0.0.1", port: int = 0) -> None:

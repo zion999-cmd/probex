@@ -18,6 +18,7 @@ from market.events.types import Milliseconds
 from actions.audit import ActionAuditEntry, ActionAuditLog, parameter_fingerprint
 from actions.confirmation import ConfirmationError, ConfirmationRegistry
 from actions.manifest import catalog_payload, spec
+from runtime.observability import log_event
 from actions.types import (
     ActionResult,
     ActionAvailability,
@@ -106,6 +107,8 @@ class ActionGateway:
 
     def invoke(self, request: ActionRequest, context: ActionContext) -> ActionResult:
         started = int(self.clock())
+        log_event("actions", "action_invoke", action_id=request.action_id,
+                  runtime_id=context.runtime_id, mode=context.mode.value, surface=context.surface)
         item = spec(request.action_id)
         if item is None:
             # 未知 action 也必须留痕（SC-9）：它没有 level，用 READ 作为审计档位并记录原因
@@ -158,6 +161,16 @@ class ActionGateway:
                 result: dict[str, object] | None = None, fact_refs: tuple[str, ...] = (),
                 confirmation_id: str | None = None) -> ActionResult:
         ended = int(self.clock())
+        event = "action_result"
+        if reason == "CONFIRMATION_REQUIRED":
+            event = "confirmation_required"
+        elif reason and reason.startswith("CONFIRMATION_INVALID"):
+            event = "confirmation_invalid"
+        elif status is ActionStatus.REFUSED:
+            event = "action_refusal"
+        log_event("actions", event, level=(20 if status is ActionStatus.SUCCEEDED else 30),
+                  action_id=request.action_id, runtime_id=context.runtime_id, mode=context.mode.value,
+                  action_status=status.value, reason_code=reason)
         if level is not None:
             self.audit.record(ActionAuditEntry(
                 ts=started, actor=request.requested_by, action_id=request.action_id, level=level,
