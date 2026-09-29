@@ -517,3 +517,22 @@ P0001.9.5 已作为 `a2ab8da`（1631 passed）、P0001.9.6 已作为 `afc0196`�
 - 真实证据：REPLAY / PAPER 自动登记 `COMPLETED`（真实 ReplaySource / PaperBroker）；TESTNET stop 失败 ⇒ `INCOMPLETE`；
   LIVE wiring 以 `orchestrator.stop` 为原 Owner，结束状态 `STOPPED`；四者经 `/api/v1/runs` 可见。
 - 测试：全量 **1973 passed / 0 failed / 24 skipped**（+18）。提交 `2085d2d` / `c89e516` 已 push；本阶段改动未 commit。
+
+### P0001.12 Market Visual Workbench（已完成）
+
+- `product/market_timeline.py`（时间线：bucket/window/max_points 有界；特征只搬运 Owner 事实）
+  + `product/market_projection.py`（depth 热图 / trades / health / overlays / BoundedMarketHistory / ReplayControl）。
+- API：`GET /api/v1/market/{timeline,depth,trades,health,overlays}`、`GET /api/v1/runs/<id>/market`、
+  `POST /api/v1/replay/*`（local replay control，仅 REPLAY；与交易写路径隔离）；capabilities 新增 `api.simulation_control`。
+- UI：Market 页 = 工作台（Canvas 热图 + 特征面板 + 健康时间条 + overlays + replay 控件；零第三方依赖）。
+- 测试：全量 **2017 passed / 0 failed / 24 skipped**（+44）。提交 `055df59`（P0001.11.2）已 push；本阶段未 commit。
+
+### P0001.12.1 Product Surface Architecture（已完成：信息架构 + gap audit）
+
+- 一级导航固定 5 个 Surface：Monitor / Market / Activity / Performance / System（`ui/app/surfaces.js` 为单一来源）；
+  全局 Header（Mode/Environment/Venue/Symbol/Runtime/Health/Data Time）+ 全局 Blocker Strip。
+- Activity 合并 Prediction/Strategy/Orders/Evidence 为因果链；Performance 以 Run 为单位；System 承载 Health/Risk/Readiness/
+  Execution(P0001.13 插槽)/Configuration/Capabilities；Market 增加 Live/Replay/Run Review。
+- **Gap audit**：12 类需求可移动/组合满足；需新 Product API 的 5 项（G1 fill 证据、G2 raw facts、G3 equity 序列、
+  G4 prediction/accounting 健康、G5 authority kind/TTL/generation）；Execution Safety 明细属 P0001.13。
+- 未做大规模视觉重构（遵守提案指示）；测试全量 **2030 passed / 0 failed / 24 skipped**（+13）。未 commit。

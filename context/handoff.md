@@ -1653,3 +1653,37 @@ TESTNET `INCOMPLETE`（stop 失败 ⇒ 绝不 COMPLETED）、LIVE `COMPLETED`（
 **遗留（未授权，仅记录）**：① 正在运行的实例在 registry 读侧显示 `INCOMPLETE`（建议后续引入 `CREATED/RUNNING/...` 或 active overlay）；
 ② `proposals/.P0001.11.2-runtime-session-production-wiring.md.swp` 是编辑器 swap 文件（未提交，建议关闭编辑器后删除）。
 **未 commit / 未 push**（本阶段尚未获得 commit 授权）。
+
+## 2026-09-29（续 18）：P0001.11.2 提交推送 + P0001.12 Market Visual Workbench 实施完成
+
+**提交/推送**：`055df59`（P0001.11.2，detached worktree 复验 1973 passed）已 push（`c89e516..055df59`）。
+
+**P0001.12（已完成）**：新增 `product/market_timeline.py` 与 `product/market_projection.py`
+（时间线投影 / depth 热图 / trades / health / overlays / 有界历史缓冲 / ReplayControl），
+新增只读端点 `GET /api/v1/market/{timeline,depth,trades,health,overlays}` 与 `GET /api/v1/runs/<id>/market`，
+新增 **local replay session control** `POST /api/v1/replay/{play,pause,step,speed,seek}`（与交易写路径隔离，
+`ReplayControl` 对非 REPLAY 构造即拒绝），capability manifest 新增 `api.simulation_control`，
+UI 的 Market 页重写为工作台（Canvas 热图 + 特征面板 + 质量时间条 + overlays + replay 控件，零第三方依赖）。
+
+真实证据（真实 replay 驱动 + 真实 MarketBook 事实）：depth cells 3、best bid/ask 与 MarketBook 一致、
+trades 来自 TradePayload、play/pause/step/speed/seek 命令、health `['healthy','stale']`@gen2、
+decision `maker:1:bid`、execution `probex-s1-1 OrderAccepted`、UNKNOWN 显式（microprice/imbalance/ofi）、
+bounds 显式且 truncated 标记、RUN REVIEW 端点可用。全量 **2017 passed / 0 failed / 24 skipped**（+44）。
+
+**未 commit / 未 push**（本阶段未获 commit 授权）。
+
+## 2026-09-29（续 19）：P0001.12.1 Product Surface Architecture（信息架构 + gap audit）
+
+新增 `ui/app/surfaces.js`（**信息架构单一来源**：5 个 Surface = Monitor / Market / Activity / Performance / System；
++ `LEGACY_PAGE_HOME` 归属表）、重写 `ui/client/console.js`（Surface 导航 + 全局 Header + 全局 Blocker Strip）、
+`ui/app/index.html`（blocker strip 容器）。
+新增 Surface 页面：`monitor`（30 秒状态总览）、`activity`（market→prediction→decision→readiness→order→exchange 因果链）、
+`performance`（Run 为中心 + 指标 + 对比 + Metric Contract）、`system`（health/risk/readiness/execution/configuration/capabilities）；
+`market` 增加 Live / Replay / Run Review 二级入口。旧页面保留为 detail view（能力不删除）。
+
+**Gap audit 结论**：Surface 的 12 类需求中 **12 类可由现有事实移动/组合满足**；真正需要新 Product API 的只有：
+G1 Activity 的 fill 级证据、G2 raw-facts drill-down、G3 持久化 equity/exposure 序列、G4 prediction provider 与 accounting 健康、
+G5 authority kind/TTL/generation；另有 Execution Safety 明细属 **P0001.13** 后端（UI 插槽已预留）。
+
+遵守提案末尾指示：**未做大规模视觉重构**，未新增未授权后端能力，旧页面未删除。新增测试 13 条；
+全量 **2030 passed / 0 failed / 24 skipped**。未 commit / 未 push（未授权）。

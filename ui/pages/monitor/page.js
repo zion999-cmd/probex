@@ -1,0 +1,57 @@
+/** Monitor：30 秒理解当前系统状态（P0001.12.1 §1）。 */
+import { ENDPOINTS, fetchJson, fetchSnapshot } from "/ui/client/api.js";
+import { escapeHtml, fact, rows, section } from "/ui/client/render.js";
+import { SURFACES } from "/ui/app/surfaces.js";
+
+export const title = "Monitor";
+export const slug = "monitor";
+
+export async function render() {
+  const snapshot = await fetchSnapshot();
+  const overlays = await fetchJson(ENDPOINTS.marketOverlays);
+  const decisions = (overlays.overlays || {}).decisions || [];
+  const orders = snapshot.execution.active_orders || [];
+  const metrics = rows([
+    ["equity", fact(snapshot.portfolio.equity)],
+    ["realized pnl", fact(snapshot.portfolio.realized_pnl)],
+    ["unrealized pnl", fact(snapshot.portfolio.unrealized_pnl)],
+    ["position", fact(snapshot.portfolio.position_qty)],
+    ["open order exposure", fact(snapshot.execution.open_order_exposure)],
+    ["uncertain exposure", fact(snapshot.execution.uncertain_exposure)],
+    ["active orders", String(orders.length)],
+    ["readiness", fact(snapshot.readiness.status)],
+  ]);
+  const blockers = (snapshot.blockers || []).length
+    ? (snapshot.blockers || []).map((b, index) => [b.severity + " · " + b.owner,
+        `<span class="${b.severity === "BLOCKING" ? "bad" : "unknown"}">${escapeHtml(b.reason_code)}</span>`])
+    : [["blockers", "none"]];
+  const market = rows([
+    ["market health", fact(snapshot.market.healthy)],
+    ["tradeable", fact(snapshot.market.tradeable)],
+    ["best bid / ask", `${fact(snapshot.market.best_bid)} / ${fact(snapshot.market.best_ask)}`],
+    ["spread (bps)", fact(snapshot.market.spread_bps)],
+    ["prediction fresh", fact(snapshot.prediction.freshest)],
+    ["strategy mode", fact(snapshot.strategy.mode)],
+    ["blocked by", fact(snapshot.strategy.blocked_by)],
+    ["kill switch", fact(snapshot.risk.kill_switch_mode)],
+  ]);
+  const quotes = decisions.length
+    ? decisions.slice(-5).map((d) => `<div class="row"><span class="k">${escapeHtml(d.side)}</span>` +
+        `<span class="v">${escapeHtml(d.action)} @ ${fact(d.price)}</span></div>`).join("")
+    : '<div class="row"><span class="k">quotes</span><span class="v unknown">UNKNOWN (no decisions recorded)</span></div>';
+  const orderRows = orders.length
+    ? orders.map((o) => `<div class="row"><span class="k">${escapeHtml(o.client_order_id)}</span>` +
+        `<span class="v">${escapeHtml(o.side)} ${escapeHtml(o.status)} @ ${fact(o.price)}</span></div>`).join("")
+    : '<div class="row"><span class="k">orders</span><span class="v known">0</span></div>';
+  const recent = decisions.slice(-5).reverse().map((d) =>
+    `<div class="row"><span class="k">${d.ts}</span><span class="v">${escapeHtml(d.action)} ${escapeHtml(d.side)} ` +
+    `${fact(d.decision_id)}</span></div>`).join("") ||
+    '<div class="row"><span class="k">activity</span><span class="v unknown">UNKNOWN (nothing recorded)</span></div>';
+  const surfaceNav = SURFACES.map((s) => `<a href="#/${s.slug}">${escapeHtml(s.title)}</a>`).join(" · ");
+  return section("System now", metrics) +
+    section("Blockers / warnings", rows(blockers)) +
+    section("Market / current quotes", market + quotes) +
+    section("Position / active orders", orderRows) +
+    section("Recent activity", recent) +
+    section("Surfaces", surfaceNav);
+}

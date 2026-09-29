@@ -9,8 +9,11 @@ import unittest
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 UI_ROOT = PROJECT_ROOT / "ui"
-PAGES = ("overview", "market", "prediction", "strategy", "risk", "orders", "portfolio",
-         "readiness", "evidence", "runs", "metrics", "capabilities")
+#: P0001.12.1：一级导航 = 5 个 Surface；旧页面降为 detail view（能力不删除）
+SURFACES = ("monitor", "market", "activity", "performance", "system")
+LEGACY_PAGES = ("overview", "prediction", "strategy", "risk", "orders", "portfolio",
+                "readiness", "evidence", "runs", "metrics", "capabilities")
+PAGES = SURFACES + LEGACY_PAGES
 
 
 class UiApiContractTest(unittest.TestCase):
@@ -21,7 +24,7 @@ class UiApiContractTest(unittest.TestCase):
                 path = UI_ROOT / "pages" / page / "page.js"
                 self.assertTrue(path.exists(), f"missing page {page}")
                 source = path.read_text(encoding="utf-8")
-                self.assertIn("export async function render()", source)
+                self.assertIn("export async function render", source)
                 self.assertIn("export const title", source)
                 self.assertNotIn("REPLAY", source)
                 self.assertNotIn("TESTNET", source)
@@ -35,7 +38,7 @@ class UiApiContractTest(unittest.TestCase):
                 self.assertNotIn("binance", source.lower())
                 self.assertNotIn("connectors", source)
                 for url in re.findall(r'["\'](/[^"\']*)["\']', source):
-                    if url.startswith("/ui/"):
+                    if url in ("/", "") or url.startswith("/ui/"):
                         continue
                     self.assertTrue(any(url.startswith(host) for host in allowed_hosts),
                                     f"UI references non-product URL {url}")

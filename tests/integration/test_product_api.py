@@ -113,7 +113,7 @@ class ProductApiTest(unittest.TestCase):
         with OPENER.open(f"{self.base}/", timeout=5) as response:
             shell = response.read().decode("utf-8")
             self.assertEqual(response.status, 200)
-        self.assertIn("Probex console", shell)
+        self.assertIn("Probex", shell)
         self.assertIn("/ui/client/console.js", shell)
         with OPENER.open(f"{self.base}/ui/client/api.js", timeout=5) as response:
             client = response.read().decode("utf-8")
