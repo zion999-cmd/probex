@@ -28,6 +28,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from dataclasses import field as dataclasses_field
 from enum import Enum
 from typing import Callable, Mapping, Protocol
 
@@ -85,6 +86,9 @@ class ExecutionHttpFetcher(Protocol):
 class UrllibExecutionFetcher:
     """标准库实现；按状态码给出**结构化**结果（异常消息不含 query）。"""
 
+    #: 最近一次响应的真实头（供 usage fact 采集；additive）
+    last_headers: dict[str, str] = dataclasses_field(default_factory=dict)
+
     def send(self, *, method: str, url: str, headers: Mapping[str, str], timeout_s: float) -> object:
         parts = urllib.parse.urlsplit(url)
         safe_target = f"{parts.scheme}://{parts.netloc}{parts.path}"
@@ -92,6 +96,7 @@ class UrllibExecutionFetcher:
         try:
             with urllib.request.urlopen(request, timeout=timeout_s) as handle:
                 body = handle.read()
+                self.last_headers = dict(handle.headers.items())
         except urllib.error.HTTPError as exc:
             raise _http_error(exc, safe_target=safe_target) from None
         except (urllib.error.URLError, OSError, ValueError) as exc:

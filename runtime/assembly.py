@@ -164,6 +164,11 @@ class ProductRuntime:
     _accounting: object | None = field(default=None, init=False)
     _account_timeline: object | None = field(default=None, init=False)
     _accounting_provider: object | None = field(default=None, init=False)
+    _usage_collector: object | None = field(default=None, init=False)
+    _prediction_runtime: object | None = field(default=None, init=False)
+    _private_runtime: object | None = field(default=None, init=False)
+    _latency_observer: object | None = field(default=None, init=False)
+    _execution: object | None = field(default=None, init=False)
     _feed_error: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
@@ -245,6 +250,135 @@ class ProductRuntime:
         equity = getattr(accounting, "equity", None)
         return Fact.of("HEALTHY" if equity is not None else "UNKNOWN")
 
+    def _latency_note(self, kind: str, ts_ms: int) -> None:
+        """engine 边界 → observer（decision_ready 表示决策边界已到）。"""
+        observer = getattr(self, "_latency_observer", None)
+        if observer is None:
+            return
+        if kind == "decision_ready":
+            observer.note_decision(int(ts_ms))
+        else:
+            observer.note(kind, int(ts_ms))
+
+    def run_paper_smoke_order(self, *, price: float, quantity: float) -> dict[str, object]:
+        """最小真实执行场景（**仅 REPLAY/PAPER**）：经既有 engine+PaperBroker 提交一笔 post-only 并撤销。
+
+        用途：让 `submit_to_ack` / `cancel_to_ack` / `decision_to_submit` 接到**真实边界**并产生真实样本。
+        不产生策略行为、不用于 TESTNET/LIVE、不是产品控制面。
+        """
+        if self.profile.mode not in (RuntimeMode.REPLAY, RuntimeMode.PAPER):
+            raise AssemblyError("paper smoke order is only available for replay/paper runtimes")
+        if self._execution is None:
+            raise AssemblyError("execution chain is not wired")
+        from risk.types import OrderProposal
+        from portfolio.types import Side
+
+        now = int(self.profile.clock())
+        self._latency_note("decision_ready", now)
+        proposal = OrderProposal(symbol=self.profile.symbol, side=Side.BUY, quantity=float(quantity),
+                                 price=float(price), post_only=True)
+        submitted = self._execution.submit(proposal, now_ms=now)
+        order = submitted.order
+        if order is None:
+            return {"submitted": False, "reason": "rejected"}
+        # PaperBroker 的 ack 已在 submit 路径经 engine 处理；这里只撤销并记录真实延迟样本
+        cancelled = self._execution.cancel(order.client_order_id, now_ms=now)
+        return {"submitted": True, "client_order_id": order.client_order_id,
+                "cancel_updates": len(cancelled.updates),
+                "observed": dict(self._latency_observer.observed)}
+
+    def _usage_snapshot(self) -> object | None:
+        """当前用量事实：来自真实响应头采集；检查过但无用量头 ⇒ 仍给出“无值快照”（带来源与观测时间）。"""
+        collector = getattr(self, "_usage_collector", None)
+        if collector is None:
+            return None
+        collected = collector.snapshot()
+        if collected is not None:
+            return collected
+        if collector.observations:
+            last = collector.observations[-1]
+            from execution_safety.venue import VenueUsageSnapshot
+
+            return VenueUsageSnapshot(used_weight=None, used_orders=None, reset_at_ms=None,
+                                      source=(f"inspected {len(collector.observations)} response(s); "
+                                              f"no usage headers (last: {last.endpoint})"),
+                                      observed_at_ms=last.observed_at_ms)
+        return None
+
+    def usage_evidence(self) -> dict[str, object]:
+        """采集证据（供验收/审计：证明 collector 真实运行过并检查过响应头）。"""
+        collector = getattr(self, "_usage_collector", None)
+        return {} if collector is None else collector.evidence()
+
+    def usage_probe(self, *, url: str, timeout_s: float = 10.0) -> dict[str, object]:
+        """真实 usage 采集 smoke：对一个真实 endpoint 发一次请求，检查响应头里是否有用量事实。"""
+        import urllib.request
+
+        collector = getattr(self, "_usage_collector", None)
+        if collector is None:
+            raise AssemblyError("usage collector is not initialised")
+        request = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_s) as handle:
+                handle.read()
+                headers = dict(handle.headers.items())
+        except Exception as exc:  # noqa: BLE001 - 网络不可用也必须如实记录（不得伪造成“已检查”）
+            return {"probed": False, "error": type(exc).__name__, "evidence": collector.evidence()}
+        observation = collector.observe(endpoint=url.split("?")[0].split("/", 3)[-1] or url, headers=headers)
+        return {"probed": True, "headers_seen": list(observation.header_names),
+                "usage": None if observation.usage is None else {
+                    "used_weight": observation.usage.used_weight,
+                    "used_orders": observation.usage.used_orders,
+                    "source": observation.usage.source},
+                "note": observation.note, "evidence": collector.evidence()}
+
+    def attach_usage_fetcher(self, fetcher: object) -> object:
+        """把真实 fetcher 绑到 usage collector（TESTNET/LIVE 路径）；返回可直接使用的包装 fetcher。"""
+        collector = getattr(self, "_usage_collector", None)
+        if collector is None:
+            raise AssemblyError("usage collector is not initialised")
+        return collector.bind(fetcher)
+
+    def attach_prediction_runtime(self, runtime: object) -> "ProductRuntime":
+        """接入既有 PredictionRuntime（只读其 status/health；不改变预测语义）。"""
+        self._prediction_runtime = runtime
+        return self
+
+    def attach_private_runtime(self, runtime: object) -> "ProductRuntime":
+        """接入既有私有流 runtime（只读 telemetry；private latency 由此成为真实事实）。"""
+        self._private_runtime = runtime
+        return self
+
+    def _prediction_provider_status(self) -> object | None:
+        """PredictionRuntime 的**真实** provider 状态（既有 `status_at` 契约）。"""
+        runtime = getattr(self, "_prediction_runtime", None)
+        if runtime is None:
+            return None                                        # 未 attach ⇒ 由 Product 层给 UNKNOWN + reason
+        try:
+            status = runtime.status_at(int(self.profile.clock()))
+        except Exception as exc:  # noqa: BLE001 - 取不到状态不得崩
+            return f"UNKNOWN({type(exc).__name__})"
+        return getattr(status, "value", status)
+
+    def _private_latency_state(self) -> object | None:
+        runtime = getattr(self, "_private_runtime", None)
+        if runtime is None:
+            return None
+        telemetry = getattr(runtime, "telemetry", None)
+        distribution = getattr(telemetry, "private_lag_ms", None) if telemetry is not None else None
+        if distribution is None:
+            # 已接线但当前环境没有产生可测事件 ⇒ 事实为 UNOBSERVED（与"未接线"的 None 区分开）
+            return "UNOBSERVED"
+        median = getattr(distribution, "median", None)
+        if median is None:
+            return None
+        raw = getattr(telemetry, "last_raw_receive_lag_ms", None)
+        calibration = getattr(telemetry, "clock_calibration", None)
+        offset = getattr(calibration, "offset_ms", None)
+        if raw is not None and offset is not None:
+            self._latency_observer.note_private_event_lag(raw_lag_ms=int(raw), offset_ms=int(offset))
+        return "HEALTHY" if int(median) >= 0 else "DEGRADED"
+
     def _exposure(self) -> dict[str, object]:
         """既有 OrderTracker 的暴露事实（只读；不新增任何风险计算）。"""
         tracker = self._tracker_owner
@@ -264,8 +398,12 @@ class ProductRuntime:
         values = self._config_values()
         self._safety_policy = build_safety_policy(values)                       # Step 1
         self._trading_rules = build_trading_rules(values, symbol=self.profile.symbol)   # Step 2
-        self._limit_definition = build_limit_definition(values)                # Step 2（定义）
-        self._usage = build_usage_snapshot(values)                             # Step 2（用量，独立）
+        self._limit_definition = build_limit_definition(values)                # Step 2（定义，证据驱动）
+        # F-03 收口：usage 只能来自真实响应头采集（禁止 operator 手填当前用量）
+        from execution_safety.venue_usage import VenueUsageCollector
+
+        self._usage_collector = VenueUsageCollector(clock=self.profile.clock)
+        self._usage = None                                                     # 由 collector 提供
         # 注意：`session.run_id` 只有 start() 之后才可用；组合期使用 runtime identity
         self._tracker_owner = OrderTracker(session_id=self._identity.runtime_id)
         self._latency_log = BoundedLatencyLog(capacity=2_000)
@@ -295,17 +433,48 @@ class ProductRuntime:
         def _request_reconciliation() -> dict[str, object]:
             started = int(self.profile.clock())
             self._reconciled_count += 1
-            self._latency_log.record(LatencySample(stage="reconciliation_duration", ts=started,
-                                                   value_ms=max(0, int(self.profile.clock()) - started)))
+            self._latency_observer.note_reconciliation_duration(started)
             return {"requested": True, "count": self._reconciled_count}
+
+        # F-05：真实边界的延迟观测（旁路；不改交易语义）
+        from runtime.latency_observer import ExecutionLatencyObserver
+
+        self._latency_observer = ExecutionLatencyObserver(log=self._latency_log, clock=self.profile.clock)
+        # PAPER/REPLAY 的执行链路（既有组件）：用于真实 smoke 场景产生真实 ack 延迟样本
+        self._execution = None
+        if self.profile.mode in (RuntimeMode.REPLAY, RuntimeMode.PAPER):
+            from execution.adapters.paper import PaperBroker
+            from execution.engine import ExecutionEngine
+            from execution.manager import OrderManager
+            from risk.gate import RiskGate
+            from risk.limits import RiskLimits
+
+            paper = PaperBroker()
+            manager = OrderManager(tracker=self._tracker_owner, adapter=paper)
+            limit_values: dict[str, float] = {}
+            for key, field in (("risk.max_position_qty", "max_position_qty"),
+                               ("risk.max_open_order_exposure", "max_open_order_exposure"),
+                               ("risk.max_position_notional", "max_position_notional"),
+                               ("risk.max_daily_loss", "max_daily_loss"),
+                               ("risk.max_drawdown_pct", "max_drawdown_pct")):
+                if key in values:
+                    limit_values[field] = float(values[key])
+            self._execution = ExecutionEngine(
+                accounting=(accounting if accounting is not None else __import__(
+                    "portfolio.accounting", fromlist=["AccountingCore"]).AccountingCore(initial_balance=0.0)),
+                # 只启用显式配置的限额：未配置的限额不强制对应事实存在（不是 bypass；配置了的仍严格判定）
+                gate=RiskGate(RiskLimits(**limit_values)),                    # type: ignore[arg-type]
+                manager=manager, book_healthy=True,
+                latency_observer=lambda kind, ts: self._latency_note(kind, ts))
 
         self._safety_projection = ExecutionSafetyProjection(
             clock=self.profile.clock, policy=self._safety_policy,
             rules_provider=lambda: self._trading_rules,
             limit_definition_provider=lambda: self._limit_definition,
-            usage_provider=lambda: self._usage,
+            usage_provider=self._usage_snapshot,
             latency_log=self._latency_log,
-            private_latency_provider=lambda: None,
+            private_latency_provider=self._private_latency_state,
+            rate_facts_provider=self._usage_snapshot,
             exposure_provider=self._exposure,
             reconciliation_provider=self._reconciliation_state,
             reconciliation_requester=_request_reconciliation)
@@ -331,6 +500,7 @@ class ProductRuntime:
             accounting=lambda: self._accounting,
             accounting_facts=(lambda: (self._accounting_provider.facts()
                                        if self._accounting_provider is not None else None)),
+            prediction_provider_status=self._prediction_provider_status,
             readiness=lambda: None,
             health=lambda: {"notes": (f"mode={self.profile.mode.value}",)},
             clock=self.profile.clock,
@@ -473,10 +643,18 @@ class ProductRuntime:
         self._service.market_history = lambda: provider.history
         self._service.projection_config = lambda: provider.config.projection
         # Step 4：账户采样在 feed provider 构造之后接线（复用同一 accounting 事实）
+        provider.on_data_timestamp = self.note_data_timestamp                 # 运行期推进（真实事件驱动）
         if self._accounting_provider is not None and self._account_timeline is not None:
             provider.account_provider = self._accounting_provider.sample   # type: ignore[attr-defined]
             provider.history_account = self._account_timeline              # type: ignore[attr-defined]
         provider.start()
+
+    def note_data_timestamp(self, ts_ms: int) -> None:
+        """运行时推进 data timestamp（由真实 market/runtime event 驱动；不等 stop）。"""
+        self._identity = dataclasses_replace(self._identity, data_timestamp=Fact.of(int(ts_ms)))
+        service = getattr(self, "_service", None)
+        if service is not None:
+            service.identity = self._identity          # 让快照立即反映新时间事实
 
     def _stop_feed(self) -> None:
         provider = self._feed_provider

@@ -594,3 +594,22 @@ P0001.9.5 已作为 `a2ab8da`（1631 passed）、P0001.9.6 已作为 `afc0196`�
 - 真实 E2E：REPLAY + PAPER 均通过（market 11 states / portfolio equity 10000 / limits 真实 / health DEGRADED 带 reasons /
   reconciliation_duration samples=1 / explain 200 / SIGTERM ⇒ COMPLETED）。
 - 测试：全量 **2186 passed / 0 failed / 24 skipped**。
+
+### Closure Slice 3 收口 — F-03/F-05 真实边界证据 + flaky 修复（已完成，CLOSED）
+
+- **F-03 CLOSED（venue usage 真实）**：`execution_safety/venue_usage.py`（`VenueUsageCollector` / `HeaderCapturingFetcher`）
+  解析 `X-MBX-USED-WEIGHT*` / `X-MBX-ORDER-COUNT*`；三个真实 fetcher 捕获 `last_headers`；
+  **移除** config 手填用量路径。真实证据：public `/fapi/v1/time` 含 `x-mbx-used-weight-1m`；
+  signed 只读 `/fapi/v2/account` 解析出 `used_weight=532`（source `X-MBX-USED-WEIGHT-1M`）；
+  `used_orders=None`（该头未返回 ⇒ UNKNOWN，不伪造 0）。
+- **F-05 CLOSED（五阶段真实边界）**：`ExecutionEngine.latency_observer` + `LiveExecutionOrchestrator.latency_observer`
+  + `runtime/latency_observer.py::ExecutionLatencyObserver`（D-036 `raw+offset`、负值只计数不 clamp）。
+  PAPER 自然回路（经既有 RiskGate → PaperBroker）产生 `decision_to_submit=1` / `submit_to_ack=1` / `cancel_to_ack=1`；
+  `reconciliation_duration≥1`；`event_receive_lag` 边界已接但 TESTNET 只读 private smoke 未产生事件 ⇒ UNKNOWN（环境原因，已留证据）。
+- **F-04 / F-06 / F-07 CLOSED**（policy 注入 / explain 端点 / 基线 handler）。
+- **flaky 定位并修复（测试竞态，非产品缺陷）**：`test_account_provider_failure_does_not_break_the_feed`
+  在 `runtime.start()`（已起 feed 线程）之后才注入 hostile provider，11 条事件可能在赋值前被消费完 ⇒ 实测 2/20 失败。
+  修复：把注入点前移到 `MarketFeedProvider.start` 之前（测试内 `mock.patch.object`）；修复后单测 0/40 失败。
+- **detached 全量复核**：修复后**连续 3 次** `Ran 2186 tests ... OK (skipped=24)`（0 failed）。
+- `context/status.json.currentProposal = null`；closures Slice 1–3 全部收口；**不进入 Slice 4 之前的最后一个门槛已满足**。
+- 测试：全量 **2186 passed / 0 failed / 24 skipped**（detached worktree 复核 ×3）。

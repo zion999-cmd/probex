@@ -8,6 +8,7 @@ HTTP 客户端是**注入式**的（`JsonHttpClient` 是默认实现，测试可
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import time
 import urllib.error
@@ -41,6 +42,8 @@ class UrllibJsonClient:
 
     base_url: str = REST_BASE_URL
     opener: Callable[[urllib.request.Request, float], object] | None = None
+    #: 最近一次响应的真实头（供 usage fact 采集；additive，不改请求语义）
+    last_headers: dict[str, str] = dataclasses.field(default_factory=dict)
 
     def get_json(self, path: str, params: dict[str, str], *, timeout_s: float) -> object:
         query = urllib.parse.urlencode(params)
@@ -52,9 +55,11 @@ class UrllibJsonClient:
             if self.opener is not None:
                 response = self.opener(request, timeout_s)
                 body = response.read()  # type: ignore[attr-defined]
+                self.last_headers = dict(getattr(response, "headers", {}) or {})
             else:
                 with urllib.request.urlopen(request, timeout=timeout_s) as handle:
                     body = handle.read()
+                    self.last_headers = dict(handle.headers.items())
         except urllib.error.HTTPError as exc:
             raise TransportError(f"HTTP {exc.code} for {url}") from exc
         except (urllib.error.URLError, OSError, ValueError) as exc:

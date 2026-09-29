@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 
 from execution.events import ExecutionEvent
 from execution.manager import OrderManager
+from execution.types import OrderStatus
 from execution.tracker import TrackerUpdate
 from execution.types import Order
 from market.events.types import Milliseconds
@@ -80,9 +81,21 @@ class ExecutionEngine:
     liquidation_provider: Callable[[str], LiquidationInfo | None] | None = None
     day_start_fn: Callable[[Milliseconds], Milliseconds] = utc_day_start_ms
     book_healthy: bool = True
+    #: 旁路延迟观测（closure Slice 3 / F-05）：默认 None ⇒ 行为完全不变
+    latency_observer: Callable[[str, int], None] | None = None
     rejections: list[ExecutionRejected] = field(default_factory=list)
 
     # ------------------------------------------------------------------ submit
+
+    def _note_latency(self, kind: str, ts_ms: int) -> None:
+        """真实边界观测（失败绝不影响交易路径）。"""
+        observer = self.latency_observer
+        if observer is None:
+            return
+        try:
+            observer(kind, int(ts_ms))
+        except Exception:  # noqa: BLE001
+            return
 
     def submit(self, proposal: OrderProposal, *, now_ms: Milliseconds) -> ExecutionResult:
         """在**紧邻 submit** 的位置做一次新鲜风险检查。"""
@@ -93,7 +106,10 @@ class ExecutionEngine:
             self.rejections.append(rejection)
             return ExecutionResult(timestamp=now_ms, snapshot=snapshot, decision=decision, rejection=rejection)
 
+        self._note_latency("submit_request", now_ms)
         order, updates = self.manager.submit(proposal, timestamp=now_ms)
+        if order.status in (OrderStatus.OPEN, OrderStatus.PARTIALLY_FILLED, OrderStatus.FILLED):
+            self._note_latency("event:OrderAccepted", int(order.updated_at))
         return ExecutionResult(
             timestamp=now_ms,
             snapshot=snapshot,
@@ -105,15 +121,23 @@ class ExecutionEngine:
 
     def cancel(self, client_order_id: str, *, now_ms: Milliseconds) -> ExecutionResult:
         """撤单**不经过 RiskGate**：kill switch 的 HALT_ALL 不能把已有挂单锁在市场上。"""
+        self._note_latency("cancel_request", now_ms)
         updates = self.manager.cancel(client_order_id, timestamp=now_ms)
+        after = self.manager.tracker.order(client_order_id)
+        if after is not None and after.status is OrderStatus.CANCELED:
+            self._note_latency("update:Canceled", int(after.updated_at))
         return ExecutionResult(timestamp=now_ms, updates=updates, fills=self._account(updates))
 
     def on_events(self, events: tuple[ExecutionEvent, ...], *, now_ms: Milliseconds) -> ExecutionResult:
+        for event in events:
+            self._note_latency(f"event:{type(event).__name__}", int(getattr(event, "timestamp", now_ms)))
         updates = self.manager.on_events(events)
         return ExecutionResult(timestamp=now_ms, updates=updates, fills=self._account(updates))
 
     def poll(self, *, now_ms: Milliseconds) -> ExecutionResult:
         updates = self.manager.poll()
+        for update in updates:
+            self._note_latency(f"update:{type(update).__name__}", int(now_ms))
         return ExecutionResult(timestamp=now_ms, updates=updates, fills=self._account(updates))
 
     # ------------------------------------------------------------------ 快照

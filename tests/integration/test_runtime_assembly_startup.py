@@ -471,13 +471,26 @@ class AccountSamplingStep4bTest(ProductRuntimeTest):
             runtime.stop()
 
     def test_account_provider_failure_does_not_break_the_feed(self) -> None:
+        from unittest import mock
+
+        from runtime import provider as provider_module
+
         runtime = ProductRuntime(profile=self.feed_profile_with_accounting())
-        runtime.start()
 
         def hostile(now_ms: int) -> object:  # noqa: ARG001
             raise RuntimeError("sampling blew up")
 
-        runtime._feed_provider.account_provider = hostile     # noqa: SLF001
+        # 故障必须在 feed 线程读到事件**之前**注入：provider 由 start() 内部构造并立即起线程，
+        # 若等 start() 返回后再赋值，11 条事件可能在赋值前被消费完（实测 2/20 flaky）。
+        # 这里把注入点挂到 provider.start 之前，保证第一个事件就能观测到故障。
+        real_start = provider_module.MarketFeedProvider.start
+
+        def start_with_hostile(self: object) -> None:
+            self.account_provider = hostile                  # type: ignore[attr-defined]
+            real_start(self)                                 # type: ignore[arg-type]
+
+        with mock.patch.object(provider_module.MarketFeedProvider, "start", start_with_hostile):
+            runtime.start()
         self.run_until_done(runtime)
         try:
             stats = self.provider_stats(runtime)

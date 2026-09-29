@@ -100,6 +100,8 @@ class MarketFeedProvider:
     #: composition root 注入：真实账户采样（复用既有 accounting 事实）
     account_provider: Callable[[int], object | None] | None = None
     history_account: object | None = None
+    #: 真实事件驱动的 data timestamp 回调（composition root 用它推进 runtime 时间事实）
+    on_data_timestamp: Callable[[int], None] | None = None
     _thread: threading.Thread | None = field(default=None, init=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False)
     _stats: dict[str, object] = field(default_factory=dict, init=False)
@@ -188,6 +190,13 @@ class MarketFeedProvider:
                 payload = event.payload
                 if isinstance(payload, TradePayload):
                     self.history.feed_trade(self._trade_print(payload, event.exchange_ts))
+                if self.on_data_timestamp is not None:
+                    try:
+                        self.on_data_timestamp(int(event.exchange_ts))
+                    except Exception as exc:  # noqa: BLE001 - 回调失败不得打断 feed
+                        self._stats["data_timestamp_callback_errors"] = int(
+                            self._stats.get("data_timestamp_callback_errors", 0)) + 1
+                        self._stats["data_timestamp_last_error"] = type(exc).__name__
                 self._stats.update({"events": int(self._stats.get("events", 0)) + 1,
                                    "last_ts": int(event.exchange_ts),
                                    "last_state": state,

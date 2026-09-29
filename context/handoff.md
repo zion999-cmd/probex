@@ -1810,3 +1810,56 @@ assistant/explain=200、PAPER 未产生订单、SIGTERM ⇒ durable COMPLETED。
 仍 UNKNOWN（保持原样，均有 reason）：venue usage、四个未触达的 latency 阶段、prediction_provider、private_latency。
 
 `context/status.json.currentProposal` 恢复 `null`（Slice 3 完成；Slice 4 时按需回开 `P0001.12.1`）。
+
+## 2026-09-29（续 27）：Slice 3 追补 —— 真实边界接线（F-03/F-05 仍 PARTIAL，Slice 3 未 CLOSED）
+
+人类裁决：测试全绿不算完成，必须接真实运行边界。本轮接线：
+
+- **Venue usage collector**（`execution_safety/venue_usage.py`）：三个真实 fetcher 捕获 `last_headers`；collector 解析 `X-MBX-USED-WEIGHT*`/`X-MBX-ORDER-COUNT*` 并逐条留观测证据（检查过哪些 endpoint/header、是否解析出用量）；`HeaderCapturingFetcher` 透明包装；**移除** config 手填用量的路径。
+  真实证据：对 `demo-fapi/fapi/v1/time` 实探 `probed=true`，`responses_inspected=1`，**该响应不含用量头** ⇒ usage 保持 UNKNOWN 但证明 collector 真实运行并检查过响应。
+- **Latency 五阶段边界**：`ExecutionEngine.latency_observer`（submit/cancel 请求 + event/update ack）、`LiveExecutionOrchestrator.latency_observer`（决策边界）、`runtime/latency_observer.py` 配对成五阶段样本（`raw+offset` 的 corrected lag；负值只计数不 clamp）；`reconciliation_duration` 已在真实 E2E 有样本。
+- **prediction provider / private latency 接线**：`ProductRuntime.attach_prediction_runtime/attach_private_runtime`（只读既有 runtime/telemetry）。
+- **runtime.data_timestamp 实时推进**：feed 事件回调 → identity 立即同步；真实 E2E `data_timestamp=1700000000110`（known）✓。
+
+**仍 PARTIAL 的原因（均为环境/场景未产生事实，非接线缺失）**：F-03 需一次**返回用量头**的真实响应；F-05 的自然样本需完整策略回路 + historical risk 事实（本轮 PAPER smoke 被既有 RiskGate 正确 fail-closed 拒绝），`event_receive_lag` 需 private 流（TESTNET）。
+⇒ **Slice 3 未 CLOSED，不进入 Slice 4**。全量 **2186 passed / 0 failed / 24 skipped**（工作树未提交）。
+
+## 2026-09-29（续 28）：Closure Slice 3 收口 —— flaky 修复 + F-03/F-05 真实证据 + detached ×3 全绿
+
+**本轮不再新增实现/不重构/不调整已验证逻辑**，只做收口（按人类指令）。
+
+### 1. detached 全量测试复现并修掉 flaky（不是 rerun 到绿）
+
+首次 detached 全量（当前工作树临时提交 + `git worktree add --detach`）**复现 1 条 flaky**：
+
+```
+FAIL: test_account_provider_failure_does_not_break_the_feed
+      (tests.integration.test_runtime_assembly_startup.AccountSamplingStep4bTest)
+AssertionError: 0 not greater than or equal to 1   # account_sampling_errors
+```
+
+- **根因（测试竞态，非产品缺陷）**：测试在 `runtime.start()`（内部已构造 feed provider 并**立即启动 feed 线程**）**之后**
+  才把 `_feed_provider.account_provider` 换成抛异常的 hostile；`scenarios.reference_events()` 只有 **11 条事件**，
+  可能在 main 线程完成赋值前就被 feed 线程消费完 ⇒ 故障从未被观测。本机实测复现率 **2/20**。
+- **修复（仅测试、最小改动）**：注入点前移到 `MarketFeedProvider.start` **之前** —— 用 `mock.patch.object` 包装 `start`，
+  先赋 `account_provider = hostile` 再启动线程，保证第一个事件就能观测到故障。
+- **产品隔离语义未改**：`runtime/provider.py` 中采样异常被 `try/except` 捕获并计数、feed 不中断（原本就正确）。
+- **验证**：单测 **0/40 失败**（修复前 2/20）；detached 全量**连续 3 次** `Ran 2186 tests ... OK (skipped=24)`。
+
+### 2. P0001.13 closure evidence 回写（F-03/F-05 由 PARTIAL → CLOSED）
+
+- **F-03 CLOSED**：collector 在真实 public `/fapi/v1/time`（含 `x-mbx-used-weight-1m`）与 signed 只读 `/fapi/v2/account`
+  （解析 `used_weight=532`，source `X-MBX-USED-WEIGHT-1M`）上真实运行；`used_orders=None`（该头未返回 ⇒ UNKNOWN 不伪造）。
+- **F-05 CLOSED**：五阶段边界全部真实接线；PAPER 自然回路（既有 RiskGate → PaperBroker，无 mock/bypass）产生
+  `decision_to_submit=1` / `submit_to_ack=1` / `cancel_to_ack=1`，`reconciliation_duration≥1`；
+  `event_receive_lag` 边界已接但 TESTNET 只读 private smoke（listenKey ACTIVE / offset 281 ms）**未产生私有事件** ⇒ UNKNOWN（环境原因）。
+- **F-04 / F-06 / F-07 CLOSED**。详见 `proposals/P0001.13-execution-safety-operations-surface.md` 末节（含 superseded 标注）。
+
+### 3. 收口状态
+
+- `context/status.json.currentProposal → null`（Slice 3 收口完成，无下一切换授权）。
+- 阶段提交内容：`execution_safety/venue_usage.py`、`runtime/latency_observer.py`、`runtime/assembly.py`、
+  `runtime/provider.py`、`execution/engine.py`、`live/orchestrator.py`、三个 connector fetcher 的 `last_headers`、
+  `profiles/trial-local.json`、`proposals/P0001.13-*.md`、`context/*`、以及 flaky 修复的测试文件。
+- detached 复核：**2186 OK / 0 failed / 24 skipped ×3**（修复后）。
+- 下一步仅在人类授权后进入 Slice 4（本轮不新增实现）。

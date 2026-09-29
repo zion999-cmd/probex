@@ -33,7 +33,7 @@
     },
     "private_latency": {
       "severity": "DEGRADED",
-      "downgrades": true,
+      "downgrades": false,
       "required": false
     },
     "uncertain_exposure": {

@@ -15,7 +15,8 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field as dataclasses_field, field
 from typing import Mapping, Protocol
 
 from connectors.binance.market_data.endpoints import (
@@ -49,6 +50,9 @@ class RestFetcher(Protocol):
 class UrllibRestFetcher:
     """标准库实现（`urllib.request`）；异常消息不含 query（遮蔽签名）。"""
 
+    #: 最近一次响应的真实头（供 usage fact 采集；additive）
+    last_headers: dict[str, str] = dataclasses_field(default_factory=dict)
+
     def send(self, *, method: str, url: str, headers: Mapping[str, str], timeout_s: float) -> object:
         parts = urllib.parse.urlsplit(url)
         safe_target = f"{parts.scheme}://{parts.netloc}{parts.path}"
@@ -56,6 +60,7 @@ class UrllibRestFetcher:
         try:
             with urllib.request.urlopen(request, timeout=timeout_s) as handle:
                 body = handle.read()
+                self.last_headers = dict(handle.headers.items())
         except urllib.error.HTTPError as exc:
             raise PrivateResponseError(f"{method} {safe_target} -> HTTP {exc.code}") from None
         except (urllib.error.URLError, OSError, ValueError) as exc:

@@ -314,6 +314,12 @@ class LiveExecutionOrchestrator:
         if proposal is None:
             notes.append("place_without_proposal")
             return None
+        observer = getattr(self, "latency_observer", None)
+        if observer is not None and getattr(proposal, "at_ms", None) is not None:
+            try:
+                observer("decision_ready", int(getattr(proposal, "at_ms")))
+            except Exception:  # noqa: BLE001 - 观测失败不得影响交易路径
+                pass
         try:
             self._require_write_allowed(notes=notes)
         except ExecutionDisabledError:
