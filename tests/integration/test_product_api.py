@@ -179,9 +179,10 @@ class ProductOperationsApiTest(unittest.TestCase):
         with OPENER.open(f"{self.base}{path}", timeout=5) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
 
-    def test_schema_version_is_bumped_to_two(self) -> None:
+    def test_schema_version_is_bumped(self) -> None:
+        """P0001.11 升到 2；P0001.12.2（G1–G5 新增字段/端点）升到 3。"""
         _, payload = self.get("/api/v1/snapshot")
-        self.assertEqual(payload["schema_version"], "2")
+        self.assertEqual(payload["schema_version"], "3")
         self.assertEqual(payload["schema_version"], SCHEMA_VERSION)
 
     def test_capabilities_endpoint_reports_read_only_by_design(self) -> None:

@@ -34,7 +34,14 @@ export async function render() {
           ((comparison.comparison || {}).metrics || []).map((m) => [escapeHtml(m.name), fact(m.left),
             fact(m.right), fact(m.delta)]));
   }
+  const timeline = await fetchOrUnavailable(ENDPOINTS.portfolioTimeline);
+  const timelineBlock = timeline.unavailable
+    ? rows([["equity timeline", `<span class="unknown">UNKNOWN (${escapeHtml(timeline.unavailable)})</span>`]])
+    : table(["ts", "equity", "balance", "position", "exposure (total)"],
+        (timeline.timeline.points || []).map((p) => [String(p.ts), fact(p.equity), fact(p.balance),
+          fact(p.position_qty), fact(p.exposure_total)]));
   return section("Runs (run is the unit)", runList) +
+    section("Equity / exposure timeline (G3)", timelineBlock) +
     section("Latest run metrics", metrics) +
     section("Compare", compare) +
     section("Metric contract (definitions)", definitionTable) +

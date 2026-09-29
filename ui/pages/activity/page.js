@@ -5,7 +5,8 @@ import { escapeHtml, fact, rows, section, table } from "/ui/client/render.js";
 export const title = "Activity";
 export const slug = "activity";
 
-const CHAIN = ["market_state", "prediction", "maker_decision", "readiness", "order", "execution_event"];
+const CHAIN = ["market_state", "prediction", "maker_decision", "readiness", "order",
+               "execution_event", "fill"];
 
 export async function render() {
   const snapshot = await fetchSnapshot();
@@ -41,7 +42,9 @@ export async function render() {
     section("Inputs / gates", flow) +
     section("Decisions", decisionTable) +
     section("Exchange events", executionTable) +
-    section("Evidence is a detail view", rows([
+    section("Raw facts drill-down (G2)", rows([
       ["drill-down", "Activity → detail → Evidence → raw facts"],
-      ["raw facts", '<a href="#/system">System / Configuration</a>']]));
+      ["fills", "the chain now ends at fill (G1)"],
+      ["raw facts endpoint", "<code>/api/v1/facts/&lt;kind&gt;/&lt;identity&gt;</code> " +
+        "(kind: order | fill | decision | execution_event | prediction)"]]));
 }

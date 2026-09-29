@@ -19,6 +19,7 @@ from product.types import (
     UNKNOWN_NOT_AVAILABLE,
     UNKNOWN_NOT_PROVIDED,
     BlockerView,
+    FillView,
     ConfigEntryView,
     ConfigView,
     EvidenceView,
@@ -78,6 +79,18 @@ class ProductService:
     projection_config: Callable[[], object | None] = lambda: None
     #: local replay session control（只允许作用于 REPLAY runtime）
     replay_control: Callable[[], object | None] = lambda: None
+    #: G1：成交事实（只读，由 FillLedger / execution 提供）；`recent_fill_limit=0` 表示不暴露成交
+    fills: Callable[[], tuple[object, ...]] = tuple
+    recent_fill_limit: int = 0
+    #: G2：原始事实查找（kind, identity) -> object | None
+    raw_fact_lookup: Callable[[str, str], object | None] = lambda kind, identity: None
+    #: G3：账户/敞口时间线缓冲（只读；不是新的 accounting Owner）
+    account_timeline: Callable[[], object | None] = lambda: None
+    #: G4：prediction provider 状态 / accounting 健康
+    prediction_provider_status: Callable[[], object | None] = lambda: None
+    accounting_health: Callable[[], object | None] = lambda: None
+    #: G5：当前 execution readiness authority（完整事实）
+    authority: Callable[[], object | None] = lambda: None
 
     def run_summary_view(self) -> object | None:
         """取当前 Run Summary；未接线 ⇒ None（调用方须按 UNKNOWN/503 处理，不得伪造空报告）。"""
@@ -94,6 +107,18 @@ class ProductService:
     def replay_control_view(self) -> object | None:
         """取 replay 控制对象（仅 REPLAY runtime 会提供）。"""
         return self.replay_control()
+
+    def account_timeline_view(self) -> object | None:
+        """G3：取有界账户序列缓冲；未接线 ⇒ None。"""
+        return self.account_timeline()
+
+    def raw_facts_view(self, kind: str, identity: str):
+        """G2：取一条原始事实（缺失 ⇒ available=False）。"""
+        from product.facts import raw_facts_for
+
+        if not isinstance(kind, str) or not isinstance(identity, str):
+            raise ValueError("raw_facts_view requires (kind, identity) strings")
+        return raw_facts_for(kind, identity, self.raw_fact_lookup(kind, identity))
 
     def run_registry_view(self) -> object | None:
         """取 Run Registry（只读）；未接线 ⇒ None（端点须按 UNKNOWN/503 处理）。"""
@@ -234,7 +259,22 @@ class ProductService:
                             else Fact.of(getattr(tracker, "uncertain_exposure", lambda: None)()))
         pending = (Fact.unknown("tracker not provided") if tracker is None
                    else Fact.of(getattr(tracker, "total_pending_exposure", lambda: None)()))
+        fills: list[FillView] = []
+        limit = int(self.recent_fill_limit)
+        if limit > 0:
+            for fill in tuple(self.fills())[-limit:]:
+                client_id = _get(fill, "client_order_id")
+                fills.append(FillView(
+                    client_order_id=Fact.of(client_id, unknown_reason="fill without client order id"),
+                    ts=Fact.of(_get(fill, "ts")),
+                    price=Fact.of(_get(fill, "price")),
+                    quantity=Fact.of(_get(fill, "quantity")),
+                    fee=Fact.of(_get(fill, "fee")),
+                    trade_id=Fact.of(_get(fill, "trade_id")),
+                ))
         return ExecutionView(
+            recent_fills=tuple(fills),
+            recent_fill_limit=limit,
             active_orders=views,
             uncertain_exposure=unknown_exposure,
             open_order_exposure=pending,
@@ -272,7 +312,20 @@ class ProductService:
                                                       unknown_reason="no authority issued"))
         status = _get(result, "status")
         scope = _get(result, "scope")
+        authority = self.authority()
         return ReadinessView(
+            authority_kind=Fact.of(getattr(getattr(authority, "kind", None), "value",
+                                          getattr(authority, "kind", None)),
+                                   unknown_reason="no authority issued"),
+            authority_issued_at_ms=Fact.of(_get(authority, "issued_at_ms"),
+                                           unknown_reason="no authority issued"),
+            authority_expires_at_ms=Fact.of(_get(authority, "expires_at_ms"),
+                                            unknown_reason="no authority issued"),
+            authority_recovery_generation=Fact.of(
+                str(_get(authority, "recovery_generation")) if authority is not None else None,
+                unknown_reason="no authority issued"),
+            authority_market_generation=Fact.of(_get(authority, "market_generation"),
+                                                unknown_reason="no authority issued"),
             status=Fact.of(getattr(status, "value", status)),
             scope=Fact.of(getattr(scope, "value", scope)),
             reasons=tuple(r.value if hasattr(r, "value") else str(r) for r in (_get(result, "reasons") or ())),
@@ -281,7 +334,16 @@ class ProductService:
         )
 
     def _health(self, health: Mapping[str, object]) -> HealthView:
+        prediction_status = self.prediction_provider_status()
+        accounting_status = self.accounting_health()
         return HealthView(
+            prediction_provider=Fact.of(
+                getattr(prediction_status, "value", prediction_status)
+                if prediction_status is not None else health.get("prediction_provider"),
+                unknown_reason="prediction provider status not wired"),
+            accounting=Fact.of(accounting_status if not hasattr(accounting_status, "value")
+                               else accounting_status.value,
+                               unknown_reason="accounting health not wired"),
             market_healthy=Fact.of(health.get("market_healthy")),
             private_stream_state=Fact.of(health.get("private_stream_state"),
                                          unknown_reason=UNKNOWN_NOT_AVAILABLE),
@@ -392,6 +454,17 @@ class ProductService:
                                     unknown_reason="no reason attached"),
                 detail="",
             ))
+        limit = int(self.recent_fill_limit)
+        if limit > 0:
+            for fill in tuple(self.fills())[-limit:]:
+                trace.append(TraceEntry(
+                    stage="fill",
+                    identity=Fact.of(_get(fill, "client_order_id"),
+                                     unknown_reason="fill without client order id"),
+                    outcome="filled",
+                    reason_code=Fact.unknown("fill carries no rejection reason code"),
+                    detail=str(_get(fill, "trade_id") or ""),
+                ))
         blockers = (() if readiness is None
                     else tuple(r.value if hasattr(r, "value") else str(r)
                                for r in (_get(readiness, "reasons") or ())))

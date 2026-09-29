@@ -1687,3 +1687,21 @@ G5 authority kind/TTL/generation；另有 Execution Safety 明细属 **P0001.13*
 
 遵守提案末尾指示：**未做大规模视觉重构**，未新增未授权后端能力，旧页面未删除。新增测试 13 条；
 全量 **2030 passed / 0 failed / 24 skipped**。未 commit / 未 push（未授权）。
+
+## 2026-09-29（续 20）：P0001.12 / 12.1 推送 + P0001.12.2（G1–G5）实施完成
+
+**提交/推送**：`4aef2d9`（P0001.12，检出点 2017 passed）与 `f88ee54`（P0001.12.1，检出点 2030 passed）已 push
+（`055df59..f88ee54`）。为让两个 commit 各自通过检出点测试，`ui/pages/market/page.js` 在 P0001.12 commit 中是"工作台本体"版本，
+P0001.12.1 commit 再加入 Live/Replay/Run Review 二级入口（历史上真实分两步）。
+
+**P0001.12.2（已完成，严格 G1–G5）**：
+- G1 `FillView` + `ExecutionView.recent_fills/recent_fill_limit` + `evidence.trace` 新增 `fill` 阶段；
+- G2 `product/facts.py` + `GET /api/v1/facts/<kind>/<identity>`（有界截断 + 404/400）；
+- G3 `product/account_timeline.py` + `GET /api/v1/portfolio/timeline`（有界、`truncated`、未接线 503）；
+- G4 `HealthView.prediction_provider` / `accounting`；
+- G5 `ReadinessView.authority_kind/issued_at/expires_at/recovery_generation/market_generation`；
+- `schema_version = "3"`；UI：Activity 含 fill、Performance 含 equity 时间线、System/Health 含 G4、System/Readiness 含 G5。
+
+真实证据：fill 视图齐备、trace 末段 `['order','fill']`、facts 端点 200/404/400、timeline `truncated=true`、
+`prediction_provider=BACKING_OFF`、`authority_kind=BOOTSTRAP` + TTL/gen 齐备。全量 **2054 passed / 0 failed / 24 skipped**（+24）。
+**未进入 P0001.12.3**（按指示）。未 commit / 未 push（本阶段未授权）。

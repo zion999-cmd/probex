@@ -8,12 +8,14 @@ import unittest
 
 from api.routes import (
     CAPABILITIES_PATH,
+    FACTS_PATH,
     MARKET_DEPTH_PATH,
     MARKET_HEALTH_PATH,
     MARKET_OVERLAYS_PATH,
     MARKET_TIMELINE_PATH,
     MARKET_TRADES_PATH,
     METRICS_PATH,
+    PORTFOLIO_TIMELINE_PATH,
     REPLAY_PATH,
     REPORT_PATH,
     ROUTES,
@@ -105,7 +107,8 @@ class SurfaceArchitectureTest(unittest.TestCase):
         # UI 只能引用**已注册**的 Product API 表面（含 server 侧的专用端点）
         known = {"/api/v1/snapshot", "/api/v1/schema", REPORT_PATH, CAPABILITIES_PATH, METRICS_PATH,
                  RUNS_PATH, RUNS_COMPARE_PATH, REPLAY_PATH, MARKET_TIMELINE_PATH, MARKET_DEPTH_PATH,
-                 MARKET_TRADES_PATH, MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH}
+                 MARKET_TRADES_PATH, MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH, FACTS_PATH,
+                 PORTFOLIO_TIMELINE_PATH}
         known |= set(ROUTES)
         known |= {"/api/v1/execution"}   # execution 路由别名（orders 的兼容路径）
         for path in sorted(UI_ROOT.rglob("*.js")):

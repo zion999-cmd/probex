@@ -18,6 +18,8 @@ from pathlib import Path
 from api.capabilities import build_capabilities_manifest
 from api.routes import (
     CAPABILITIES_PATH,
+    FACTS_PATH,
+    PORTFOLIO_TIMELINE_PATH,
     MARKET_DEPTH_PATH,
     MARKET_HEALTH_PATH,
     MARKET_OVERLAYS_PATH,
@@ -115,7 +117,9 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         manifest = build_capabilities_manifest(
             schema_version=SCHEMA_VERSION_VALUE,
             api_read=tuple(sorted([*ROUTES, SNAPSHOT_PATH, REPORT_PATH, METRICS_PATH, RUNS_PATH,
-                                   RUNS_COMPARE_PATH])),
+                                   RUNS_COMPARE_PATH, FACTS_PATH, PORTFOLIO_TIMELINE_PATH,
+                                   MARKET_TIMELINE_PATH, MARKET_DEPTH_PATH, MARKET_TRADES_PATH,
+                                   MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH])),
             cli_commands=COMMAND_SPEC,
             exit_codes=EXIT_CODES,
         )
@@ -280,6 +284,46 @@ class ProductApiHandler(BaseHTTPRequestHandler):
                               "control": {"paused": control.paused, "speed": control.speed,
                                           "position": control.position}})
 
+    def _serve_facts(self, path: str) -> None:
+        """G2：Raw Facts drill-down（只读、有界；缺失 ⇒ 404，非法 kind ⇒ 400）。"""
+        remainder = path[len(FACTS_PATH) + 1:]
+        parts = remainder.split("/")
+        if len(parts) != 2 or not all(parts):
+            self._error(400, "invalid_fact_reference", "expected /api/v1/facts/<kind>/<identity>")
+            return
+        kind, identity = parts
+        try:
+            view = self.service.raw_facts_view(kind, identity)
+        except ValueError as exc:
+            self._error(400, "unsupported_fact_kind", str(exc))
+            return
+        if not view.available:
+            self._error(NOT_FOUND, "raw_fact_unavailable", f"{kind}:{identity} is not in the current runtime")
+            return
+        from product.serialization import to_jsonable
+
+        self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE, "fact": to_jsonable(view)})
+
+    def _serve_account_timeline(self) -> None:
+        """G3：equity / exposure 时间线（未接线 ⇒ 503；有界由 projection config 决定）。"""
+        buffer = self.service.account_timeline_view()
+        config = self.service.projection_config_view()
+        if buffer is None:
+            self._error(503, "account_timeline_unavailable",
+                        "no bounded account timeline is wired (UNKNOWN, not empty)")
+            return
+        if config is None:
+            self._error(503, "projection_config_required",
+                        "display bounds are required for the account timeline")
+            return
+        from product.account_timeline import project_account_timeline
+        from product.serialization import to_jsonable
+
+        timeline = project_account_timeline(buffer.samples(), config=config)
+        self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE,
+                              "timeline": to_jsonable(timeline), "counts": buffer.counts,
+                              "bounds": self._bounds(config), "run_id": buffer.run_id})
+
     def _serve_report(self, query: str) -> None:
         """只读 Run Summary（json 默认 / markdown）。"""
         try:
@@ -322,6 +366,12 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         if path.startswith(f"{RUNS_PATH}/") and path.endswith("/market"):
             self._serve_run_market(path)
             return
+        if path == PORTFOLIO_TIMELINE_PATH:
+            self._serve_account_timeline()
+            return
+        if path.startswith(f"{FACTS_PATH}/"):
+            self._serve_facts(path)
+            return
         if path == CAPABILITIES_PATH:
             self._serve_capabilities(query)
             return
@@ -351,7 +401,8 @@ class ProductApiHandler(BaseHTTPRequestHandler):
                                                        REPORT_PATH, CAPABILITIES_PATH, METRICS_PATH,
                                                        RUNS_PATH, RUNS_COMPARE_PATH, MARKET_TIMELINE_PATH,
                                                        MARKET_DEPTH_PATH, MARKET_TRADES_PATH,
-                                                       MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH])})
+                                                       MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH,
+                                                       FACTS_PATH, PORTFOLIO_TIMELINE_PATH])})
             return
         module = ROUTES.get(path)
         if module is None:

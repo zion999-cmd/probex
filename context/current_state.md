@@ -536,3 +536,12 @@ P0001.9.5 已作为 `a2ab8da`（1631 passed）、P0001.9.6 已作为 `afc0196`�
 - **Gap audit**：12 类需求可移动/组合满足；需新 Product API 的 5 项（G1 fill 证据、G2 raw facts、G3 equity 序列、
   G4 prediction/accounting 健康、G5 authority kind/TTL/generation）；Execution Safety 明细属 P0001.13。
 - 未做大规模视觉重构（遵守提案指示）；测试全量 **2030 passed / 0 failed / 24 skipped**（+13）。未 commit。
+
+### P0001.12.2 Surface Capability Completion（已完成，严格 G1–G5）
+
+- G1 fill 级证据（`recent_fills` + trace `fill` 阶段）；G2 `GET /api/v1/facts/<kind>/<identity>`（有界/截断/404/400）；
+  G3 `GET /api/v1/portfolio/timeline`（有界 equity/exposure，未接线 503）；G4 `health.prediction_provider`/`accounting`；
+  G5 readiness 的 authority kind/TTL/generation。`schema_version = "3"`。
+- UI：Activity（fill + raw facts）、Performance（equity/exposure 时间线）、System/Health（G4）、System/Readiness（G5）。
+- 测试：全量 **2054 passed / 0 failed / 24 skipped**（+24）；`currentProposal = null`；未 commit。
+- 未做：P0001.12.3（Assistant / Action Gateway）、P0001.13（rate limit / latency / reconciliation 后端）。

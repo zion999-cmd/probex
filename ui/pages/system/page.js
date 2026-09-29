@@ -15,6 +15,10 @@ export async function render(rest = []) {
   const header = section("System surfaces", nav);
   if (active === "health") {
     return header + section("Health", factRows(snapshot.health)) +
+      section("Provider / accounting health (G4)", rows([
+        ["prediction provider", fact(snapshot.health.prediction_provider)],
+        ["accounting", fact(snapshot.health.accounting)],
+      ])) +
       section("Market / stream", rows([
         ["market healthy", fact(snapshot.market.healthy)],
         ["market tradeable", fact(snapshot.market.tradeable)],
@@ -26,7 +30,13 @@ export async function render(rest = []) {
   if (active === "risk") return header + section("Risk", factRows(snapshot.risk)) +
       section("Rejects (reason codes)", rows((snapshot.risk.rejects || []).map((r, i) => [`reject ${i + 1}`,
         `<span class="bad">${escapeHtml(r)}</span>`])) || rows([["rejects", "none"]]));
-  if (active === "readiness") return header + section("Readiness", factRows(snapshot.readiness)) +
+  if (active === "readiness") return header + section("Authority facts (G5)", rows([
+      ["kind", fact(snapshot.readiness.authority_kind)],
+      ["issued_at_ms", fact(snapshot.readiness.authority_issued_at_ms)],
+      ["expires_at_ms", fact(snapshot.readiness.authority_expires_at_ms)],
+      ["recovery generation", fact(snapshot.readiness.authority_recovery_generation)],
+      ["market generation", fact(snapshot.readiness.authority_market_generation)],
+    ])) + section("Readiness", factRows(snapshot.readiness)) +
       section("Blockers", rows((snapshot.readiness.reasons || []).map((r, i) => [`reason ${i + 1}`,
         `<span class="bad">${escapeHtml(r)}</span>`])) || rows([["reasons", "none"]]));
   if (active === "execution") {

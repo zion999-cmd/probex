@@ -15,7 +15,7 @@ from enum import Enum
 from market.events.types import Milliseconds
 
 #: 产品 schema 版本（API 契约版本；内部 Python 类型不得裸序列化）
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 #: 未知原因码（用于 `Fact.reason`）
 UNKNOWN_NOT_PROVIDED = "not_provided"
@@ -223,6 +223,18 @@ class OrderView:
 
 
 @dataclass(frozen=True, slots=True)
+class FillView:
+    """成交事实视图（G1）：只搬运 FillLedger / execution 事实，不做任何推断。"""
+
+    client_order_id: Fact
+    ts: Fact
+    price: Fact
+    quantity: Fact
+    fee: Fact
+    trade_id: Fact
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionView:
     active_orders: tuple[OrderView, ...]
     uncertain_exposure: Fact
@@ -230,6 +242,10 @@ class ExecutionView:
     has_unknown_exposure: bool
     unknown_submit_count: Fact
     unknown_cancel_count: Fact
+    #: G1：最近成交（有界；空元组表示"未接线/未提供"，不是"没有成交"——由 counts 区分）
+    recent_fills: tuple[FillView, ...] = ()
+    #: G1：成交上限（0 = 未接线，显式表达"不暴露成交"）
+    recent_fill_limit: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,6 +268,12 @@ class ReadinessView:
     reasons: tuple[str, ...] = ()
     details: tuple[str, ...] = ()
     authority_id: Fact = field(default_factory=lambda: Fact.unknown("not_provided"))
+    #: G5：完整 authority 事实（kind / TTL / generation）
+    authority_kind: Fact = field(default_factory=lambda: Fact.unknown("not_provided"))
+    authority_issued_at_ms: Fact = field(default_factory=lambda: Fact.unknown("not_provided"))
+    authority_expires_at_ms: Fact = field(default_factory=lambda: Fact.unknown("not_provided"))
+    authority_recovery_generation: Fact = field(default_factory=lambda: Fact.unknown("not_provided"))
+    authority_market_generation: Fact = field(default_factory=lambda: Fact.unknown("not_provided"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,6 +283,9 @@ class HealthView:
     clock_offset_ms: Fact
     uptime_ms: Fact
     notes: tuple[str, ...] = ()
+    #: G4：prediction provider 状态（HEALTHY / DEGRADED / BACKING_OFF）与 accounting 健康
+    prediction_provider: Fact = field(default_factory=lambda: Fact.unknown("not_provided"))
+    accounting: Fact = field(default_factory=lambda: Fact.unknown("not_provided"))
 
 
 @dataclass(frozen=True, slots=True)

@@ -23,6 +23,8 @@ export const ENDPOINTS = {
   marketHealth: "/api/v1/market/health",
   marketOverlays: "/api/v1/market/overlays",
   replay: "/api/v1/replay",
+  facts: "/api/v1/facts",
+  portfolioTimeline: "/api/v1/portfolio/timeline",
 };
 
 /** 唯一允许的 POST：local replay session control（只作用于 REPLAY runtime）。 */

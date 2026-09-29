@@ -12,9 +12,11 @@ from api.routes import (
     market_timeline,
     market_trades,
     execution,
+    facts,
     market,
     metrics,
     portfolio,
+    portfolio_timeline,
     prediction,
     readiness,
     replay,
@@ -38,6 +40,8 @@ MARKET_TRADES_PATH = market_trades.PATH
 MARKET_HEALTH_PATH = market_health.PATH
 MARKET_OVERLAYS_PATH = market_overlays.PATH
 REPLAY_PATH = replay.PATH
+FACTS_PATH = facts.PATH
+PORTFOLIO_TIMELINE_PATH = portfolio_timeline.PATH
 
 
 #: path -> 模块（第一版全部为 GET，只读）
