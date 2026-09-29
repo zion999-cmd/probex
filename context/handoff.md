@@ -1580,3 +1580,27 @@ zero orphan、zero residual open orders、zero position、Mainnet write = 0、17
 
 历史记录（§1.2 Phase B NOT ACHIEVED 等）**保留**为历史，不改写；仅新增 §1.8 作为正式收口。
 本次为**纯文档 commit**；随后按人类指令 push `1822be7`、`215b9ce` 与本 docs-close commit。未跑策略窗口。
+
+## 2026-09-29（续 13）：P0001.10 Product API / UI / Reports 实施完成
+
+新增产品层（不拥有交易真相，只组合既有 Owner 事实）：`product/`（types/snapshot/service/serialization）、
+`api/`（stdlib 只读 REST，9 个只读端点 + `/snapshot` + `/schema`；所有非 GET ⇒ 405，`/runtime/stop` 预留 501）、
+`ui/index.html`（engineering console，UNKNOWN 高亮）、`reports/`（`RunSummary`，只汇总已记录事实）。
+新增 29 条测试（unit 3 文件 + integration 1 文件），覆盖提案 SC-1…SC-12。
+全量 **1819 passed / 0 failed / 24 skipped**。零第三方依赖；未修改任何域契约；无交易写入口。
+
+**未提交**（本轮人类指令仅要求"实施"，未授权 commit/push）。
+`context/status.json.currentProposal` 由 `P0001.10` 置回 `null`（该 Proposal 已完成，无下一切换授权）。
+
+## 2026-09-29（续 14）：P0001.10.2（UI + Reports）与 P0001.10.3（Product CLI）实施完成
+
+- **.10.2**：`reports/`（`RunIdentity` + `RunSummary` + `builder` / `json` / `markdown`，确定性、不重算 Accounting）+
+  `ui/`（app 外壳 + client/api·render·console + 10 个页面，纯静态无 build step，唯一数据入口是 `/api/v1/*`）+
+  API 新增只读 `GET /api/v1/reports/run-summary`（含 `?format=markdown`）与静态 `/ui/*`（路径穿越防护）。
+- **.10.3**：`cli/`（`python3 -m cli`）：status/snapshot/inspect/market/prediction/strategy/risk/orders/portfolio/
+  readiness/evidence/explain/report，统一 `--json`；稳定退出码 0/2/10/11/20/30；stdout=数据、stderr=诊断；**无任何写命令**。
+- 新增测试 25 条（report builder、report determinism、UI⇄API 契约、CLI）。
+  全量 **1844 passed / 0 failed / 24 skipped**。
+- 零第三方依赖（stdlib only）；未修改任何域契约；UI/CLI 均只经 Product API 读事实，无交易写入口。
+- **未 commit / 未 push**（本轮人类指令仅要求"读取, 实施"）。
+- `context/status.json.currentProposal` 置回 `null`（两个 Proposal 均已完成，无下一切换授权）。

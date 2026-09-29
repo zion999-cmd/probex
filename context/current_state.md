@@ -476,3 +476,17 @@ P0001.9.5 已作为 `a2ab8da`（1631 passed）、P0001.9.6 已作为 `afc0196`�
 - 替代开发验收：real Testnet `CONFIRMED_ACCEPTED` + Decimal tick normalization + cancel lifecycle +
   zero orphan + zero residual open orders + zero position + Mainnet write 0 + 1790 tests pass。
 - 仍 deferred（不宣称完成）：BOOTSTRAP live happy path（accepted → latency → supersede → NORMAL）；cold-start verdict = C。
+
+### P0001.10 Product API / UI / Reports（已完成）
+
+- `product/`：`SystemSnapshot` 读模型（`Fact` 显式 known/unknown；REPLAY/PAPER/TESTNET/LIVE 共用 schema）。
+- `api/`：stdlib 只读 REST（`/api/v1/status|market|prediction|strategy|risk|orders|portfolio|readiness|evidence|snapshot|schema`），非 GET 一律 405。
+- `ui/index.html`：engineering console；`reports/`：`RunSummary`（只汇总事实）。
+- 测试：全量 **1819 passed / 0 failed / 24 skipped**（+29）。未 commit（未授权）。
+
+### P0001.10.2 / P0001.10.3（已完成）
+
+- .10.2：`reports/`（RunSummary：JSON + Markdown，确定性）+ `ui/`（工程控制台，10 页面，纯静态，只经 Product API）；
+  API 增加只读 `/api/v1/reports/run-summary` 与 `/ui/*` 静态服务。
+- .10.3：`cli/`（只读、机器优先、稳定退出码 0/2/10/11/20/30、stdout/stderr 分离、无写命令）。
+- 测试：全量 **1844 passed / 0 failed / 24 skipped**（+25）。未 commit（未授权）。

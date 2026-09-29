@@ -1,0 +1,217 @@
+"""产品层类型（P0001.10 §1 / §3 / §4）。
+
+纪律（提案 §设计）：
+
+- **产品层不拥有交易事实**（`Product layer does not own trading truth`）：这里只做事实搬运与装箱；
+- **UNKNOWN 必须显式**：任何缺失事实都用 `Fact.unknown(reason)` 表达，绝不用 0 / 空列表 / healthy 顶替；
+- 类型只描述"可展示的事实"，不含任何业务判断、阈值或重算。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum
+
+from market.events.types import Milliseconds
+
+#: 产品 schema 版本（API 契约版本；内部 Python 类型不得裸序列化）
+SCHEMA_VERSION = "1"
+
+#: 未知原因码（用于 `Fact.reason`）
+UNKNOWN_NOT_PROVIDED = "not_provided"
+UNKNOWN_NOT_AVAILABLE = "not_available_yet"
+
+
+class RuntimeMode(Enum):
+    """运行模式：UI/API 不得猜测当前模式（提案 §3）。"""
+
+    REPLAY = "REPLAY"
+    PAPER = "PAPER"
+    TESTNET = "TESTNET"
+    LIVE = "LIVE"
+
+
+@dataclass(frozen=True, slots=True)
+class Fact:
+    """一个可展示的事实：**known/unknown 是一等字段**。
+
+    `value is None` 且 `known=False` ⇒ 未知（必须带 `reason`）。
+    未知**不等于** 0 / 空 / healthy。
+    """
+
+    known: bool
+    value: object | None = None
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.known, bool):
+            raise TypeError("Fact.known must be a bool")
+        if not self.known and self.reason is None:
+            raise ValueError("unknown Fact must carry a reason (unknown != 0/empty/healthy)")
+
+    @classmethod
+    def of(cls, value: object | None, *, unknown_reason: str = UNKNOWN_NOT_PROVIDED) -> "Fact":
+        if value is None:
+            return cls(known=False, value=None, reason=unknown_reason)
+        return cls(known=True, value=value)
+
+    @classmethod
+    def unknown(cls, reason: str) -> "Fact":
+        return cls(known=False, value=None, reason=reason)
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeIdentity:
+    """运行实例身份（每个 API 响应都必须带，提案 §3）。"""
+
+    mode: RuntimeMode
+    environment: str
+    venue: str
+    symbol: str
+    runtime_id: str
+    started_at: Milliseconds
+    data_timestamp: Fact
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, RuntimeMode):
+            raise TypeError("RuntimeIdentity.mode must be a RuntimeMode")
+        for name in ("environment", "venue", "symbol", "runtime_id"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"RuntimeIdentity.{name} must be a non-empty string")
+        if isinstance(self.started_at, bool) or not isinstance(self.started_at, int):
+            raise TypeError("RuntimeIdentity.started_at must be an int (ms)")
+        if not isinstance(self.data_timestamp, Fact):
+            raise TypeError("RuntimeIdentity.data_timestamp must be a Fact")
+
+
+@dataclass(frozen=True, slots=True)
+class MarketView:
+    healthy: Fact
+    tradeable: Fact
+    window_coverage_ms: Fact
+    best_bid: Fact
+    best_ask: Fact
+    spread_bps: Fact
+    market_state_hash: Fact
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionView:
+    request_id: Fact
+    sequence: Fact
+    provider: Fact
+    model: Fact
+    as_of: Fact
+    expires_at: Fact
+    latency_ms: Fact
+    derived_confidence: Fact
+    market_state_hash: Fact
+    freshest: Fact
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyView:
+    at_ms: Fact
+    mode: Fact
+    detail: Fact
+    blocked_by: Fact
+    bid_action: Fact
+    ask_action: Fact
+    bid_price: Fact
+    bid_quantity: Fact
+    ask_price: Fact
+    ask_quantity: Fact
+
+
+@dataclass(frozen=True, slots=True)
+class RiskView:
+    kill_switch_mode: Fact
+    max_position_qty: Fact
+    max_position_notional: Fact
+    max_open_order_exposure: Fact
+    max_daily_loss: Fact
+    max_drawdown_pct: Fact
+    realized_pnl_today: Fact
+    drawdown: Fact
+    peak_equity: Fact
+    rejects: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class OrderView:
+    """订单视图：`decision_id` 提供到 MakerDecision 的回溯（SC-7）。"""
+
+    client_order_id: str
+    side: str
+    status: str
+    price: Fact
+    quantity: Fact
+    filled_quantity: Fact
+    reduce_only: bool
+    created_at: Milliseconds
+    updated_at: Milliseconds
+    decision_id: Fact
+    uncertain: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionView:
+    active_orders: tuple[OrderView, ...]
+    uncertain_exposure: Fact
+    open_order_exposure: Fact
+    has_unknown_exposure: bool
+    unknown_submit_count: Fact
+    unknown_cancel_count: Fact
+
+
+@dataclass(frozen=True, slots=True)
+class PortfolioView:
+    position_qty: Fact
+    average_entry_price: Fact
+    mark_price: Fact
+    unrealized_pnl: Fact
+    realized_pnl: Fact
+    fees_paid: Fact
+    funding_paid: Fact
+    balance: Fact
+    equity: Fact
+
+
+@dataclass(frozen=True, slots=True)
+class ReadinessView:
+    status: Fact
+    scope: Fact
+    reasons: tuple[str, ...] = ()
+    details: tuple[str, ...] = ()
+    authority_id: Fact = field(default_factory=lambda: Fact.unknown("not_provided"))
+
+
+@dataclass(frozen=True, slots=True)
+class HealthView:
+    market_healthy: Fact
+    private_stream_state: Fact
+    clock_offset_ms: Fact
+    uptime_ms: Fact
+    notes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TraceEntry:
+    """结构化决策链的一环（提案 §4）：只搬运既有 reason code / identity。"""
+
+    stage: str
+    identity: Fact
+    outcome: str
+    reason_code: Fact
+    detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceView:
+    """因果链视图：回答"为什么没下单 / 为什么这个价格 / 为什么被拒 / 为什么 blocked"。"""
+
+    trace: tuple[TraceEntry, ...] = ()
+    readiness_blockers: tuple[str, ...] = ()
+    risk_rejects: tuple[str, ...] = ()
+    notes: tuple[str, ...] = ()

@@ -1,0 +1,341 @@
+"""`ProductService`：从既有 Owner 读取事实并组装 `SystemSnapshot`（P0001.10 §1）。
+
+- **只组合、不重算**（SC-4）：本模块不含任何阈值、指标、PnL 或风险数学；
+- 所有读取入口都是**注入的 callable**（便于 Replay / Paper / Testnet 共用）；
+- 任何读不到的字段 ⇒ `Fact.unknown(...)`（SC-3：UNKNOWN 不降级为 0 / 空 / healthy）；
+- 本模块**不得** import 任何 Binance execution REST client（SC-11）。
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+
+from market.events.types import Milliseconds
+
+from product.snapshot import SystemSnapshot
+from product.types import (
+    UNKNOWN_NOT_AVAILABLE,
+    UNKNOWN_NOT_PROVIDED,
+    EvidenceView,
+    ExecutionView,
+    Fact,
+    HealthView,
+    MarketView,
+    OrderView,
+    PortfolioView,
+    PredictionView,
+    ReadinessView,
+    RiskView,
+    RuntimeIdentity,
+    StrategyView,
+    TraceEntry,
+)
+
+
+def _get(obj: object | None, name: str) -> object | None:
+    """从 Owner 事实对象上取字段；缺失/None ⇒ None（由调用方转成 UNKNOWN）。"""
+    if obj is None:
+        return None
+    return getattr(obj, name, None)
+
+
+@dataclass(slots=True)
+class ProductService:
+    """产品读模型服务。所有依赖都是**只读** callable，不持有可变交易状态。"""
+
+    identity: RuntimeIdentity
+    market_state: Callable[[], object | None] = lambda: None
+    prediction: Callable[[], object | None] = lambda: None
+    maker_decision: Callable[[], object | None] = lambda: None
+    risk_snapshot: Callable[[], object | None] = lambda: None
+    risk_limits: Callable[[], object | None] = lambda: None
+    tracker: Callable[[], object | None] = lambda: None
+    accounting: Callable[[], object | None] = lambda: None
+    readiness: Callable[[], object | None] = lambda: None
+    authority_id: Callable[[], str | None] = lambda: None
+    health: Callable[[], Mapping[str, object]] = dict
+    risk_rejects: Callable[[], tuple[str, ...]] = tuple
+    execution_events: Callable[[], tuple[object, ...]] = tuple
+    clock: Callable[[], Milliseconds] = field(default=lambda: 0)
+    #: 预测"是否新鲜"由既有 Owner 判定（产品层不重算 TTL）
+    prediction_fresh: Callable[[], bool | None] = lambda: None
+    #: Run Summary provider（P0001.10.2 §4）：由已记录事实构造；未接线 ⇒ None（不是空报告）
+    run_summary: Callable[[], object | None] = lambda: None
+
+    def run_summary_view(self) -> object | None:
+        """取当前 Run Summary；未接线 ⇒ None（调用方须按 UNKNOWN/503 处理，不得伪造空报告）。"""
+        return self.run_summary()
+
+    # ------------------------------------------------------------------ snapshot
+
+    def snapshot(self, *, now_ms: Milliseconds | None = None) -> SystemSnapshot:
+        generated_at = self.clock() if now_ms is None else now_ms
+        market_state = self.market_state()
+        prediction = self.prediction()
+        decision = self.maker_decision()
+        risk = self.risk_snapshot()
+        limits = self.risk_limits()
+        tracker = self.tracker()
+        accounting = self.accounting()
+        readiness = self.readiness()
+        health = dict(self.health())
+
+        return SystemSnapshot(
+            generated_at=generated_at,
+            runtime=self.identity,
+            market=self._market(market_state),
+            prediction=self._prediction(prediction),
+            strategy=self._strategy(decision),
+            risk=self._risk(risk, limits),
+            execution=self._execution(tracker, decision),
+            portfolio=self._portfolio(accounting),
+            readiness=self._readiness(readiness),
+            health=self._health(health),
+            evidence=self._evidence(market_state, prediction, decision, readiness, tracker),
+        )
+
+    # ------------------------------------------------------------------ 各段（纯搬运）
+
+    def _market(self, state: object | None) -> MarketView:
+        quality = _get(state, "quality")
+        price = _get(state, "price")
+        identity = _get(state, "identity")
+        return MarketView(
+            healthy=Fact.of(_get(quality, "healthy")),
+            tradeable=Fact.of(_get(quality, "tradeable")),
+            window_coverage_ms=Fact.of(_get(quality, "window_coverage_ms")),
+            best_bid=Fact.of(_get(price, "best_bid")),
+            best_ask=Fact.of(_get(price, "best_ask")),
+            spread_bps=Fact.of(_get(price, "spread_bps")),
+            market_state_hash=Fact.of(_get(identity, "state_hash")),
+        )
+
+    def _prediction(self, record: object | None) -> PredictionView:
+        if record is None:
+            unknown = Fact.unknown("no prediction record yet")
+            return PredictionView(
+                request_id=unknown, sequence=unknown, provider=unknown, model=unknown, as_of=unknown,
+                expires_at=unknown, latency_ms=unknown, derived_confidence=unknown,
+                market_state_hash=unknown, freshest=unknown,
+            )
+        prediction = _get(record, "prediction")
+        fresh = self.prediction_fresh()
+        return PredictionView(
+            request_id=Fact.of(_get(record, "request_id")),
+            sequence=Fact.of(_get(record, "sequence")),
+            provider=Fact.of(_get(record, "provider")),
+            model=Fact.of(_get(record, "model")),
+            as_of=Fact.of(_get(record, "as_of")),
+            expires_at=Fact.of(_get(record, "expires_at")),
+            latency_ms=Fact.of(_get(record, "latency_ms")),
+            derived_confidence=Fact.of(_get(prediction, "derived_confidence")),
+            market_state_hash=Fact.of(_get(record, "market_state_hash")),
+            freshest=(Fact.unknown("freshness not evaluated") if fresh is None else Fact.of(fresh)),
+        )
+
+    def _strategy(self, decision: object | None) -> StrategyView:
+        if decision is None:
+            unknown = Fact.unknown("no maker decision yet")
+            return StrategyView(at_ms=unknown, mode=unknown, detail=unknown, blocked_by=unknown,
+                                bid_action=unknown, ask_action=unknown, bid_price=unknown,
+                                bid_quantity=unknown, ask_price=unknown, ask_quantity=unknown)
+        bid = _get(decision, "bid")
+        ask = _get(decision, "ask")
+        blocked_by = _get(decision, "blocked_by")
+        return StrategyView(
+            at_ms=Fact.of(_get(decision, "at_ms")),
+            mode=Fact.of(getattr(decision, "mode", None)),
+            detail=Fact.of(_get(decision, "detail")),
+            blocked_by=(Fact.unknown("not blocked") if blocked_by is None
+                        else Fact.of(getattr(blocked_by, "value", blocked_by))),
+            bid_action=Fact.of(getattr(_get(bid, "action"), "value", None)),
+            ask_action=Fact.of(getattr(_get(ask, "action"), "value", None)),
+            bid_price=Fact.of(_get(bid, "price")),
+            bid_quantity=Fact.of(_get(bid, "quantity")),
+            ask_price=Fact.of(_get(ask, "price")),
+            ask_quantity=Fact.of(_get(ask, "quantity")),
+        )
+
+    def _risk(self, snapshot: object | None, limits: object | None) -> RiskView:
+        kill_switch = _get(snapshot, "kill_switch_mode")
+        return RiskView(
+            kill_switch_mode=Fact.of(getattr(kill_switch, "value", kill_switch)),
+            max_position_qty=Fact.of(_get(limits, "max_position_qty")),
+            max_position_notional=Fact.of(_get(limits, "max_position_notional")),
+            max_open_order_exposure=Fact.of(_get(limits, "max_open_order_exposure")),
+            max_daily_loss=Fact.of(_get(limits, "max_daily_loss")),
+            max_drawdown_pct=Fact.of(_get(limits, "max_drawdown_pct")),
+            realized_pnl_today=Fact.of(_get(snapshot, "realized_pnl_today")),
+            drawdown=Fact.of(_get(snapshot, "drawdown")),
+            peak_equity=Fact.of(_get(snapshot, "peak_equity")),
+            rejects=tuple(self.risk_rejects()),
+        )
+
+    def _execution(self, tracker: object | None, decision: object | None) -> ExecutionView:
+        orders = tuple(getattr(tracker, "active", lambda: ())()) if tracker is not None else ()
+        decision_id_by_client = self._decision_index(decision)
+        views = tuple(
+            OrderView(
+                client_order_id=str(_get(order, "client_order_id") or ""),
+                side=str(getattr(_get(order, "side"), "value", None) or "unknown"),
+                status=str(getattr(_get(order, "status"), "value", None) or "unknown"),
+                price=Fact.of(_get(order, "price")),
+                quantity=Fact.of(_get(order, "quantity")),
+                filled_quantity=Fact.of(_get(order, "filled_quantity")),
+                reduce_only=bool(_get(order, "reduce_only") or False),
+                created_at=int(_get(order, "created_at") or 0),
+                updated_at=int(_get(order, "updated_at") or 0),
+                decision_id=(Fact.unknown("no matching maker decision")
+                             if str(_get(order, "client_order_id") or "") not in decision_id_by_client
+                             else Fact.of(decision_id_by_client[str(_get(order, "client_order_id") or "")])),
+                uncertain=bool(getattr(order, "status", None) is not None
+                               and getattr(getattr(order, "status"), "is_lost", False)),
+            )
+            for order in orders
+        )
+        unknown_exposure = (Fact.unknown("tracker not provided") if tracker is None
+                            else Fact.of(getattr(tracker, "uncertain_exposure", lambda: None)()))
+        pending = (Fact.unknown("tracker not provided") if tracker is None
+                   else Fact.of(getattr(tracker, "total_pending_exposure", lambda: None)()))
+        return ExecutionView(
+            active_orders=views,
+            uncertain_exposure=unknown_exposure,
+            open_order_exposure=pending,
+            has_unknown_exposure=bool(getattr(tracker, "has_unknown_exposure", False)),
+            unknown_submit_count=Fact.of(_get(tracker, "unknown_submit_count")),
+            unknown_cancel_count=Fact.of(_get(tracker, "unknown_cancel_count")),
+        )
+
+    def _portfolio(self, accounting: object | None) -> PortfolioView:
+        position = None
+        if accounting is not None:
+            getter = getattr(accounting, "position", None)
+            if callable(getter):
+                try:
+                    position = getter(self.identity.symbol)
+                except Exception:  # noqa: BLE001 - 读不到就是未知，不是 0
+                    position = None
+        return PortfolioView(
+            position_qty=Fact.of(_get(position, "qty")),
+            average_entry_price=Fact.of(_get(position, "average_entry_price")),
+            mark_price=Fact.of(_get(position, "mark_price")),
+            unrealized_pnl=Fact.of(_get(position, "unrealized_pnl")),
+            realized_pnl=Fact.of(_get(position, "realized_pnl")),
+            fees_paid=Fact.of(_get(position, "fees_paid")),
+            funding_paid=Fact.of(_get(position, "funding_paid")),
+            balance=Fact.of(_get(accounting, "balance")),
+            equity=Fact.of(_get(accounting, "equity")),
+        )
+
+    def _readiness(self, result: object | None) -> ReadinessView:
+        if result is None:
+            return ReadinessView(status=Fact.unknown("readiness not evaluated"),
+                                 scope=Fact.unknown("readiness not evaluated"),
+                                 authority_id=Fact.of(self.authority_id(),
+                                                      unknown_reason="no authority issued"))
+        status = _get(result, "status")
+        scope = _get(result, "scope")
+        return ReadinessView(
+            status=Fact.of(getattr(status, "value", status)),
+            scope=Fact.of(getattr(scope, "value", scope)),
+            reasons=tuple(r.value if hasattr(r, "value") else str(r) for r in (_get(result, "reasons") or ())),
+            details=tuple(str(d) for d in (_get(result, "details") or ())),
+            authority_id=Fact.of(self.authority_id(), unknown_reason="no authority issued"),
+        )
+
+    def _health(self, health: Mapping[str, object]) -> HealthView:
+        return HealthView(
+            market_healthy=Fact.of(health.get("market_healthy")),
+            private_stream_state=Fact.of(health.get("private_stream_state"),
+                                         unknown_reason=UNKNOWN_NOT_AVAILABLE),
+            clock_offset_ms=Fact.of(health.get("clock_offset_ms")),
+            uptime_ms=Fact.of(health.get("uptime_ms")),
+            notes=tuple(str(n) for n in (health.get("notes") or ())),
+        )
+
+    # ------------------------------------------------------------------ evidence
+
+    def _decision_index(self, decision: object | None) -> dict[str, str]:
+        """client_order_id → decision identity（订单↔决策回溯，SC-7）。"""
+        index: dict[str, str] = {}
+        if decision is None:
+            return index
+        at_ms = _get(decision, "at_ms")
+        for side_name in ("bid", "ask"):
+            side = _get(decision, side_name)
+            client_id = _get(side, "client_order_id")
+            if isinstance(client_id, str) and client_id:
+                index[client_id] = f"maker:{at_ms}:{side_name}"
+        return index
+
+    def _evidence(self, state: object | None, prediction: object | None, decision: object | None,
+                  readiness: object | None, tracker: object | None) -> EvidenceView:
+        """把既有 reason code / identity 串成稳定结构（提案 §4，不建图数据库）。"""
+        trace: list[TraceEntry] = []
+        trace.append(TraceEntry(
+            stage="market_state",
+            identity=Fact.of(_get(_get(state, "identity"), "state_hash")),
+            outcome=("unknown" if state is None
+                     else str(bool(_get(_get(state, "quality"), "tradeable")))),
+            reason_code=Fact.unknown("market gate is a boolean fact, not a reason code"),
+            detail="",
+        ))
+        trace.append(TraceEntry(
+            stage="prediction",
+            identity=Fact.of(_get(prediction, "request_id")),
+            outcome=("unknown" if prediction is None else "present"),
+            reason_code=Fact.unknown("no reason code at this stage"),
+            detail=str(_get(prediction, "provider") or ""),
+        ))
+        trace.append(TraceEntry(
+            stage="maker_decision",
+            # SC-6：MakerDecision 必须能给出其**输入 prediction identity**
+            identity=Fact.of(_get(prediction, "request_id"),
+                             unknown_reason="no prediction was used for this decision"),
+            outcome=(str(getattr(_get(decision, "mode"), "value", "unknown")) if decision is not None
+                     else "unknown"),
+            reason_code=Fact.of(str(getattr(_get(decision, "blocked_by"), "value", None)),
+                                unknown_reason="not blocked"),
+            detail=str(_get(decision, "detail") or ""),
+        ))
+        if readiness is not None:
+            reasons = tuple(r.value if hasattr(r, "value") else str(r) for r in (_get(readiness, "reasons") or ()))
+            trace.append(TraceEntry(
+                stage="readiness",
+                identity=Fact.of(str(getattr(_get(readiness, "status"), "value", "unknown"))),
+                outcome="blocked" if reasons else "ready",
+                reason_code=Fact.of(reasons[0]) if reasons else Fact.unknown("no blocker"),
+                detail="; ".join(reasons[:3]),
+            ))
+        active = tuple(getattr(tracker, "active", lambda: ())()) if tracker is not None else ()
+        decision_index = self._decision_index(decision)
+        for order in active:
+            client_id = str(_get(order, "client_order_id") or "")
+            trace.append(TraceEntry(
+                stage="order",
+                identity=Fact.of(decision_index.get(client_id),
+                                 unknown_reason="order has no matching maker decision"),
+                outcome=str(getattr(_get(order, "status"), "value", "unknown")),
+                reason_code=Fact.unknown("order carries no rejection reason code"),
+                detail=client_id,
+            ))
+        for event in self.execution_events():
+            trace.append(TraceEntry(
+                stage="execution_event",
+                identity=Fact.of(str(getattr(event, "client_order_id", "") or ""),
+                                 unknown_reason="execution event without client_order_id"),
+                outcome=type(event).__name__,
+                reason_code=Fact.of(str(getattr(event, "reason", "") or ""),
+                                    unknown_reason="no reason attached"),
+                detail="",
+            ))
+        blockers = (() if readiness is None
+                    else tuple(r.value if hasattr(r, "value") else str(r)
+                               for r in (_get(readiness, "reasons") or ())))
+        return EvidenceView(
+            trace=tuple(trace),
+            readiness_blockers=blockers,
+            risk_rejects=tuple(self.risk_rejects()),
+            notes=("product layer only composes existing owner facts",),
+        )

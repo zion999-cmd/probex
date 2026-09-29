@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Probex Engineering Console</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; background: #11131a; color: #d7dae0; }
+  header { padding: 10px 16px; border-bottom: 1px solid #2a2f3a; display: flex; gap: 16px; align-items: baseline; }
+  h1 { font-size: 14px; margin: 0; letter-spacing: .06em; text-transform: uppercase; }
+  main { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; padding: 12px 16px 40px; }
+  section { border: 1px solid #2a2f3a; border-radius: 6px; padding: 10px 12px; background: #161a23; }
+  h2 { font-size: 12px; margin: 0 0 8px; color: #9aa4b2; text-transform: uppercase; letter-spacing: .08em; }
+  .row { display: flex; justify-content: space-between; gap: 10px; }
+  .k { color: #8b93a1; }
+  .v { text-align: right; word-break: break-all; }
+  .unknown { color: #d8a657; }
+  .known { color: #7ec699; }
+  .bad { color: #e06c75; }
+  table { width: 100%; border-collapse: collapse; }
+  td, th { text-align: left; padding: 2px 4px; border-bottom: 1px solid #22262f; font-weight: normal; }
+  .trace { font-size: 12px; }
+  #banner { color: #9aa4b2; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Probex console</h1>
+  <span id="banner">connecting…</span>
+</header>
+<main>
+  <section><h2>Market</h2><div id="market"></div></section>
+  <section><h2>Prediction</h2><div id="prediction"></div></section>
+  <section><h2>Strategy</h2><div id="strategy"></div></section>
+  <section><h2>Risk</h2><div id="risk"></div></section>
+  <section><h2>Orders</h2><div id="orders"></div></section>
+  <section><h2>Portfolio</h2><div id="portfolio"></div></section>
+  <section><h2>Readiness</h2><div id="readiness"></div></section>
+  <section><h2>Evidence</h2><div id="evidence" class="trace"></div></section>
+</main>
+<script>
+function fact(f) {
+  if (!f || typeof f !== "object") return '<span class="unknown">UNKNOWN</span>';
+  if (!f.known) return '<span class="unknown">UNKNOWN (' + (f.reason || "unknown") + ')</span>';
+  const v = f.value;
+  return '<span class="known">' + (v === null ? "null" : String(v)) + '</span>';
+}
+function rows(el, pairs) {
+  el.innerHTML = pairs.map(([k, v]) => '<div class="row"><span class="k">' + k + '</span><span class="v">' + v + '</span></div>').join("");
+}
+function sectionFact(el, obj) {
+  rows(el, Object.entries(obj || {}).map(([k, v]) => [k, fact(v)]));
+}
+async function tick() {
+  try {
+    const r = await fetch("/api/v1/snapshot", { cache: "no-store" });
+    const s = await r.json();
+    const id = s.runtime;
+    document.getElementById("banner").textContent =
+      [id.mode, id.environment, id.venue, id.symbol, "runtime=" + id.runtime_id,
+       "data_ts=" + (id.data_timestamp.known ? id.data_timestamp.value : "UNKNOWN")].join(" · ");
+    sectionFact(document.getElementById("market"), s.market);
+    sectionFact(document.getElementById("prediction"), s.prediction);
+    sectionFact(document.getElementById("strategy"), s.strategy);
+    sectionFact(document.getElementById("risk"), s.risk);
+    sectionFact(document.getElementById("portfolio"), s.portfolio);
+    sectionFact(document.getElementById("readiness"), s.readiness);
+    const orders = s.execution.active_orders || [];
+    document.getElementById("orders").innerHTML = orders.length === 0
+      ? '<div class="row"><span class="k">active</span><span class="v known">0</span></div>'
+      : '<table><tr><th>client id</th><th>side</th><th>status</th><th>price</th><th>qty</th><th>decision</th></tr>' +
+        orders.map(o => '<tr><td>' + o.client_order_id + '</td><td>' + o.side + '</td><td>' + o.status +
+          '</td><td>' + fact(o.price) + '</td><td>' + fact(o.quantity) + '</td><td>' + fact(o.decision_id) +
+          '</td></tr>').join("") + '</table>';
+    const trace = (s.evidence.trace || []).map(t =>
+      '<div class="row"><span class="k">' + t.stage + '</span><span class="v">' + t.outcome +
+      ' · ' + fact(t.reason_code) + '</span></div>').join("");
+    const blockers = (s.evidence.readiness_blockers || []).length
+      ? '<div class="row"><span class="k">blockers</span><span class="v bad">' +
+        s.evidence.readiness_blockers.join(", ") + '</span></div>' : "";
+    document.getElementById("evidence").innerHTML = trace + blockers;
+  } catch (e) {
+    document.getElementById("banner").textContent = "snapshot unavailable: " + e;
+  }
+}
+tick();
+setInterval(tick, 2000);
+</script>
+</body>
+</html>
