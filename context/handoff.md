@@ -1777,3 +1777,19 @@ UI HTML 可打开；`/api/v1/actions` 10 个基线 handler 可用；`inspect.sna
 **治理**：`currentProposal` 临时回开为 `"P0001.11.2"`（本 closure 对应原提案）；Slice 2 完成后恢复 `null`。
 
 **仍属 Slice 2**：F-02（真实 run 路径调用 RuntimeSession：REPLAY/PAPER host）与 F-10（运行中不再读作 INCOMPLETE → active/liveness 读侧语义）。
+
+## 2026-09-29（续 25）：Closure Slice 2（Real Run Lifecycle）完成并复验
+
+按人类要求收窄实现：`runtime/assembly.py` 只做 composition root；feed/domain 逻辑下沉到新 `runtime/provider.py`
+（复用 `ReplaySource`/`MarketBook`/`FeatureEngine`/`BoundedMarketHistory`/`PaperBroker`/`OrderManager`，只做字段搬运的三个最小 adapter）。
+
+- **F-10 CLOSED**：`storage/run_registry.py` 的 `active.json`（原子、与 run 同域）+ `active_run_id()`（pid 探活，**不用 TTL 当真相**）；
+  `SessionHost.start/finish/terminate` 写/清 marker；读侧 active+无 finalization ⇒ `RUNNING`，无 marker 或 pid 死 ⇒ `INCOMPLETE`，finalization ⇒ `COMPLETED`（durable 语义未变）。
+- **F-02 CLOSED**：REPLAY/PAPER 真实跑通（event store → ReplaySource → MarketBook/FeatureEngine → 投影）；`/runs` 运行中 = `RUNNING`；
+  `/market/timeline` 有真实事实；SIGTERM ⇒ `[start, finalize]` + durable `COMPLETED` + active 清除 + shutdown 日志 `STOPPED`。
+  PAPER 使用既有 PaperBroker/OrderManager，**未产生任何订单**。
+- CLI：`--event-store` 对 REPLAY/PAPER 必填；bounds 从 `--config-file`（FILE 来源，CLI 覆盖）读取，不再强迫手输；缺失显式报错。
+- 全量 **2165 passed / 0 failed / 24 skipped**。
+- 仍开放小项（不阻塞）：运行期 snapshot 的 `runtime.data_timestamp` 仍 UNKNOWN（停止时更新）；本 Slice 不驱动策略。
+
+下一步：Slice 3（F-03/F-04/F-05/F-06/F-07：venue facts / policy 注入 / latency 采样 / health facts / Assistant explain+基线动作）。

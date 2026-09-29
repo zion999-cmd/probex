@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import dataclasses
 import os
 import signal
 import threading
@@ -30,6 +31,7 @@ import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from dataclasses import dataclass, field
+from dataclasses import replace as dataclasses_replace
 
 from actions import (
     ActionAuditLog,
@@ -43,6 +45,7 @@ from api.server import create_server
 from assistant import AssistantService
 from product.provenance import ConfigEntry, ConfigSource, build_config_snapshot
 from product.service import ProductService
+from market.events.types import Venue
 from product.types import Fact, RuntimeIdentity, RuntimeMode
 from reports import build_run_summary
 from reports.json import summary_to_json
@@ -67,6 +70,28 @@ def clock_now_ms() -> int:
 
 
 @dataclass(frozen=True, slots=True)
+class FeedProfile:
+    """真实回放/纸面运行的输入（全部显式；bounds 无默认值）。"""
+
+    event_store: str
+    window_ms: int
+    bucket_ms: int
+    max_points: int
+    price_levels: int
+    history_capacity: int
+    view_depth: int
+
+    def __post_init__(self) -> None:
+        for name in ("window_ms", "bucket_ms", "max_points", "price_levels", "history_capacity",
+                     "view_depth"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise AssemblyError(f"FeedProfile.{name} must be a positive int")
+        if not str(self.event_store):
+            raise AssemblyError("FeedProfile.event_store must be a path")
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeProfile:
     """装配输入（全部显式；本类不提供业务默认值，只提供启动默认：REPLAY + loopback）。"""
 
@@ -81,6 +106,8 @@ class RuntimeProfile:
     runtime_id: str | None = None
     #: 显式注入的时钟（测试可替换）；生产使用 wall-clock
     clock: Callable[[], int] = clock_now_ms
+    #: 真实 feed（提供后 REPLAY/PAPER 会真正消费事件并产生市场事实）
+    feed: FeedProfile | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.symbol, str) or not self.symbol:
@@ -114,6 +141,11 @@ class ProductRuntime:
     _server: object | None = field(default=None, init=False)
     _identity: RuntimeIdentity = field(init=False)
     _facts: SessionSummaryFacts = field(init=False)
+    _history: object | None = field(default=None, init=False)
+    _feed_stats: dict[str, object] = field(default_factory=dict, init=False)
+    _feed_provider: object | None = field(default=None, init=False)
+    _projection_config: object | None = field(default=None, init=False)
+    _feed_error: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         now = int(self.profile.clock())
@@ -180,8 +212,10 @@ class ProductRuntime:
             runtime_status=lambda: self._tracker.status(),
             action_gateway=lambda: self._gateway,
             assistant=lambda: self._assistant,
-            # 无行情/账户/执行源时保持 UNKNOWN（不伪造 healthy / 0）
-            market_state=lambda: None,
+            # 有真实 feed 时接入市场历史缓冲；否则保持 UNKNOWN（不伪造 healthy / 0）
+            market_state=lambda: (self._feed_provider.last_state if self._feed_provider else None),
+            market_history=lambda: self._history,
+            projection_config=lambda: self._projection_config,
             prediction=lambda: None,
             maker_decision=lambda: None,
             risk_snapshot=lambda: None,
@@ -292,19 +326,60 @@ class ProductRuntime:
     # ------------------------------------------------------------------ lifecycle
 
     def start(self) -> RuntimeStatus:
-        """建立 run 并把 runtime 标为 RUNNING（quota/quoting 只在有依据时给出）。"""
+        """建立 run、写 active marker，并把 runtime 标为 RUNNING。"""
         now = int(self.profile.clock())
         self._tracker.mark_starting(now_ms=now, detail="assembling runtime")
         self._host.start()
-        status = self._tracker.mark_running(
-            now_ms=now, run_id=self._session.run_id, quoting=False,
-            detail="idle: no market data source configured in this build of the assembly")
+        detail = "running" if self.profile.feed is not None else "idle: no market data source configured"
+        status = self._tracker.mark_running(now_ms=now, run_id=self._session.run_id, quoting=False,
+                                            detail=detail)
+        if self.profile.feed is not None:
+            self._start_feed()
         return status
+
+    # ------------------------------------------------------------------ composition（不含 feed 业务逻辑）
+
+    def _start_feed(self) -> None:
+        """构造既有 feed provider（市场算法全在既有模块里），并接线到 Product 投影。"""
+        profile = self.profile.feed
+        assert profile is not None  # noqa: S101
+        from product.market_projection import MarketProjectionConfig
+        from runtime.provider import FeedConfig, MarketFeedProvider
+
+        provider = MarketFeedProvider(
+            config=FeedConfig(event_store=profile.event_store,
+                              projection=MarketProjectionConfig(window_ms=profile.window_ms,
+                                                                bucket_ms=profile.bucket_ms,
+                                                                max_points=profile.max_points,
+                                                                price_levels=profile.price_levels),
+                              history_capacity=profile.history_capacity,
+                              view_depth=profile.view_depth),
+            venue=Venue(self.profile.venue.lower()),
+            symbol=self.profile.symbol, mode=self.profile.mode, run_id=self._session.run_id,
+            clock=self.profile.clock)
+        self._feed_provider = provider
+        self._history = provider.history
+        self._projection_config = provider.config.projection
+        self._service.market_state = lambda: provider.last_state   # 只读视图（provider 拥有事实）
+        self._service.market_history = lambda: provider.history
+        self._service.projection_config = lambda: provider.config.projection
+        provider.start()
+
+    def _stop_feed(self) -> None:
+        provider = self._feed_provider
+        if provider is not None:
+            provider.stop()
+            self._feed_stats = provider.stats
+            self._feed_error = provider.error
+            if provider.data_timestamp_ms is not None:
+                self._identity = dataclasses_replace(
+                    self._identity, data_timestamp=Fact.of(provider.data_timestamp_ms))
 
     def stop(self) -> RuntimeStatus:
         """graceful stop：session 先 finalize（COMPLETED），状态置 STOPPED。"""
         now = int(self.profile.clock())
         self._tracker.mark_stopping(now_ms=now)
+        self._stop_feed()
         if self._session.record.status.value == "RUNNING":
             self._host.finish(facts=self._facts)
         return self._tracker.mark_stopped(now_ms=now, detail="graceful stop completed")
@@ -375,17 +450,50 @@ def build_profile_from_args(argv: Sequence[str] | None = None) -> RuntimeProfile
                         help=f"durable run registry dir (env {RUN_REGISTRY_ENV})")
     parser.add_argument("--config", action="append", default=[],
                         help="resolved config entry as name=value (source=CLI); repeatable")
+    parser.add_argument("--config-file", default=None,
+                        help="JSON file of resolved non-sensitive config values (source=FILE)")
+    parser.add_argument("--event-store", default=None,
+                        help="event store path; required for replay/paper real runs")
     args = parser.parse_args(list(argv) if argv is not None else None)
     entries = tuple(ConfigEntry(name=name, source=ConfigSource.CLI, value=Fact.of(value))
                     for item in args.config for name, _, value in [str(item).partition("=")])
+    if args.config_file:
+        import pathlib as _pathlib
+
+        file_values = json.loads(_pathlib.Path(args.config_file).read_text(encoding="utf-8"))
+        if not isinstance(file_values, dict):
+            raise AssemblyError("--config-file must contain a JSON object")
+        entries = tuple(ConfigEntry(name=str(name), source=ConfigSource.FILE, value=Fact.of(value))
+                        for name, value in file_values.items()) + entries
     if not entries:
         # 显式给出最小可审计输入（不是业务默认值：它只是"本次运行的身份描述"）
         entries = (ConfigEntry(name="symbol", source=ConfigSource.CLI, value=Fact.of(args.symbol)),
                    ConfigEntry(name="mode", source=ConfigSource.CLI,
                                value=Fact.of(str(args.mode).upper())))
-    return RuntimeProfile(symbol=args.symbol, config_entries=entries,
-                          mode=RuntimeMode(str(args.mode).upper()), environment=args.environment, venue=args.venue,
-                          host=args.host, port=args.port, run_registry_dir=args.run_registry_dir)
+    mode = RuntimeMode(str(args.mode).upper())
+    resolved = {entry.name: entry.value.value for entry in entries
+                if entry.value.known}
+    feed = None
+    if args.event_store:
+        required = ("projection.window_ms", "projection.bucket_ms", "projection.max_points",
+                    "projection.price_levels", "projection.history_capacity", "projection.view_depth")
+        missing = [name for name in required if name not in resolved]
+        if missing:
+            raise AssemblyError(
+                "event-store runs require explicit display bounds in the profile/config file: "
+                + ", ".join(missing) + " (no technical defaults are invented by the product)"
+            )
+        feed = FeedProfile(event_store=args.event_store, window_ms=int(resolved["projection.window_ms"]),
+                           bucket_ms=int(resolved["projection.bucket_ms"]),
+                           max_points=int(resolved["projection.max_points"]),
+                           price_levels=int(resolved["projection.price_levels"]),
+                           history_capacity=int(resolved["projection.history_capacity"]),
+                           view_depth=int(resolved["projection.view_depth"]))
+    elif mode in (RuntimeMode.REPLAY, RuntimeMode.PAPER):
+        raise AssemblyError(f"--event-store is required for a real {mode.value.lower()} run")
+    return RuntimeProfile(symbol=args.symbol, config_entries=entries, mode=mode,
+                          environment=args.environment, venue=args.venue, host=args.host, port=args.port,
+                          run_registry_dir=args.run_registry_dir, feed=feed)
 
 
 def _install_stop_signals(runtime: "ProductRuntime", server: object,

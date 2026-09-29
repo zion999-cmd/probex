@@ -575,3 +575,11 @@ P0001.9.5 已作为 `a2ab8da`（1631 passed）、P0001.9.6 已作为 `afc0196`�
   SIGTERM ⇒ index `start`+`finalize`、durable run COMPLETED、shutdown state=STOPPED。
 - 修复 2 缺陷：env 目录未生效、signal 未 finalize（同线程 shutdown 死锁）。
 - 测试：全量 **2150 passed / 0 failed / 24 skipped**；F-01 CLOSED、F-11 PARTIAL（quoting/loop 真实数据属 Slice 2）。
+
+### Closure Slice 2 — Real Run Lifecycle（已完成并复验）
+
+- F-10 CLOSED：active marker（`active.json`，原子、同持久化域、pid 探活、无 TTL 真相）；运行中 `RUNNING`、异常/无 marker `INCOMPLETE`、finalize `COMPLETED`。
+- F-02 CLOSED：`runtime/provider.py`（复用 ReplaySource/MarketBook/FeatureEngine/BoundedMarketHistory/PaperBroker/OrderManager）；
+  `runtime/assembly.py` 仅为 composition root；REPLAY 与 PAPER 真实跑通，`/runs` 运行中 `RUNNING`、timeline 有真实事实、SIGTERM ⇒ `COMPLETED`。
+- CLI：`--event-store` 必填（REPLAY/PAPER），bounds 来自 `--config-file`。
+- 测试：全量 **2165 passed / 0 failed / 24 skipped**。

@@ -54,10 +54,26 @@ class SessionHost:
         return self._steps
 
     def start(self) -> RunRecord:
-        """登记 run（runtime identity 建立时调用一次）。"""
+        """登记 run（runtime identity 建立时调用一次），并写 active marker（F-10）。"""
         record = self.session.start()
         self._started = True
+        self._mark_active(record)
         return record
+
+    def _mark_active(self, record: RunRecord) -> None:
+        registry = self.session.registry
+        try:
+            registry.mark_active(run_id=record.run_id, runtime_id=record.runtime.runtime_id,
+                                 mode=record.runtime.mode.value, symbol=record.runtime.symbol,
+                                 now_ms=int(self.session.clock()))
+        except Exception:  # noqa: BLE001 - marker 失败不得影响运行（读侧会退化为 INCOMPLETE）
+            pass
+
+    def _clear_active(self) -> None:
+        try:
+            self.session.registry.clear_active(self.session.run_id)
+        except Exception:  # noqa: BLE001
+            pass
 
     def run_feed(self, feed: Iterable[object], *, step: Callable[[object], object] | None = None) -> int:
         """消费真实事件流（`ReplaySource` 事件、`MarketState` 等），可选每步回调。
@@ -84,9 +100,11 @@ class SessionHost:
             except BaseException:
                 # 原始 Owner 的 stop 失败 ⇒ run 记 INCOMPLETE（绝不 COMPLETED），异常继续传播
                 self._stopped = True
+                self._clear_active()
                 self.session.stop(status=RunStatus.INCOMPLETE)
                 raise
         self._stopped = True
+        self._clear_active()
         return self.session.stop(facts=self._resolve_facts(facts))
 
     def terminate(self, reason: str, *, status: RunStatus = RunStatus.INCOMPLETE) -> RunRecord:
@@ -94,6 +112,7 @@ class SessionHost:
         if not isinstance(reason, str) or not reason:
             raise WiringError("terminate() requires a non-empty reason")
         self._stopped = True
+        self._clear_active()
         return self.session.stop(facts=self._resolve_facts(None, extra_anomaly=reason), status=status)
 
     def _resolve_facts(self, facts: SessionSummaryFacts | None,

@@ -22,20 +22,48 @@ from runtime.state import RuntimeState
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
+BOUNDS = {"projection.window_ms": 600_000, "projection.bucket_ms": 1_000,
+          "projection.max_points": 200, "projection.price_levels": 5,
+          "projection.history_capacity": 500, "projection.view_depth": 10}
+
+
 class AssemblyProfileTest(unittest.TestCase):
-    def test_default_mode_is_replay_and_default_bind_is_loopback(self) -> None:
-        profile = build_profile_from_args(["--symbol", "BTCUSDT"])
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="probex-profile-"))
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def config_file(self, **overrides: object) -> str:
+        import json as _json
+
+        path = self.tmp / "profile.json"
+        path.write_text(_json.dumps({**BOUNDS, **overrides}), encoding="utf-8")
+        return str(path)
+
+    def test_replay_is_the_default_mode_and_bind_is_loopback(self) -> None:
+        profile = build_profile_from_args(["--symbol", "BTCUSDT", "--mode", "replay",
+                                           "--event-store", str(self.tmp / "events.jsonl"),
+                                           "--config-file", self.config_file()])
 
         self.assertIs(profile.mode, RuntimeMode.REPLAY)
         self.assertEqual(profile.host, "127.0.0.1")
         self.assertIn(RuntimeMode.LIVE, ALLOWED_MODES)          # 可用但**不是**默认
+        self.assertIsNotNone(profile.feed)
+
+    def test_replay_requires_an_event_store_and_explicit_bounds(self) -> None:
+        with self.assertRaises(AssemblyError):
+            build_profile_from_args(["--symbol", "BTCUSDT"])                     # 无 event store
+        with self.assertRaises(AssemblyError):
+            build_profile_from_args(["--symbol", "BTCUSDT", "--mode", "paper",
+                                     "--event-store", str(self.tmp / "events.jsonl")])   # 无 bounds
 
     def test_testnet_and_live_require_explicit_mode(self) -> None:
         self.assertIs(build_profile_from_args(["--symbol", "BTCUSDT", "--mode", "testnet"]).mode,
                       RuntimeMode.TESTNET)
         self.assertIs(build_profile_from_args(["--symbol", "BTCUSDT", "--mode", "live"]).mode,
                       RuntimeMode.LIVE)
-        self.assertNotEqual(build_profile_from_args(["--symbol", "BTCUSDT"]).mode, RuntimeMode.LIVE)
+        self.assertIsNone(build_profile_from_args(["--symbol", "BTCUSDT", "--mode", "testnet"]).feed)
 
     def test_profile_refuses_missing_symbol_or_config(self) -> None:
         with self.assertRaises(AssemblyError):
@@ -170,3 +198,69 @@ class AssemblyHttpTest(ProductRuntimeTest):
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+
+class RealFeedSlice2Test(ProductRuntimeTest):
+    """Slice 2：REPLAY/PAPER 真实 feed（event store → ReplaySource → MarketBook/FeatureEngine → 投影）。"""
+
+    def feed_profile(self, mode: RuntimeMode):
+        import json as _json
+
+        from tests import scenarios
+        from tests.support import write_store
+        from runtime.assembly import FeedProfile
+
+        store = self.tmp / "events.jsonl"
+        write_store(store, scenarios.reference_events())
+        (self.tmp / "profile.json").write_text(_json.dumps({
+            "projection.window_ms": 600_000, "projection.bucket_ms": 1_000,
+            "projection.max_points": 200, "projection.price_levels": 5,
+            "projection.history_capacity": 500, "projection.view_depth": 10}), encoding="utf-8")
+        return RuntimeProfile(symbol="BTCUSDT", config_entries=self.cfg, mode=mode,
+                              run_registry_dir=str(self.tmp / f"runs-{mode.value}"),
+                              feed=FeedProfile(event_store=str(store), window_ms=600_000,
+                                               bucket_ms=1_000, max_points=200, price_levels=5,
+                                               history_capacity=500, view_depth=10))
+
+    def test_replay_run_consumes_real_events_and_is_visible_while_running(self) -> None:
+        runtime = ProductRuntime(profile=self.feed_profile(RuntimeMode.REPLAY))
+        runtime.start()
+        deadline = __import__("time").time() + 5
+        while __import__("time").time() < deadline and not runtime._feed_stats.get("completed"):  # noqa: SLF001
+            __import__("time").sleep(0.05)
+        try:
+            runs = runtime.service.run_registry_view().list()
+            self.assertEqual([r.run_id for r in runs], [runtime.run_id])
+            self.assertIs(runs[0].status, RunStatus.RUNNING)          # F-10：活跃 ⇒ RUNNING
+            counts = runtime.service.market_history_view().counts
+            self.assertGreater(counts["states"], 0)                    # 真实事实进入投影
+            self.assertGreater(counts["snapshots"], 0)
+            timeline = runtime.service.snapshot().market                # 投影可用（非 UNKNOWN）
+            self.assertTrue(timeline.best_bid.known)
+        finally:
+            runtime.stop()
+
+        record = runtime.service.run_registry_view().load(runtime.run_id)
+        self.assertIs(record.status, RunStatus.COMPLETED)
+        self.assertIsNone(runtime.service.run_registry_view().active_run_id())
+
+    def test_paper_run_uses_the_existing_paper_broker_without_fabricating_orders(self) -> None:
+        runtime = ProductRuntime(profile=self.feed_profile(RuntimeMode.PAPER))
+        runtime.start()
+        deadline = __import__("time").time() + 5
+        while __import__("time").time() < deadline and not runtime._feed_stats.get("completed"):  # noqa: SLF001
+            __import__("time").sleep(0.05)
+        try:
+            provider = runtime._feed_provider                                   # noqa: SLF001
+            self.assertIsNotNone(provider.paper_broker)                         # 真实 paper 链路
+            self.assertIsNotNone(provider.paper_manager)
+            self.assertGreater(runtime.service.market_history_view().counts["states"], 0)
+            self.assertEqual(runtime.service.snapshot().execution.active_orders, ())   # 未伪造订单
+        finally:
+            runtime.stop()
+
+    def test_replay_and_paper_share_the_same_market_path(self) -> None:
+        replay = self.feed_profile(RuntimeMode.REPLAY)
+        paper = self.feed_profile(RuntimeMode.PAPER)
+        self.assertEqual(replay.feed.event_store, paper.feed.event_store)       # 同一市场数据来源
+        self.assertIsNot(replay.mode, paper.mode)

@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from product.provenance import ConfigEntry, ConfigSource, build_config_snapshot
-from product.types import Fact, RuntimeMode
+from product.types import Fact, RuntimeIdentity, RuntimeMode
 from reports.types import RunStatus
 from runtime.session import RuntimeSession, SessionSummaryFacts
 from runtime.wiring import (
@@ -66,8 +66,10 @@ class SessionHostTest(unittest.TestCase):
 
         def stop_hook() -> None:
             self.calls.append("stop_hook")
-            # 原 Owner 的 stop 执行时，run 必须**还没有**被 finalize
-            self.assertEqual(self.registry.load(session.run_id).status, RunStatus.INCOMPLETE)
+            # 原 Owner 的 stop 执行时：run **还没有** finalization，且本进程仍是 active 拥有者
+            # ⇒ 读侧按 F-10 语义为 RUNNING（不是 INCOMPLETE，也不是 COMPLETED）
+            self.assertEqual(self.registry.load(session.run_id).status, RunStatus.RUNNING)
+            self.assertEqual(self.registry.active_run_id(), session.run_id)
 
         host = SessionHost(session=session, stop_hook=stop_hook)
         host.start()
@@ -182,3 +184,60 @@ class SessionHostTest(unittest.TestCase):
                                          or stripped.startswith(f"import {root}"))
         for forbidden in ("threading", "multiprocessing", "daemon=True", "submit(", "cancel(", "RiskGate"):
             self.assertNotIn(forbidden, source)
+
+
+class ActiveMarkerSemanticsTest(unittest.TestCase):
+    """F-10：active + 无 finalization ⇒ RUNNING；无 active marker ⇒ INCOMPLETE；finalize 后 ⇒ COMPLETED。"""
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="probex-active-"))
+        self.registry = JsonRunRegistry(self.root)
+        self.session = RuntimeSession(mode=RuntimeMode.REPLAY, environment="local", venue="binance",
+                                      symbol="BTCUSDT", registry=self.registry, clock=lambda: 1_000,
+                                      runtime_id="rt-active")
+        self.host = SessionHost(session=self.session)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_active_run_reads_as_running_not_incomplete(self) -> None:
+        self.host.start()
+
+        self.assertEqual(self.registry.active_run_id(), "rt-active")
+        self.assertEqual(self.registry.load("rt-active").status, RunStatus.RUNNING)
+        self.assertNotEqual(self.registry.load("rt-active").status, RunStatus.INCOMPLETE)
+
+    def test_marker_is_cleared_after_graceful_stop(self) -> None:
+        self.host.start()
+        record = self.host.finish(facts=SessionSummaryFacts())
+
+        self.assertIsNone(self.registry.active_run_id())
+        self.assertEqual(record.status, RunStatus.COMPLETED)
+        self.assertEqual(self.registry.load("rt-active").status, RunStatus.COMPLETED)
+
+    def test_marker_is_cleared_on_abnormal_termination_and_run_is_incomplete(self) -> None:
+        self.host.start()
+        self.host.terminate("simulated crash")
+
+        self.assertIsNone(self.registry.active_run_id())
+        self.assertEqual(self.registry.load("rt-active").status, RunStatus.INCOMPLETE)
+
+    def test_marker_with_a_dead_process_is_not_treated_as_active(self) -> None:
+        """进程身份优先：pid 不存在 ⇒ 不是 RUNNING（也不需要 TTL 才能判定）。"""
+        self.registry.start(runtime=RuntimeIdentity(mode=RuntimeMode.REPLAY, environment="local",
+                                                   venue="binance", symbol="BTCUSDT",
+                                                   runtime_id="rt-dead", started_at=1_000,
+                                                   data_timestamp=Fact.unknown("n/a")),
+                            run_id="rt-dead", now_ms=1_000)
+        self.registry.mark_active(run_id="rt-dead", runtime_id="rt-dead", mode="REPLAY",
+                                  symbol="BTCUSDT", now_ms=1_000, pid=999_999_99)
+
+        self.assertIsNone(self.registry.active_run_id())
+        self.assertEqual(self.registry.load("rt-dead").status, RunStatus.INCOMPLETE)
+
+    def test_marker_only_clears_for_its_own_run(self) -> None:
+        self.host.start()
+        self.registry.clear_active("someone-else")
+
+        self.assertEqual(self.registry.active_run_id(), "rt-active")
+        self.host.finish(facts=SessionSummaryFacts())

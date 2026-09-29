@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import json as _json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +27,8 @@ from reports.types import MetricComparison, RunComparison, RunRecord, RunStatus
 
 #: 仓库外默认目录；可由 env 覆盖（裁决 B）
 RUN_REGISTRY_ENV = "PROBEX_RUN_REGISTRY_DIR"
+#: active marker 文件名（与 run 同一持久化域；原子更新）
+ACTIVE_FILE = "active.json"
 DEFAULT_RUN_REGISTRY_DIR = "~/.probex/runs"
 INDEX_FILE = "index.jsonl"
 RUNS_DIR = "runs"
@@ -98,6 +101,74 @@ class JsonRunRegistry:
         finally:
             os.close(dir_fd)
         return target
+
+    # ------------------------------------------------------------------ active marker（F-10）
+
+    def mark_active(self, *, run_id: str, runtime_id: str, mode: str, symbol: str,
+                    now_ms: Milliseconds, pid: int | None = None) -> dict[str, object]:
+        """写入 active marker（原子）：表示**本进程**的 run 正在运行。
+
+        durable RunRecord 的最终状态语义不变；marker 只是"当前有活跃 runtime"的产品读侧事实。
+        """
+        import os as _os
+
+        marker = {"run_id": run_id, "runtime_id": runtime_id, "mode": mode, "symbol": symbol,
+                  "started_at_ms": int(now_ms), "pid": int(pid if pid is not None else _os.getpid())}
+        target = self.root / ACTIVE_FILE
+        temp = target.with_suffix(".json.tmp")
+        handle = _os.open(temp, _os.O_CREAT | _os.O_WRONLY | _os.O_TRUNC, 0o600)
+        try:
+            _os.write(handle, _json.dumps(marker, sort_keys=True).encode("utf-8"))
+            _os.fsync(handle)
+        finally:
+            _os.close(handle)
+        _os.replace(temp, target)
+        dir_fd = _os.open(self.root, _os.O_RDONLY)
+        try:
+            _os.fsync(dir_fd)
+        finally:
+            _os.close(dir_fd)
+        return marker
+
+    def clear_active(self, run_id: str) -> None:
+        """清除 active marker（仅当它属于该 run，避免误清别人的）。"""
+        marker = self.active_marker()
+        if marker is None or marker.get("run_id") != run_id:
+            return
+        target = self.root / ACTIVE_FILE
+        try:
+            target.unlink()
+        except FileNotFoundError:  # pragma: no cover
+            return
+
+    def active_marker(self) -> dict[str, object] | None:
+        """读取 active marker（损坏 ⇒ 视为不存在，由读侧按 INCOMPLETE 处理）。"""
+        target = self.root / ACTIVE_FILE
+        if not target.exists():
+            return None
+        try:
+            payload = _json.loads(target.read_text(encoding="utf-8"))
+        except _json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def active_run_id(self) -> str | None:
+        """当前活跃 run id：marker 存在**且写出它的进程仍存活**。
+
+        判据优先使用进程身份（pid + runtime identity），不使用 TTL 作为唯一真相；
+        pid 复用/异常恢复场景只作为辅助（见文档说明）。
+        """
+        marker = self.active_marker()
+        if marker is None:
+            return None
+        pid = marker.get("pid")
+        if not isinstance(pid, int):
+            return None
+        try:
+            os.kill(pid, 0)                    # 进程存活探测（不发送信号）
+        except (OSError, ProcessLookupError):
+            return None
+        return str(marker.get("run_id"))
 
     def start(
         self,
@@ -214,6 +285,7 @@ class JsonRunRegistry:
             except ValueError as exc:
                 raise RunRegistryError(f"corrupt run record {run_id!r}: unknown status {raw_status!r}") from exc
             return self._record_from_payload(payload, status=status)
+        # 无 finalization：若该 run 正是当前活跃 run（进程存活）⇒ 读侧为 RUNNING（F-10）
         started: dict[str, object] | None = None
         for event in self._read_index():
             payload = event.get("record")
@@ -225,8 +297,9 @@ class JsonRunRegistry:
                 return self._record_from_payload(payload, status=RunStatus.COMPLETED)
         if started is None:
             return None
-        # start 存在但没有 finalize ⇒ 崩溃遗留（裁决 B：INCOMPLETE）
-        return self._record_from_payload(started, status=RunStatus.INCOMPLETE)
+        # start 存在但没有 finalize：活跃（本进程仍在跑）⇒ RUNNING；否则 ⇒ INCOMPLETE（裁决 B）
+        status = RunStatus.RUNNING if self.active_run_id() == run_id else RunStatus.INCOMPLETE
+        return self._record_from_payload(started, status=status)
 
     def list(self, *, limit: int | None = None) -> tuple[RunRecord, ...]:
         """列出 run（按 started_at 新的在前；只读，不删除任何东西）。"""
@@ -240,6 +313,7 @@ class JsonRunRegistry:
                 seen[run_id] = self._record_from_payload(payload, status=RunStatus.RUNNING)
             elif event.get("event") == "finalize":
                 seen[run_id] = self._record_from_payload(payload, status=RunStatus.COMPLETED)
+        active = self.active_run_id()
         records = [self.load(run_id) or record for run_id, record in seen.items()]
         records.sort(key=lambda record: (record.started_at, record.run_id), reverse=True)
         return tuple(records if limit is None else records[:limit])
