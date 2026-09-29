@@ -1604,3 +1604,32 @@ zero orphan、zero residual open orders、zero position、Mainnet write = 0、17
 - 零第三方依赖（stdlib only）；未修改任何域契约；UI/CLI 均只经 Product API 读事实，无交易写入口。
 - **未 commit / 未 push**（本轮人类指令仅要求"读取, 实施"）。
 - `context/status.json.currentProposal` 置回 `null`（两个 Proposal 均已完成，无下一切换授权）。
+
+## 2026-09-29（续 15）：P0001.11 Product Operations Foundation 实施完成
+
+先按要求把 P0001.10 / 10.2 / 10.3 提交并 push：commit `080bfab`（detached worktree 复跑 1844 passed ✓，已 push 到 origin/master）。
+随后把 P0001.11 标记为已批准（记录 A–F 裁决原文），`currentProposal = "P0001.11"`，并实施：
+
+- `product/provenance.py`（Config Provenance：来源优先级只做**选择**、sensitive 值构造即拒绝、fingerprint 含 schema 版本与 secret 引用名）
+- `reports/types.py` + `storage/run_registry.py` + `reports/lifecycle.py`（Run Registry：append-only index + 原子 record 文件；崩溃 ⇒ INCOMPLETE；单 writer；无 retention）
+- `reports/metrics.py`（Metric Contract：10 个指标，公式/时间基准/Owner/UNKNOWN 条件/采样齐备；`run_mdd` 与风控 drawdown 命名分离；PF 无亏损 ⇒ UNKNOWN）
+- `product/blockers.py` + `product/types.py`（Unified BlockerView：owner/reason_code/severity/message/source_ref；去重键固定；不排序不丢弃）
+- `api/capabilities.py` + API/CLI/UI 接线（`schema_version → "2"`；新端点 capabilities/metrics/blockers/runs(+show/compare)；CLI 新命令；UI 新增 metrics/capabilities 页与 overview blockers/config 面板）
+
+全量测试 **1937 passed / 0 failed / 24 skipped**（+93）。真实端到端证据见提案「实施记录」。
+未修改任何交易域契约；未加写能力（`api.write = unavailable_by_design`，有测试固定）；未 commit / 未 push（本轮未授权）。
+
+## 2026-09-29（续 16）：P0001.11.1 Runtime Run-Lifecycle Integration 实施完成
+
+新增 `runtime/`（`session.py` / `__init__.py`）：`RuntimeSession` 把 Run Registry 接到真实 runtime lifecycle ——
+建立 runtime identity → `create_run()` → running → graceful stop → `finalize(COMPLETED)`；
+异常 ⇒ `finalize(INCOMPLETE)` 并**重抛**原异常。`SessionSummaryFacts` 只打包**已记录事实**，
+`stop()` 经 `reports.metrics` + `reports.builder` 生成 `RunSummary`（不重算账户真相）；
+config fingerprint 建立时绑定、结束时不一致即拒绝；run_id 复用即 fail closed；四模式共用同一路径。
+
+新增测试 18 条（unit 12 + integration 6）。真实证据（仓库外临时目录 + 真实 `ReplaySource`/`MarketBook`）：
+`replay-1000 = COMPLETED`、`replay-crash = INCOMPLETE`、API/CLI 无手工登记即可见、config fingerprint 一致。
+全量 **1955 passed / 0 failed / 24 skipped**。
+
+边界：未改 orchestrator 决策顺序 / MakerPolicy / RiskGate / ExecutionEngine；无 daemon、无 crash recovery manager、
+无多进程 writer、未扩 RunCompare。未 commit / 未 push（本轮未授权 commit）。

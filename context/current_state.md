@@ -490,3 +490,21 @@ P0001.9.5 已作为 `a2ab8da`（1631 passed）、P0001.9.6 已作为 `afc0196`�
   API 增加只读 `/api/v1/reports/run-summary` 与 `/ui/*` 静态服务。
 - .10.3：`cli/`（只读、机器优先、稳定退出码 0/2/10/11/20/30、stdout/stderr 分离、无写命令）。
 - 测试：全量 **1844 passed / 0 failed / 24 skipped**（+25）。未 commit（未授权）。
+
+### P0001.11 Product Operations Foundation（已完成）
+
+- Config Provenance（`product/provenance.py`）：来源优先级 CLI>ENV>FILE>CONSTRUCTOR，只选择不造默认；secret 只存引用名。
+- Run Registry（`storage/run_registry.py` + `reports/lifecycle.py`）：append-only + 原子 record；崩溃 ⇒ `INCOMPLETE`；单 writer；无 retention。
+- Metric Contract（`reports/metrics.py`）：10 指标含公式/时间基准/Owner/UNKNOWN 条件/采样；`run_mdd` ≠ 风控 drawdown；PF 无亏损 ⇒ UNKNOWN。
+- Unified Blockers（`product/blockers.py`）：owner/reason_code/severity/message/source_ref，去重键 `owner+reason_code+source_ref`，不排序不丢弃。
+- Capability Manifest（`api/capabilities.py`）：由路由表 + CLI 注册表生成，`api.write = unavailable_by_design`（测试固定）。
+- 产品表面：`schema_version = "2"`；新端点 capabilities/metrics/blockers/runs(+show/compare)；CLI runs/run show/run compare/metrics/capabilities/blockers；UI 新增 metrics/capabilities 页。
+- 测试：全量 **1937 passed / 0 failed / 24 skipped**。commit `080bfab` 已 push（P0001.10 阶段）；本阶段改动**未 commit**。
+
+### P0001.11.1 Runtime Run-Lifecycle Integration（已完成）
+
+- `runtime/session.py`：`RuntimeSession`（establish identity → create_run → running → graceful stop → finalize COMPLETED；
+  异常 ⇒ INCOMPLETE + 重抛）；`SessionSummaryFacts` 只携带已记录事实；config fingerprint 建立时绑定、漂移即拒绝；
+  四模式共用一条路径；本层不含任何交易能力（不 import strategy/risk/execution/connectors，测试固定）。
+- 测试：全量 **1955 passed / 0 failed / 24 skipped**（+18）。真实 replay run 经 API/CLI 可直接看到（COMPLETED / INCOMPLETE）。
+- 未接线的部分：现有 runner 与 `live/orchestrator.py` 尚未调用 `RuntimeSession`（后续阶段显式接线）。
