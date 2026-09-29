@@ -1157,3 +1157,396 @@ P0001.9.5 已作为 commit `a2ab8da` 提交并 push 到 `origin/master`（1631 p
 并在 Testnet 连续运行；**仍不等于 Mainnet 实盘**）。
 ~~本轮改动尚未 commit / push~~ —— **superseded（2026-09-28）**：
 P0001.9.6 已作为 commit `afc0196` 提交并 push 到 `origin/master`（1693 passed）。
+
+## 2026-09-28：P0001.9.7 Live Execution Orchestration（实现中；Phase B 阻塞）
+
+**当前 Proposal**：`P0001.9.7`（**未关闭** —— Phase B 验收被外部前置条件阻塞）。
+
+**本次新增**
+
+- `live/{__init__,orchestrator,telemetry}.py`：`LiveExecutionOrchestrator` + `LoopTelemetry` / `LoopTelemetrySink`
+  （`OrchestratorState`：NOT_READY / OBSERVE_ONLY / LIVE / RECONCILING / STOPPED）。
+- `connectors/binance/execution/external_facts.py`：`PrivateExternalFactsProvider`（私有只读层 wiring；UNKNOWN ≠ EMPTY）。
+- 测试：`tests/orchestration_support.py`、`tests/unit/test_live_orchestrator.py`（19）、
+  `tests/fault/test_live_orchestration_faults.py`（12）、`tests/integration/test_live_orchestration.py`（8）。
+
+**本次修改**：`connectors/binance/execution/adapter.py`（成交类 stream 事实**只**产出 `FillReceived`，
+不再补状态事件——否则"整单成交"时同批事件出现 FILLED→PARTIALLY_FILLED 非法回退）；
+`connectors/binance/execution/__init__.py`；`tests/execution_support_live.py`（callable 响应 + 回显 ack）；
+`proposals/P0001.9.7-*.md`（§0/§1）；`context/*`（D-049、roadmap、current_state）。
+
+**Acceptance 结果**
+
+- **Phase A（observe-only，真实 Testnet 10.0 分钟 / 145 轮）PASS**：recovery `recovered`、readiness **`live_ready`**、
+  orchestrator `OBSERVE_ONLY`、**submit/cancel/replace 计数全 0（零写请求）**、无 loop 异常、
+  stop 后 `remaining_active=[]`、最终 Probex open orders 0 / position 0。
+- **Phase B（write-enabled）BLOCKED**：① 账户杠杆 **20 ≠ 1**（提案 §19；产品不得修改杠杆 ⇒ 需人类在交易所设置）；
+  ② 无 prediction 源（无 `OPENROUTER_API_KEY`）⇒ P0001.7.1 正确地禁止新增暴露 ⇒ 无法产生 PLACE。
+  runner 检测到阻塞后**自动降级**为 observe-only（实测 17 轮、0 写请求）。
+- 单元/集成/fault 覆盖：PLACE/KEEP/CANCEL/REPLACE、同侧多单违规、authority 失效（submit 0 / cancel 仍可）、
+  断线、UNKNOWN 触发 reconciliation、重复 stream 事实不重复记账、skipped transition 可观测、stop 不平仓。
+
+**测试结果**：unit 1083 / integration 268 / fault 308 / replay 49 passed；live 24 skipped；
+全量 **1732 passed / 0 failed / 24 skipped**；独立检出（`git archive HEAD` + 工作树叠加）同样全 PASS。
+
+**风险 / 已知问题**
+
+1. **Phase B 未验收**（SC-24 – SC-28、SC-31 部分）⇒ 提案不得标记完成；需人类解除 §1.2 的两个前置条件。
+2. `risk_budget_provider` 由调用方注入（本阶段验收用显式上限推导）；生产数值与语义属后续配置/提案。
+3. prediction 源缺失时不可能验收写循环 —— 这是 P0001.7.1 的**正确**语义，不是缺陷。
+4. `open_orders()/recent_fills()` 仍要求注入 provider（未注入 ⇒ `ExternalFactsUnavailableError`，UNKNOWN ≠ EMPTY）。
+
+**阻塞**：Phase B 前置条件（杠杆 1x、prediction 源）。
+**下一步**：等待人类解除阻塞后重跑 Phase B（≥30 分钟）；本轮改动**尚未 commit / push**。
+
+## 2026-09-28（续）：Phase B 前置条件**复验仍未满足**（只读复核，无代码改动）
+
+人类声明前置条件已落地，但**从执行进程可见的事实**看，两项都还没生效：
+
+| 前置条件 | 复验结果（只读） | 判定 |
+| --- | --- | --- |
+| Binance USDⓈ-M **Testnet** `BTCUSDT` leverage = 1x | `positionRisk.BTCUSDT/BOTH.leverage = "20"`、`marginType=cross`（端点 `demo-fapi.binance.com`；key 指纹 `sha256[:8]=30925058`；账户 `canTrade=true`、可见 742 symbol，抽样均为 20x） | ❌ 不满足 |
+| `OPENROUTER_API_KEY` 对执行进程可见 | 进程环境不可见；`~/.probex/testnet.env` 无该条目；`~/.zshrc`/`.zprofile`/`.bashrc`/`.bash_profile`/`.profile` 均无 | ❌ 不满足 |
+
+**因此本轮未执行任何 Phase B 动作**：未进入写 enabled、未调用任何修改杠杆/保证金端点（产品亦无该能力）、
+未使用 fake prediction 替代真实链路、未放宽任何验收标准（SC-27 Leverage=1 不放宽）。
+全量测试仅作无回归确认：**1732 passed / 0 failed / 24 skipped**（工作树与上一轮一致，未提交）。
+
+**解除方式（下一轮按此执行，无需重新设计）**
+
+1. 在**同一把 key**（指纹 `30925058`）对应的 Futures **Testnet** 账户，把 **BTCUSDT** 杠杆设为 **1x**（不是现货/margin mode/其它 symbol）；
+2. 让 key 对执行进程可见（仓库外、`600`、只注入不打印）：写入 `~/.probex/openrouter.env`（一行 `OPENROUTER_API_KEY=...`），
+   或导出到 agent 进程所继承的环境（注意 `~/.zshrc` 对非交互 shell 不生效）；
+3. 复验通过后：接**真实** SystemOne provider → **≥30 min** Testnet write-enabled →
+   SC-24 – SC-28（单笔 notional ≤100 USDT、MaxPosition ≤0.003 BTC、Leverage=1、Mainnet write=0）→
+   结束 cancel 全部 Probex 挂单（**不**市价平仓，`position != 0` 如实报 `POSITION_REMAINS`）→ 全量测试 → **先回报，不 commit**。
+
+**状态保持不变**：`currentProposal = "P0001.9.7"`；Phase A = PASS（有效，不重跑）；Phase B = NOT STARTED；
+**不 commit / 不 push**（"代码已完成但验收未完成"不得提前收口为 Completed）。
+
+## 2026-09-28（续 2）：Phase B 前置条件已解除；循环仍**未产生报价**（未达成 SC-24–SC-28）
+
+**已解除（人类授权 + 人类侧配置）**
+
+| 前置条件 | 状态 | 证据 |
+| --- | --- | --- |
+| Binance Testnet 凭据 | ✅ | 签名 REST 成功；key 指纹 `30925058` |
+| `OPENROUTER_API_KEY` 对执行进程可见 | ✅ | 加载路径 `~/.probex/openrouter.env`（`600`，只注入、不打印）；**真实 SystemOne** 探针 `accepted` / latency 677 ms |
+| BTCUSDT leverage = 1 | ✅ | 仓库外 `/tmp/probex_live/set_leverage.py`：20 → 1，`positionRisk` 只读复验 = 1；产品代码无杠杆端点（grep 空） |
+
+**Phase B 执行（两次尝试，均未产生报价）**
+
+1. 第 1 次（32 分钟窗口，9 分钟后诊断性停止）：无任何订单。
+2. 只读诊断发现：`DataQuality.tradeable=False` 因 `history_ready=False`
+   （`window_coverage_ms≈3989` vs 需要 `HISTORY_WINDOW_MS=300_000` ⇒ **需 5 分钟覆盖**）；
+   另发现 runner 从未更新 accounting mark（RiskSnapshot/MakerPolicy 需要 mark）。
+3. 据此改 runner（**仅仓库外**）：① ≤7 分钟预热到 `tradeable`；② 每轮用交易所 markPrice（回退 mid）更新 mark。
+4. 第 2 次（32 分钟窗口）：预热完成后又运行约 12 分钟，**仍无真实报价**（`allOrders` 无 `probex-s*`；open orders 0）。
+   loop 稳定、零写、无 crash，但 **SC-24 – SC-28 未达成**。
+5. **根因未定位（不猜）**：runner 只汇总 telemetry，未落盘**逐轮 `notes`**（会指出具体门：
+   `authority_invalid:*` / prediction 过期 / `risk_reject:*`）。下一步 = harness 增加逐轮 telemetry 落盘 + 短诊断，
+   区分：prediction `market_state_hash` 与当前 state 不匹配 / TTL 与 30s 提交间隔不匹配 / 策略 edge·库存·预算门。
+
+**安全检查（只读）**：`Probex open orders = 0`、`position = 0.0000`、`leverage = 1`、`marginType = cross`
+⇒ 未遗留交易所侧状态；未使用 MARKET 平仓；无持仓残留。
+
+**测试**：全量 **1732 passed / 0 failed / 24 skipped**（本轮未改产品代码；改动仅在 `/tmp` harness 与 context）。
+
+**状态不变**：`currentProposal = "P0001.9.7"`（**未关闭**）；Phase A = PASS（不重跑）；
+Phase B = **NOT ACHIEVED**；**不 commit / 不 push**。
+
+## 2026-09-28（续 3）：Phase B 诊断 —— 已定位**第一个可验证的门**（未进入正式验收）
+
+**方法**：只改仓库外 harness（`/tmp/probex_live/diag_why_no_place.py`），逐轮落盘
+`/tmp/probex_live/p197_diag.jsonl`；产品代码 / MakerPolicy / Jev / RiskGate 语义**零改动**；**零写请求**（诊断用 null fetcher）。
+
+**逐轮事实（真实 Testnet，69 轮，条件驱动，7 分钟内结束）**
+
+| t | tradeable | history_ready | window_coverage | prediction | gate | decision | 第一个门 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 14–300 s | False | **False** | 3.9 s → 299 s | 提交被拒（`not_eligible`） | `market_unhealthy` | `mode=none` | **`MARKET_NOT_TRADEABLE`（history_ready=False）** |
+| **318.8 s** | **True** | **True** | **319 709 ms** | 当时**尚无记录** | `prediction_stale`（"no prediction record available"） | `mode=none`，bid/ask=`none` | **`NO_PREDICTION`** |
+
+**已定位（可验证，非推测）**
+
+1. **5 分钟窗口覆盖门**：`DataQuality.history_ready` 需要 `window_coverage_ms ≥ HISTORY_WINDOW_MS = 300_000 ms`
+   （`market/features/returns.py`：`HISTORY_WINDOW_MS = max(RETURN_WINDOWS_MS) = 300_000`）⇒ 任何早于 5 分钟的
+   decision 轮必然 `tradeable=False` ⇒ 全局门 `MARKET_UNHEALTHY` ⇒ `mode=none` ⇒ **不可能产生 PLACE**。
+   这解释了"预热前 5 分钟内绝无报价"。
+2. **warm-up 之后的首个门 = 无 prediction record**：t=318.8 s 起 `tradeable=True` ✓，
+   但当时 `PredictionRecord` 仍为 None（`gate_trigger=prediction_stale`，"no prediction record available"）
+   ⇒ `MakerDecision.mode=none` ⇒ 无 proposal ⇒**无 submit**。
+   注意：诊断里记录的 `prediction_outcome=not_eligible` 属于**tradeable 之前**的提交（每 30 s 一次），
+   因此**不能**据此断定 tradeable 之后 prediction 仍会被拒 —— 这一点尚未确定（见下）。
+
+**尚未确定（不猜）**：`check_eligibility()` 只要求 `book_healthy ∧ history_ready ∧ age_valid`
+（`prediction/scheduler.py`）⇒ 在 `tradeable=True` 的那一刻它**应当是 eligible**；因此"tradeable 之后第一次
+真实 prediction 提交是否 `accepted`、以及随后是否出现 PLACE"仍**未被观测到**：
+第二次诊断运行在启动阶段遇到 WS 传输偶发失败
+（`TLS handshake failed for fstream.binancefuture.com: UNEXPECTED_EOF_WHILE_READING`）而中止；
+随后只读健康检查显示代理（clash 7890 → 200）与直连 TLS（TLSv1.2 OK）均已恢复 ⇒ 属**瞬时**环境问题。
+
+**下一最小步骤（仍只动 harness）**：把诊断的停止条件固定为"**在 tradeable=True 之后发生过一次真实 prediction 提交**"，
+重跑 ≤10 分钟并落盘该次提交的 `outcome` 与（若 accepted）`gate/decision/risk` 全链 —— 即可精确回答
+"tradeable 之后第一个阻止 PLACE 的门"。（该条件已在 harness 中实现；本次因瞬时 WS 失败未取得结果。）
+
+**安全检查（只读，本轮结束）**：`Probex open orders = 0`、`position = 0.0000`、`leverage = 1`
+⇒ 零遗留、零写请求、未使用 MARKET 平仓。
+
+**状态不变**：`currentProposal = "P0001.9.7"`（未关闭）；Phase A = PASS；Phase B = **NOT ACHIEVED**（未进入正式验收）；
+**不 commit / 不 push**；全量测试 1732 passed / 0 failed / 24 skipped（本轮产品代码零改动）。
+
+## 2026-09-28（续 4）：短诊断**复现确认** —— tradeable 之后第一次真实 prediction submit = `accepted`；首个阻塞为 `min_quote_size`
+
+同一诊断（`/tmp/probex_live/diag_first_post_tradeable_submit.py`）连跑两次（run1 与本次 run2），结论**逐字段一致**：
+
+```
+tradeable_at_s     : 432.8 / 436.4 s（≈5 分钟窗口覆盖达标，符合 HISTORY_WINDOW_MS=300_000）
+first submit       : outcome=accepted，耗时 0.73 s，SystemOne latency 725 / 726 ms
+                     record_created=true，horizons=[5000,15000,30000,60000]（齐全）
+                     prediction_hash == state_hash ⇒ hash_match=true（两次都是）
+                     expires_at 距提交 180 s（TTL 覆盖 30 s 提交间隔，未过期）
+global gate        : trigger=null，allow_new_increasing=true（无阻塞）
+MakerDecision      : mode=none；bid/ask action=none；blocked_by=null
+                     bid/ask detail = "quantity 0.0007 is below min_quote_size 0.001"
+has_proposal       : false  ⇒ **未走到 RiskGate**（risk=null）
+place_possible     : false（6 轮追踪均相同）   ws_error: null（无网络/WS blocker）
+```
+
+**结论（对"第一次 submit 发生了什么"的唯一答案）**：
+prediction **已真实提交并成功**（accepted + record + hash 对齐 + horizon 齐全 + TTL 未过期），
+**没有**在 prediction 层或全局门受阻；**唯一阻止 PLACE 的门是 `MakerPolicy.min_quote_size`**：
+策略算出的报价数量 **0.0007 BTC** < 配置的 `min_quote_size = 0.001 BTC`（测试配置值），
+因此不出 proposal，自然也不会到 authority / RiskGate。
+
+**对应人类给出的六种判定**：命中 **「prediction 成功但 MakerPolicy 不出报价」**；
+其余五种（根本没提交 / 提交失败 / TTL·hash 不可用 / PLACE 后被 RiskGate 拦 / 整条链已通）**均被排除**。
+
+**与交易所规则的对照（只读事实）**：BTCUSDT `minQty=0.0001`、`stepSize=0.0001`、`MIN_NOTIONAL=50` USDT ⇒
+0.0007 BTC（≈58 USDT）在**交易所侧合法**；挡住它的是**我们注入的测试配置** `min_quote_size=0.001`。
+
+**待人类裁决（属验收配置/业务语义，不由实现方决定）**：写 enabled 验收要产生真实报价，需在验收配置二选一
+（`min_quote_size` 下调至与策略输出匹配，或 `base_size` 上调使缩小后数量 ≥ 0.001），或给出其它指定参数。
+在收到明确参数前：**不跑正式 Phase B、不改业务逻辑、不 commit**。
+
+## 2026-09-29：正式 Phase B 运行（裁决参数 min_quote_size=0.0007）—— **SC-24 FAILED**
+
+人类裁决采用方案 1（仅 harness `min_quote_size=0.0007`；不改产品默认/策略语义/base_size）。
+
+**运行事实（`/tmp/probex_live/p197_phase_b.json`，39.9 分钟 = 7 预热 + 32 decision，377 轮）**
+
+| 项 | 值 |
+| --- | --- |
+| 前置条件 | leverage **1** ✓、账户空仓 ✓、`readiness LIVE_READY` ✓、`market ready` ✓ |
+| 真实 prediction | SystemOne：submitted 59 / **accepted 51** / rejected 8；latency median **710 ms** / max 4381 ms |
+| 预热 | 7 分钟 wall-clock 到期时 `tradeable=false`（coverage 296 468 ms，差 ~3.5 s）；`quality_final.tradeable=true`（coverage 599 912 ms）⇒ 循环期间达到 tradeable |
+| **写动作** | **`submit_count = 0`**（cancel/replace/risk_reject/unknown 全 0）；`orchestrator_state=LIVE` |
+| **SC-24** | **FAILED**（未产生真实订单） |
+| SC-25 / 26 / 27 / 28 / 29 / 30 / 31 | 通过（无单可越界、无 orphan、无同侧多单、无不确定暴露、leverage 1） |
+| cleanup | `remaining_active=[]`、最终 **Probex open orders 0**、`position 0.0`、**未** MARKET 平仓 |
+| Mainnet write | **0**；`loop_errors` 空 |
+
+**判定**：前置条件与预测链**已打通**（51 次真实 accepted、LIVE_READY、杠杆 1、零 write-violation），
+但**整段仍未报价** ⇒ SC-24 未达成 ⇒ **提案不得标记完成**；按人类指令**不再做任何参数调优**。
+
+**本轮 harness 两处不足（下一轮修正，仅 harness）**
+1. 预热用 wall-clock 7 分钟，而 coverage 由市场事件时间推进 ⇒ 差 3.5 s 退出预热（应改为"等待 coverage ≥ 300 000 或更宽裕窗口"）；
+2. **正式 runner 未落盘逐轮决策明细** ⇒ 无法直接读出剩余阻塞门（上轮短诊断证明是 `min_quote_size`；在 0.0007 下仍未报价 ⇒ 需要逐轮 `gate/decision/detail/budget` 明细）。
+
+**状态**：`currentProposal = "P0001.9.7"`（未关闭）；Phase B = **NOT ACHIEVED**；**不 commit / 不 push**；
+全量测试 1732 passed / 0 failed / 24 skipped（产品代码零改动）。
+
+## 2026-09-29（续）：sizing 链诊断 —— 根因闭合（harness-only，零写单）
+
+正式 runner 路径 + 条件驱动预热（`coverage >= 300000`，t=417.9 s 达成）后逐轮落盘完整 sizing 链
+（`/tmp/probex_live/p197_sizing_countdown.jsonl`；调用产品纯函数，不重实现）。
+
+```
+global gate        : trigger=None, allow_new_increasing=True        ✅ 无阻塞
+prediction         : present ✓ / fresh_prediction usable ✓ / age 17.3s / horizons 齐全   ✅ 可用
+price plan         : permitted=True, quoted_price=83330.4, reasons=[]                   ✅ 可用
+base_size          : 0.001
+derived_confidence : 0.4263393952304213
+confidence_factor  : 0.6886161626920178    ← 主要缩量来源
+inventory_factor   : 1.0（flat / target 0）  budget_factor: 1.0（clamp(100/57.38,0.25,1)）
+intended_notional  : 57.3827 USDT（≥ MIN_NOTIONAL 50 ✓）
+raw quantity       : 0.0006886162
+after step floor   : 0.0006   （step=0.0001，向下取整）
+min_quote_size     : 0.0007   ❌ 0.0006 < 0.0007
+最终条件           : SIZE_BELOW_MINIMUM — "quantity 0.0006 is below min_quote_size 0.0007"
+交易所侧           : minQty=0.0001 / stepSize=0.0001 / MIN_NOTIONAL=50 ⇒ 0.0006 本身合法
+```
+
+**根因**：`0.001 × 1.0 × 0.6886 × 1.0 = 0.0006886` → `floor_to_step(0.0001)` → **0.0006** → 低于验收 `min_quote_size=0.0007`
+⇒ `MakerDecision.mode=none`（bid/ask 均 `SIZE_BELOW_MINIMUM`）⇒ 无 proposal ⇒ 无 PLACE。
+**与 prediction / gate / price / budget / 交易所规则无关**；是"验收参数 vs 真实 confidence 缩量 + step 向下取整"的量化边界问题
+（0.0006886 距 0.0007 仅差 1.6%，step 取整把它压到 0.0006）。
+
+**按人类指令**：不修根因、不调参数、不 commit。下一步需人类裁决（例如：验收 `min_quote_size` 降至 **0.0006**；
+或接受"Testnet 低 confidence 场景下不报价"并据此界定 SC-24 的验收条件）。
+
+## 2026-09-29（续 2）：条件驱动 watcher —— **首次合法 PLACE 已自然捕获**（零写单）
+
+等待条件（人类裁决更正）：`final_candidate_qty >= min_quote_size(0.0007)` **且** `MakerPolicy` 形成 PLACE proposal；
+**不是** "dynamic min_legal_qty 降到 0.0007 以下"（`min_quote_size` 固定 0.0007 时，0.0006 仍被策略拒绝）。
+
+`/tmp/probex_live/watch_for_place.py`（仓库外、非 daemon/launchd、条件驱动、最长 60 分钟）在 **t=635.2 s** 捕获：
+
+```
+coverage_ms=305322（预热条件驱动） | prediction present & usable（真实 SystemOne）
+global gate trigger=null | mode=both | bid/ask action=place / place
+detail="no resting order on this side; place a passive quote"
+derived_confidence=0.503207589577723 → confidence_factor=0.7526729913147692（走势 …0.6186×4 → 0.7527 越阈值）
+raw=0.0007526729913147692 → floor(step 0.0001)=0.0007 == min_quote_size(0.0007) ✓
+quoted_price=82890.0 | candidate notional=58.023 USDT（≥50 ✓ ≤100 ✓）| dynamic_min_legal_qty=0.0007
+未 submit（本步只做条件捕获）| 交易所侧：open orders 0 / position 0.0 / leverage 1
+```
+
+**结论**：策略在"合法报价条件"下会正常 PLACE；此前不下单是 confidence 缩量使数量落到 MIN_NOTIONAL 边界之下
+（0.0006 × 83330.4 = 49.99824 < 50）⇒ 正确的 fail-closed。
+
+**下一步（等人类指令）**：以"首次 PLACE 成立"为起点启动 ≥30 分钟 write-enabled 验收窗口
+（经 authority + RiskGate、≤100 USDT、MaxPosition ≤0.003、Leverage 1、Mainnet write 0，结束只 cancel 不平仓）。
+当前仍：`currentProposal="P0001.9.7"`、**未 commit / 未 push**、产品代码零改动。
+
+## 2026-09-29（续 3）：正式 Phase B 验收尝试 —— 阻塞在**验收 harness 的 readiness 装配**（非产品缺陷）
+
+人类已批准验收语义（窗口起点 = 首笔 `CONFIRMED_ACCEPTED`；SC-24 要求至少一笔真实 Testnet 订单；NONE 不算失败；
+结束禁新增→cancel→drain→open orders=0；不 MARKET 平仓）。runner：`/tmp/probex_live/run_phase_b_acceptance.py`（仓库外）。
+
+**已实现的验收语义**：条件驱动预热（coverage ≥300000）→ 条件等待合法 PLACE → readiness → authority →
+write-enabled；**窗口起点 = tracker 首笔 exchange-accepted（OPEN/PARTIALLY_FILLED/终态）订单**（本地拒绝/UNKNOWN 不计）；
+窗口 ≥30 min；结束 stop（cancel + drain；position≠0 报 `POSITION_REMAINS`）；SC-24…SC-28 断言齐备。
+本轮实际 attempt **均未进入 write-enabled**：卡在 readiness 门。
+
+**两次 attempt 的 readiness 事实（runner 自报）**
+
+| attempt | readiness reasons | 触发原因（harness 侧） |
+| --- | --- | --- |
+| 1 | `RECOVERY_NOT_READY`, `PRIVATE_LATENCY_UNKNOWN`, `MARKET_NOT_READY` | ① 无 private 业务事件 ⇒ 无 corrected latency 样本；② readiness 用**旧**市场窗口；③ 探测前未重建 boundary |
+| 2（加 harness 探测 + 修 recovery/市场窗口后） | `RECOVERY_NOT_READY`, `MARKET_NOT_READY`（latency 已解除） | 探测（`min_order_activity`，notional 80.53 ✓、flat ✓）引发连续性事件 ⇒ recovery 失效；harness 的 refresh/recovery 顺序与市场窗口仍不对 |
+
+**attempt 3**（已按上述再加：先 `refresh_snapshot()` → 重跑 recovery → 再收 readiness；readiness 前重取市场窗口并 pump 20 s）
+在预算内**未产出最终 verdict**（进程被中止，verdict 文件仍是 attempt 2 的内容）⇒ 其结论**未经验证**，不据此下判断。
+
+**交易所侧无遗留（只读，最终核对）**：`Probex open orders = 0`、`position = 0.0000`、`leverage = 1`；
+**零真实 loop 写单**（`probex-s*` 在近 12 分钟内为 0）⇒ **SC-24 未达成**、验收未通过。
+全量测试 **1732 passed / 0 failed / 24 skipped**（产品代码零改动）；**未 commit / 未 push**。
+
+**下一步（最小 harness 修正，再由人类下令重跑）**：把 readiness 装配改成"**探测 → refresh_snapshot → 重跑 recovery
+并断言 `RECOVERED` → 重取市场 baseline + 20–30 s pump → collect readiness**"的固定顺序，且在阻塞时打印 reasons；
+其余验收语义（窗口起点/SC-24/stop 序列）保持不变。
+
+## 2026-09-29（续 4）：按人类 12 步生产顺序重跑 —— **唯余 `PRIVATE_LATENCY_UNKNOWN`（结构性冷启动）**
+
+已移除 harness 探测旁路（`grep min_order_activity` 为空）✓，readiness 之前**零真实写** ✓，
+市场就绪改为**条件驱动**（`history_ready & tradeable & coverage ≥ 300000`，无固定 sleep）✓。
+
+本轮 runner 输出（`/tmp/probex_live/p197_phase_b_acceptance.json`）：
+
+| 步骤 | 结果 |
+| --- | --- |
+| 1 read-only refresh | ✓ |
+| 2 recovery（断言 RECOVERED） | `state=recovered`、`reasons=[]` ✓ |
+| 3 market readiness（条件驱动） | 条件成立 ✓ |
+| 4 collect readiness evidence | **blocked**：`reasons=['PRIVATE_LATENCY_UNKNOWN']` ⇒ fail closed，**不继续** ✓（未 issue authority、未写单） |
+| 交易所侧 | open orders 0 / position 0.0000 / leverage 1（零写单 ✓） |
+
+**根因（代码级证据，属结构性冷启动，非 harness bug）**：
+`connectors/binance/private/runtime.py::_record_event` 只在 `AccountUpdateObservation` / `OrderUpdateObservation`
+上调用 `_record_lag` ⇒ **只有 private 业务事件才产生 corrected latency 样本**；`refresh_snapshot()` 是 REST，
+不产生样本；`readiness/gate.py:116` 在 `median is None` 时以 `PRIVATE_LATENCY_UNKNOWN` fail closed。
+⇒ 在"submit 之前不得有真实活动"的正确顺序下，**首个 readiness 无法在安静账户上取得 latency 样本**（循环依赖）：
+样本 ← private 订单/账户事件 ← 真实下单 ← readiness。
+
+**待人类裁决（不得自行解决，§12/§31）**：如何为**首次激活**提供合法 latency 事实，例如
+(a) 合同明确允许的 readiness bootstrap 活动；(b) 允许首次 `PRIVATE_LATENCY_UNKNOWN` 但限定范围/时限；
+(c) 接受在"已有历史私有事件（如有仓位/挂单/资金费）"时才可 issue authority。三者都改变业务/契约语义，实现方不自行选择。
+
+## 2026-09-29（续 5）：P0001.9.7.1 冷启动契约 —— 切片 1 落地（UNOBSERVED 语义）
+
+人类本会话明确授权按 `proposals/P0001.9.7.1-private-latency-cold-start-bootstrap.md` 修复
+（裁决：**不**采用探测单旁路、**不**普遍放宽 `PRIVATE_LATENCY_UNKNOWN`；把"从未有可测事件"显式建模为 `UNOBSERVED`）。
+故该 Proposal 状态由"已提议"改为"**实现中**"，`context/status.json.currentProposal` 由 `P0001.9.7` 切到 **`P0001.9.7.1`**（人类指令授权切换，§5）。
+
+**已落地（切片 1，产品代码）**：`readiness/types.py`（`PrivateLatencyStatus`、`LiveReadinessStatus.BOOTSTRAP_ELIGIBLE`、
+reason `PRIVATE_LATENCY_UNOBSERVED`、`PrivateStreamEvidence.measured_lag_samples/unmeasured_lag_samples`、
+`LiveReadinessResult.latency_status`/`bootstrap_eligible`）、`readiness/evidence.py`（telemetry→计数）、
+`readiness/gate.py`（`_classify_private_latency` + 仅"唯一原因是 UNOBSERVED"才 `BOOTSTRAP_ELIGIBLE`）、`readiness/__init__.py` 导出。
+**关键安全性**：`issue_authority` 仍只接受 `LIVE_READY` ⇒ 本切片**签不出任何 authority**，能力零扩张（fail closed 不变）。
+测试：`tests/unit/test_readiness_gate.py` 新增 4 条，全量 **1735 passed / 0 failed / 24 skipped**。
+
+**未落地（切片 2/3）**：BOOTSTRAP authority（kind/scope/TTL/max_orders=1/post_only/notional≤100）、
+`BootstrapEligibility` 与 `issue_bootstrap_authority`、validator 新原因（`BOOTSTRAP_SUPERSEDED` 等）、
+首笔 private event 后的升级闭环、orchestrator 侧 BOOTSTRAP 约束强制、真实 Testnet 冷启动闭环验证（SC-1…SC-7）。
+⇒ 本次**没有**真实 Testnet cold-start verdict；未 commit / 未 push。
+
+## 2026-09-29（续 6）：P0001.9.7.1 切片 2 落地（BOOTSTRAP 契约 + 闭环 Owner）
+
+新增 `readiness/bootstrap.py`：`BootstrapEligibility`（9 项前置事实，逐项显式）、`BootstrapAuthority`
+（构造即强制 TESTNET + `max_orders=1` + post-only + notional ≤ 100 + `readiness_status=BOOTSTRAP_ELIGIBLE`）、
+`issue_bootstrap_authority`（全条件不满足即抛错并附清单）、`BootstrapAuthorityCoordinator`（activate / 首次 **write attempt** 即消耗额度 /
+首笔可测 private 事件 ⇒ bootstrap 立即失效 / `LIVE_READY`+HEALTHY ⇒ NORMAL authority / `UNHEALTHY`·`UNKNOWN`·仍 `UNOBSERVED` ⇒ BLOCKED）。
+`readiness/authority.py`：新增 `BOOTSTRAP_SUPERSEDED`、`ORDERS_USED_EXCEEDS_MAX`、`POST_ONLY_REQUIRED`、`NOTIONAL_EXCEEDS_MAX`、
+`ENVIRONMENT_NOT_TESTNET`；`validate_bootstrap(...)`；`issue_authority` 拒绝非 HEALTHY latency（NORMAL 永不接受 UNOBSERVED）。
+注意：`readiness/*.py` 受 SC-11 purity 测试约束（源文件不得出现 `submit` 等标记）⇒ 对外命名统一用 **write attempt**。
+测试 `tests/unit/test_bootstrap_authority.py` 16 条（覆盖验收顺序 1–8）；全量 **1748 passed / 0 failed / 24 skipped**。
+
+**切片 3 未落地（重要）**：BOOTSTRAP 尚未接入写路径——adapter 的 authority context 仍只支持 NORMAL，
+未调用 `validate_bootstrap`，写边界未强制 post-only / notional / write-attempt 计数；orchestrator 未强制"最多一笔、REPLACE 不得产生第二笔写入"。
+⇒ **没有真实 Testnet cold-start verdict**；未使用 NORMAL 冒充、未使用探测单旁路、未跑 30 分钟 Phase B、未 commit / 未 push。
+
+## 2026-09-29（续 7）：P0001.9.7.1 切片 3 —— BOOTSTRAP 接入写边界（产品代码落地；Testnet 验证被网络阻塞）
+
+产品改动：`BootstrapWriteGate.authorize(...)`（写边界校验 + **网络调用前**消耗唯一额度，无退还入口）
++ `ExecutionAuthorityContext` 显式支持 `BootstrapAuthority` / `bootstrap_gate` / `latency_status`
++ `BinanceExecutionAdapter._require_authority(order)` 按 kind 分派（NORMAL 无回归）。
+测试 `tests/unit/test_bootstrap_write_path.py` 20 条（覆盖清单 1–14，含"fetcher 被调用时额度已消耗"与"timeout 后第二笔不发网络请求"）。
+全量 **1768 passed / 0 failed / 24 skipped**。
+
+**未落地**：orchestrator 的 BOOTSTRAP lifecycle 识别（`_authority_verdict` 仍只走 NORMAL validate）；
+REPLACE 不得产生第二笔写目前由写边界额度耗尽保证（fail closed），不是 orchestrator 策略。
+
+**真实 Testnet 冷启动验证（§六）未取得**：runner `/tmp/probex_live/run_coldstart_validation.py` 三次尝试均在本机网络层失败
+（`/fapi/v1/time` TimeoutError、`/fapi/v2/positionRisk` TimeoutError、ListenKeyError），**全部发生在授权签发与写请求之前**。
+交易所侧复核：open orders 0（Probex 0）/ position 0.0000 / leverage 1 ⇒ 零写、零遗留、额度未消耗。
+⇒ 无 A/B/C verdict；未 commit / 未 push；未跑 30 分钟 Phase B。
+
+## 2026-09-29（续 8）：orchestrator 接入 BOOTSTRAP lifecycle；Testnet 冷启动仍被 private-link 阻塞
+
+- `BootstrapWriteGate.check()`（只读、不消耗）+ `authorize()`（写边界、消耗）；`live/orchestrator.py::_authority_verdict`
+  分派 kind ⇒ 额度耗尽/superseded 时新增暴露被拒，CANCEL 不受影响；顺带修 `_InvalidVerdict.reasons` 归一 bug。
+- 新增 `tests/unit/test_orchestrator_bootstrap.py`（4 条）。全量 **1772 passed / 0 failed / 24 skipped**。
+- 真实 Testnet cold-start：5 次尝试。最新一次 `readiness_before` = blocked
+  （`RECOVERY_NOT_READY` + `PRIVATE_STREAM_NOT_READY` + `PRIVATE_LATENCY_UNOBSERVED`；market_ready 已 true）。
+  失败均在**签发 authority 之前**；交易所侧 open orders 0 / position 0.0000 / leverage 1 ⇒ 零写、零遗留、额度未消耗。
+  ⇒ **无 A/B/C verdict**（下一步：harness 侧保持 listenKey ACTIVE / 预热期间不丢 continuity，再重跑）。
+- 未 commit / 未 push；未跑 30 分钟 Phase B。
+
+## 2026-09-29（续 9）：真实 Testnet cold-start 打通到"一笔写尝试"，verdict = C（safety PASS）
+
+harness（仓库外）新增：private 心跳（pump + 每 20 s `refresh_snapshot` + re-run recovery，保持 ACTIVE/continuity）、
+前置条件条件驱动等待（要求 ACTIVE + continuity + RECOVERED 稳定 30 s）、写入前重新 collect + 重新签发 bootstrap（保持短 TTL）、
+价格 Decimal 量化到 tickSize。
+
+真实结果（多次运行）：`BOOTSTRAP_ELIGIBLE`（仅 `PRIVATE_LATENCY_UNOBSERVED`，UNOBSERVED/samples=0）✓ → BOOTSTRAP authority 签发
+（max_orders=1 / post_only / notional≤100 / TTL 120 s）✓ → 自然合法 PLACE ✓ → 一笔 PostOnly 写入：
+① 未量化价格时真实 POST 被交易所按精度拒绝（额度消耗=1），随后第二笔被**本地**拒绝 `ORDERS_USED_EXCEEDS_MAX` 且**网络调用 0**；
+② 量化后 `AUTHORITY_EXPIRED`（TTL 短于等待时间），零网络调用、额度=0。**无 private event ⇒ 无 corrected latency ⇒ 无 supersede/NORMAL**。
+⇒ verdict **C**：fail closed，且实证"绝不第二次写"。交易所侧复核 open orders 0 / position 0 / leverage 1；未 commit / 未 push；未跑 30 分钟 Phase B。
+
+## 2026-09-29（续 10）：JIT 签发契约落地 + 登记价格归一 ownership 未定义
+
+产品改动（切片 3 补）：`activate` 保留并检查 write attempt 额度（额度用尽后拒绝再次签发，防止循环 re-issue 拿无限写额度）；
+`AuthorityInvalidReason.PRIVATE_CONTINUITY_INVALID`；`BootstrapWriteGate.check/authorize(..., private_continuity_valid)` 必填，
+`None`/False ⇒ 拒绝（WS reconnect 后旧 readiness/authority 作废）；adapter / orchestrator 在 BOOTSTRAP 分支传入该事实，NORMAL 分支不变。
+新增 6 条单测（过期 / 同轮 re-issue 可通过 / 额度用尽后 re-issue 被拒 / continuity 失效 / recovery generation 变化 / orchestrator 禁止新增暴露）。
+全量 **1778 passed / 0 failed / 24 skipped**。
+
+**登记为独立产品问题（未解决）**：Order price normalization ownership 未定义（策略价 float 序列化可能超 tickSize 精度，
+实测被交易所按 precision 拒绝）。harness 的 Decimal 量化仅为测试输入适配，不代表问题已解决。
+
+**真实 Testnet**：runner 已 JIT 化（不提前签发；PLACE 当轮 collect+issue+write）。最新一轮在前置阶段因
+`refresh_snapshot: PrivateStreamError`（continuity 从未建立、recovery not_recovered）**正确 fail closed**：未签 authority、未发写请求。
+历史多轮已达到"一笔 PostOnly 写尝试 + 第二笔零网络调用"的真实证据，但从未有订单被接受 ⇒ **verdict 仍为 C**（无 A/B）。
+交易所侧复核 open orders 0 / position 0.0000 / leverage 1；未 commit / 未 push；未跑 30 分钟 Phase B。

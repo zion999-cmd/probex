@@ -45,7 +45,9 @@ class ExecutionAdapterBoundaryTest(unittest.TestCase):
     def test_scan_covers_expected_modules(self) -> None:
         names = {path.name for path in _files(EXECUTION_DIR)}
 
-        self.assertTrue({"__init__.py", "adapter.py", "parsing.py", "rest.py"} <= names)
+        self.assertTrue(
+            {"__init__.py", "adapter.py", "external_facts.py", "parsing.py", "rest.py"} <= names
+        )
 
     def test_sc22_no_decision_layer_imports(self) -> None:
         """只检查**真实依赖**（import 与属性访问），不因为注释里提到某个词就失败。"""

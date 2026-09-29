@@ -21,6 +21,8 @@ GET    /fapi/v1/order   (origClientOrderId —— 解决 uncertain submit/cancel
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import json
 import urllib.error
 import urllib.parse
@@ -218,7 +220,18 @@ def _require_text(value: object, name: str) -> str:
 
 
 def _require_number(value: object, name: str) -> str:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+    """把订单数值序列化成请求字符串。
+
+    P0001.9.7.2：接受 `Decimal`（精确十进制，直接 `format(value, 'f')` 输出，**不**经 float 往返），
+    以及 `int` / `float`（保持既有行为：`repr(float(v))`）。
+    """
+    if isinstance(value, bool) or isinstance(value, str) or value is None:
+        raise PrivateFormatError(f"{name} must be a positive number")
+    if isinstance(value, Decimal):
+        if not value.is_finite() or value <= 0:
+            raise PrivateFormatError(f"{name} must be a positive finite number")
+        return format(value, "f")
+    if not isinstance(value, (int, float)) or value <= 0:
         raise PrivateFormatError(f"{name} must be a positive number")
     return repr(float(value))
 

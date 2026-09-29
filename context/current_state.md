@@ -15,7 +15,8 @@ Provider identity 核实（决策 D，提案 §1.7）与授权探测 P1/P2（提
   P2 单条 `noul` 探针 → HTTP 200、604 ms、`answers.ok={type:noul,noul:0.99}`、cost 1.1634e-05。
 - **热路径 Jev 的真实目标应为 `/api/v1/systemone`**；实现 typed provider 需新提案（尚未授权、尚未改代码）。
 
-`context/status.json` 的 `currentProposal` 为 `null`（**P0001.9.6 已收口**，等待下一条正式 Proposal）。
+`context/status.json` 的 `currentProposal` 为 **`"P0001.9.7"`**（**实现中**：代码完成、Phase A PASS；
+Phase B 写 enabled 验收被外部前置条件阻塞 —— 见提案 §1.2）。
 
 ## 已完成能力
 
@@ -350,9 +351,26 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
   provider 契约 = `ExternalFactsProvider` Protocol。
 - 全量测试 **1693 passed / 0 failed / 24 skipped**；`context/status.json.currentProposal` 回到 `null`。
 
+### P0001.9.7 — Live Execution Orchestration（实现中；Phase B 阻塞）
+
+- 新增 `live/`：`orchestrator.py`（`LiveExecutionOrchestrator`：单轮固定顺序、QuoteAction 映射、同侧单报价不变量、
+  authority 门、reconciliation 触发、stop 语义）、`telemetry.py`（每轮事实 + 累计计数）。
+- 新增 `connectors/binance/execution/external_facts.py`：`PrivateExternalFactsProvider`（`ExternalFactsProvider` 的产品实现，
+  读取失败 ⇒ 抛错；真空 ⇒ `()`）。
+- `position` 改为**派生事实**（来自 accounting；显式传入必须一致，否则 fail closed）；`existing_orders` 只来自 Tracker。
+- **Phase A（observe-only）真实 Testnet 10 分钟 / 145 轮 PASS**：readiness `live_ready`、authority 已签发、
+  **全部动作计数为 0（零写请求）**、无未捕获异常、stop 后 0 挂单 / position 0。
+- **Phase B（write-enabled）BLOCKED**：① 账户杠杆 **20 ≠ 提案要求的 1**（产品不得修改杠杆 ⇒ 需人类在交易所设置）；
+  ② 无 prediction 源（无 `OPENROUTER_API_KEY`）⇒ P0001.7.1 正确地禁止新增暴露 ⇒ 不可能产生 PLACE。
+- 测试：unit 1083 / integration 268 / fault 308 / replay 49 passed；全量 **1732 passed / 0 failed / 24 skipped**。
+- `currentProposal` 保持 `"P0001.9.7"`（**未关闭**）。
+
 ## 进行中能力
 
-无。
+- **P0001.9.7 Phase B**：**前置条件已解除**（杠杆经仓库外 harness 改为 1x 并只读复验；
+  `OPENROUTER_API_KEY` 从仓库外 `~/.probex/openrouter.env` 注入且真实 SystemOne 调用通过）。
+  两次真实 Testnet 运行（32 分钟窗口 + 预热）**仍未产生任何报价** ⇒ **SC-24 – SC-28 未达成、根因未定位**（不猜）；
+  下一步：harness 增加逐轮 telemetry 落盘后短诊断（产品代码不动）。安全检查：open orders 0 / position 0 / leverage 1。
 0001.4.1 的 live 验证（SC-1 / SC-2 / SC-5）。
 
 ## 下一步
@@ -413,3 +431,34 @@ P0001.9.5 已作为 `a2ab8da`（1631 passed）、P0001.9.6 已作为 `afc0196`�
 > ② 每次收尾 commit 之后必须**立即**补行（hash + 该 commit 的 detached worktree 结果），
 > 并在提交前自检「本表是否已包含即将产生的阶段 commit hash」；
 > ③ 判断"当前是否已提交"以 `git log` / `git status` 为准，本表只是索引。
+
+## P0001.9.7.1 Private Latency Cold-Start Bootstrap（实现中）
+
+- 人类裁决（本会话）：不用探测单旁路、不普遍放宽 `PRIVATE_LATENCY_UNKNOWN`；把"从未有可测事件"建模为 `UNOBSERVED`。
+- 切片 1 已落地：`UNOBSERVED` / `BOOTSTRAP_ELIGIBLE` / reason `PRIVATE_LATENCY_UNOBSERVED` / 证据计数 / gate 分类（`readiness/{types,evidence,gate,__init__}.py`）。
+- 安全性：`issue_authority` 仍要求 `LIVE_READY` ⇒ 尚无任何路径能签发 authority；fail closed 未放宽。
+- 未落地：BOOTSTRAP authority 签发/校验、首笔事件后的升级闭环、orchestrator 强制、真实 Testnet 冷启动验证。
+- 测试：全量 1735 passed / 0 failed / 24 skipped。
+
+### P0001.9.7.1 切片 2 已落地 / 切片 3 待做
+
+- 已落地：`PrivateLatencyStatus.UNOBSERVED` + `BOOTSTRAP_ELIGIBLE` + reason `PRIVATE_LATENCY_UNOBSERVED`（gate 分类）；
+  `readiness/bootstrap.py`（`BootstrapEligibility` / `BootstrapAuthority` / `issue_bootstrap_authority` / `BootstrapAuthorityCoordinator`）；
+  validator 的 `validate_bootstrap` + `BOOTSTRAP_SUPERSEDED` 等正式原因；NORMAL authority 拒绝非 HEALTHY latency。
+- 待做（切片 3）：写路径（adapter / authority context / orchestrator）识别并强制 BOOTSTRAP（post-only、notional cap、
+  按 write attempt 计数的 `max_orders=1`、REPLACE 不得产生第二笔写入），随后真实 Testnet 冷启动闭环验证（SC-1…SC-7）。
+- 测试：全量 1748 passed / 0 failed / 24 skipped；未 commit。
+
+### P0001.9.7.1 切片 3（写边界接入）已落地；Testnet 闭环验证待重跑
+
+- 已落地：`BootstrapWriteGate`（写边界校验 + 额度在网络调用前消耗）、adapter 按 authority kind 分派、20 条写路径单测。
+- 待办：orchestrator 的 BOOTSTRAP lifecycle 识别；（因本机网络层故障）真实 Testnet 冷启动 A/B/C verdict 尚未取得。
+- 测试：全量 1768 passed / 0 failed / 24 skipped；未 commit。
+
+### P0001.9.7.1 切片 2/3 全部落地；Testnet 冷启动 verdict 仍待取得
+
+- 已落地：`UNOBSERVED` 语义、BOOTSTRAP authority 签发/校验/闭环 coordinator、写边界 `BootstrapWriteGate`
+  （`check` 只读 / `authorize` 消耗）、adapter kind 分派、orchestrator kind 分派。
+- 待办：harness 侧修复 private-link 生命周期（listenKey ACTIVE + continuity）后重跑真实 Testnet cold-start（§六），
+  以取得 A/B/C verdict。
+- 测试：全量 1772 passed / 0 failed / 24 skipped；未 commit。

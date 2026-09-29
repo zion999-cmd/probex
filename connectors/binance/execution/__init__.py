@@ -27,6 +27,10 @@ from connectors.binance.execution.adapter import (
     SubmitOutcome,
     SubmitRefusedError,
 )
+from connectors.binance.execution.external_facts import (
+    DEFAULT_ORDER_WINDOW,
+    PrivateExternalFactsProvider,
+)
 from connectors.binance.execution.parsing import (
     ExecutionParseError,
     OrderQueryFacts,
@@ -49,7 +53,9 @@ from connectors.binance.execution.rest import (
 )
 
 __all__ = [
+    "DEFAULT_ORDER_WINDOW",
     "ORDER_PATH",
+    "PrivateExternalFactsProvider",
     "BinanceExecutionAdapter",
     "BinanceExecutionRestClient",
     "ExecutionAdapterError",

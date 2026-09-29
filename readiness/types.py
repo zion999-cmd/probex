@@ -38,6 +38,9 @@ class LiveReadinessStatus(Enum):
     NOT_EVALUATED = "not_evaluated"
     LIVE_READY = "live_ready"
     BLOCKED = "blocked"
+    #: P0001.9.7.1：**唯一**的失败原因是 `PRIVATE_LATENCY_UNOBSERVED`（冷启动从未有过可测 private 事件）。
+    #: 它**不是** `LIVE_READY`：不能据此签发正常 authority，只能走一次性的 BOOTSTRAP 路径。
+    BOOTSTRAP_ELIGIBLE = "bootstrap_eligible"
 
 
 class LiveReadinessScope(Enum):
@@ -45,6 +48,25 @@ class LiveReadinessScope(Enum):
 
     TESTNET_LIVE_READY = "testnet_live_ready"
     MAINNET_LIVE_READY = "mainnet_live_ready"
+
+
+class PrivateLatencyStatus(Enum):
+    """private 延迟的**可测性状态**（P0001.9.7.1 §设计）。
+
+    `UNOBSERVED` 表示"当前没有业务事件，因此尚无样本"，**不是**测量链异常：
+
+    - `UNOBSERVED`：无样本，且**没有**任何事件因校准不可用而无法测量（干净冷启动）；
+    - `HEALTHY`  ：有样本且 median ≤ 阈值；
+    - `UNHEALTHY`：有样本但 median > 阈值；
+    - `UNKNOWN`  ：有事件到达但测量链不可判定（校准缺失导致无法给出 corrected lag）。
+
+    只有 `UNOBSERVED` 才可能进入 BOOTSTRAP；`UNKNOWN` / `UNHEALTHY` 一律 fail closed。
+    """
+
+    UNOBSERVED = "UNOBSERVED"
+    HEALTHY = "HEALTHY"
+    UNHEALTHY = "UNHEALTHY"
+    UNKNOWN = "UNKNOWN"
 
 
 class LiveReadinessReason(Enum):
@@ -62,6 +84,8 @@ class LiveReadinessReason(Enum):
     KILL_SWITCH_NOT_OPERABLE = "KILL_SWITCH_NOT_OPERABLE"
     CLOCK_NOT_CALIBRATED = "CLOCK_NOT_CALIBRATED"
     CLOCK_UNCERTAINTY_TOO_HIGH = "CLOCK_UNCERTAINTY_TOO_HIGH"
+    #: P0001.9.7.1：从未出现过可测 private business event（干净冷启动）——与真正的 UNKNOWN 区分开
+    PRIVATE_LATENCY_UNOBSERVED = "PRIVATE_LATENCY_UNOBSERVED"
     PRIVATE_LATENCY_UNKNOWN = "PRIVATE_LATENCY_UNKNOWN"
     PRIVATE_LATENCY_TOO_HIGH = "PRIVATE_LATENCY_TOO_HIGH"
     MAINNET_PRIVATE_NOT_VALIDATED = "MAINNET_PRIVATE_NOT_VALIDATED"
@@ -173,6 +197,10 @@ class PrivateStreamEvidence:
     median_private_lag_ms: int | None
     #: 时钟校准事实（含 RTT / 不确定度 / 测量时刻）
     clock_calibration: ClockCalibration | None
+    #: P0001.9.7.1：已获得 corrected lag 的 private 事件样本数（可测样本）
+    measured_lag_samples: int = 0
+    #: P0001.9.7.1：到达但**无法**测量的事件数（校准不可用）——区分 UNOBSERVED 与 UNKNOWN 的唯一依据
+    unmeasured_lag_samples: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,6 +380,8 @@ class LiveReadinessResult:
     scope: LiveReadinessScope | None
     reasons: tuple[LiveReadinessReason, ...]
     details: tuple[str, ...] = ()
+    #: P0001.9.7.1：private 延迟可测性状态（冷启动 bootstrap 判定依据）
+    latency_status: PrivateLatencyStatus | None = None
 
     @property
     def live_ready(self) -> bool:
@@ -360,6 +390,11 @@ class LiveReadinessResult:
     @property
     def blocked(self) -> bool:
         return self.status is LiveReadinessStatus.BLOCKED
+
+    @property
+    def bootstrap_eligible(self) -> bool:
+        """`True` 表示"只差一次 cold-start bootstrap"：唯一原因是 `PRIVATE_LATENCY_UNOBSERVED`。"""
+        return self.status is LiveReadinessStatus.BOOTSTRAP_ELIGIBLE
 
 
 __all__ = [
@@ -376,6 +411,7 @@ __all__ = [
     "LiveReadinessScope",
     "LiveReadinessStatus",
     "LiveRiskPolicy",
+    "PrivateLatencyStatus",
     "PrivateStreamEvidence",
     "ReadinessError",
     "ReadinessPolicy",

@@ -21,6 +21,7 @@ from readiness import (
     LiveReadinessScope,
     LiveReadinessStatus,
     LiveRiskPolicy,
+    PrivateLatencyStatus,
     PrivateStreamEvidence,
     ReadinessError,
     ReadinessPolicy,
@@ -203,12 +204,51 @@ class RecoveryAndStreamTest(unittest.TestCase):
                 result = self.gate.evaluate(evidence(private_stream=stream))
                 self.assertIn(LiveReadinessReason.PRIVATE_STREAM_NOT_READY, result.reasons)
 
-    def test_unknown_latency_is_not_treated_as_ok(self) -> None:
+    def test_unobserved_latency_is_not_treated_as_ok(self) -> None:
+        """P0001.9.7.1：无样本且无不可测事件 ⇒ `UNOBSERVED`（干净冷启动），**不是** `LIVE_READY`。"""
         result = self.gate.evaluate(
             evidence(private_stream=PrivateStreamEvidence("ACTIVE", True, True, None, calibration()))
         )
 
+        self.assertEqual(result.reasons, (LiveReadinessReason.PRIVATE_LATENCY_UNOBSERVED,))
+        self.assertIs(result.latency_status, PrivateLatencyStatus.UNOBSERVED)
+        self.assertFalse(result.live_ready)
+        self.assertIs(result.status, LiveReadinessStatus.BOOTSTRAP_ELIGIBLE)
+        self.assertTrue(result.bootstrap_eligible)
+
+    def test_unobserved_latency_with_any_other_problem_is_blocked(self) -> None:
+        """只有"唯一原因是 UNOBSERVED"才可能 bootstrap；否则一律 BLOCKED。"""
+        result = self.gate.evaluate(
+            evidence(
+                private_stream=PrivateStreamEvidence("ACTIVE", True, True, None, calibration()),
+                account=AccountEvidence(can_trade=False, available_balance=100.0,
+                                        available_balance_captured_at=0),
+            )
+        )
+
+        self.assertIs(result.status, LiveReadinessStatus.BLOCKED)
+        self.assertFalse(result.bootstrap_eligible)
+        self.assertIn(LiveReadinessReason.PRIVATE_LATENCY_UNOBSERVED, result.reasons)
+        self.assertIn(LiveReadinessReason.ACCOUNT_CANNOT_TRADE, result.reasons)
+
+    def test_unmeasurable_events_are_unknown_not_unobserved(self) -> None:
+        """P0001.9.7.1：有事件到达但无法测量 ⇒ `UNKNOWN`（测量链异常）⇒ fail closed。"""
+        result = self.gate.evaluate(
+            evidence(
+                private_stream=PrivateStreamEvidence("ACTIVE", True, True, None, calibration(), 0, 3)
+            )
+        )
+
         self.assertEqual(result.reasons, (LiveReadinessReason.PRIVATE_LATENCY_UNKNOWN,))
+        self.assertIs(result.latency_status, PrivateLatencyStatus.UNKNOWN)
+        self.assertIs(result.status, LiveReadinessStatus.BLOCKED)
+
+    def test_healthy_latency_status_is_exposed(self) -> None:
+        result = self.gate.evaluate(
+            evidence(private_stream=PrivateStreamEvidence("ACTIVE", True, True, 25, calibration(), 12, 0))
+        )
+
+        self.assertIs(result.latency_status, PrivateLatencyStatus.HEALTHY)
 
     def test_high_latency_blocks(self) -> None:
         result = self.gate.evaluate(
@@ -393,7 +433,7 @@ class Sc9Sc10EnvironmentTest(unittest.TestCase):
             {
                 LiveReadinessReason.RECOVERY_NOT_READY,
                 LiveReadinessReason.PRIVATE_STREAM_NOT_READY,
-                LiveReadinessReason.PRIVATE_LATENCY_UNKNOWN,
+                LiveReadinessReason.PRIVATE_LATENCY_UNOBSERVED,
                 LiveReadinessReason.CLOCK_NOT_CALIBRATED,
                 LiveReadinessReason.ACCOUNT_CANNOT_TRADE,
                 LiveReadinessReason.AVAILABLE_BALANCE_UNKNOWN,

@@ -46,6 +46,9 @@ def private_stream_evidence(
         boundary_present=boundary_present,
         median_private_lag_ms=None if distribution is None else distribution.median,
         clock_calibration=telemetry.clock_calibration,
+        # P0001.9.7.1：区分"从未有事件"（UNOBSERVED）与"有事件但无法测量"（UNKNOWN）
+        measured_lag_samples=0 if distribution is None else int(distribution.samples),
+        unmeasured_lag_samples=int(telemetry.uncorrected_lag_sample_count),
     )
 
 

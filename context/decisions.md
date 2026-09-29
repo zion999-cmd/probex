@@ -855,3 +855,26 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
     provider 未注入 / 读取失败 / 解析失败 / 缺方法 ⇒ 抛 `ExternalFactsUnavailableError`，
     **绝不**返回空集合；只有 provider 真实返回空时才允许 `()`。
     provider 契约提升为 `ExternalFactsProvider` Protocol（产品不内置实现，由 live 编排层注入）。
+
+## D-049 Live Execution Orchestration：单轮顺序 / 单价不变量 / 派生 position（P0001.9.7）
+
+**日期**：2026-09-28
+**状态**：生效（提案仍处"实现中"：Phase B 验收被外部前置条件阻塞）
+
+1. **唯一编排 Owner**：`LiveExecutionOrchestrator` 只做"收集输入 → 调 MakerPolicy → 映射 QuoteAction →
+   驱动 poll/桥接 → 处理 authority/触发 reconciliation → 输出 telemetry"；**不做**价格/size/风险/prediction 解释。
+2. **单轮固定顺序**（§2）：drain → 更新 Tracker/Accounting → fresh RiskSnapshot → decide → execute → 再 drain → 记录。
+3. **position 是派生事实**：默认取 `AccountingCore.position(symbol)`；显式传入必须与快照一致，否则 fail closed。
+4. **existing_orders 只来自 Tracker**；每侧最多一个 active（违反 ⇒ `ORDER_MULTIPLICITY_VIOLATION` ⇒ 停止新增 + reconciliation）。
+5. **REPLACE = cancel-before-replace**；cancel 只需要"Probex 所有权 + 环境 + 凭据"，**不要求** LIVE_READY（延续 D-048 §3）。
+6. **UNKNOWN 不重试**：由 `query_order` / user stream / reconciliation 收敛；未确认的 cancel 绝不写成 CANCELED。
+7. **observe-only**（`execution_enabled=False`）：写动作被记录并跳过，loop 保持稳定；实测 10 分钟 145 轮**零写请求**。
+8. **risk budget 由调用方注入**（`risk_budget_provider`）：orchestrator 不做风险数学；未知 ⇒ 策略 fail closed（既有语义）。
+9. **stop ≠ 平仓**：撤挂单 + 报告残留；持仓残留只报 `POSITION_REMAINS`（不得市价平仓）。
+10. **Phase B 前置条件已解除**（人类授权）：① 杠杆由**仓库外 harness** 从 20 改为 **1x** 并只读复验
+    （产品代码**无**杠杆端点，边界保持）；② `OPENROUTER_API_KEY` 加载路径 = 仓库外 `~/.probex/openrouter.env`
+    （600、只注入不打印），真实 SystemOne 调用验证通过。
+11. **Phase B 仍未达成**（2026-09-28）：真实 Testnet 循环稳定运行但**未产生任何报价**；
+    已定位的阻塞之一为 `history_ready` 需要 **5 分钟**窗口覆盖（`HISTORY_WINDOW_MS=300_000`），
+    并已补上 mark price 更新；**其余根因未定位**（不猜）⇒ 下一步是 harness 增加**逐轮 telemetry 落盘**后短诊断。
+    在 SC-24 – SC-28 达成前，提案不得标记完成。

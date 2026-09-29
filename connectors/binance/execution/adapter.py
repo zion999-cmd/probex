@@ -51,7 +51,27 @@ from readiness.authority import (
     ExecutionReadinessAuthority,
     ExecutionReadinessAuthorityValidator,
 )
-from readiness.types import Environment, RecoveryGeneration
+from execution.normalization import OrderNormalizer
+
+
+def normalizer_from_rules(rules: TradingRules, *, price_rounding: str, quantity_rounding: str) -> OrderNormalizer:
+    """由交易所 `exchangeInfo` 规则构造归一化器（P0001.9.7.2）。
+
+    放在连接器层是刻意的：`execution/` 域不得依赖 `connectors/` 的交易所类型（layering 契约）。
+    舍入模式仍必须由调用方**显式**给出（业务选择，无默认值）。
+    """
+    from decimal import Decimal
+
+    if not isinstance(rules, TradingRules):
+        raise ExecutionAdapterError("normalizer_from_rules requires TradingRules")
+    return OrderNormalizer(
+        tick_size=Decimal(str(rules.tick_size)),
+        step_size=Decimal(str(rules.step_size)),
+        price_rounding=price_rounding,
+        quantity_rounding=quantity_rounding,
+    )
+from readiness.bootstrap import BootstrapAuthority, BootstrapWriteGate
+from readiness.types import Environment, PrivateLatencyStatus, RecoveryGeneration
 from risk.types import KillSwitchMode
 
 from connectors.binance.execution.parsing import (
@@ -133,14 +153,29 @@ class SubmitRefusedError(ExecutionAdapterError):
 
 @dataclass(frozen=True, slots=True)
 class ExecutionAuthorityContext:
-    """submit 前置校验需要的**当前**事实（由调用方在写请求前即时提供）。"""
+    """写请求前置校验需要的**当前**事实（由调用方在写请求前即时提供）。
 
-    authority: ExecutionReadinessAuthority | None
+    P0001.9.7.1：`authority` 显式支持两种 kind：
+
+    - `ExecutionReadinessAuthority`（NORMAL）：走原有的 `validator.validate(...)` 语义；
+    - `BootstrapAuthority`（BOOTSTRAP）：走 `bootstrap_gate.authorize(...)`（更窄约束 + 额度消耗）。
+
+    `bootstrap_gate` / `latency_status` 缺失时，BOOTSTRAP 路径一律拒绝（fail closed，不是放行）。
+    """
+
+    authority: ExecutionReadinessAuthority | BootstrapAuthority | None
     recovery_generation: RecoveryGeneration
     market_generation: int
     hwm_activation_id: str | None
     hwm_generation: int
     kill_switch_mode: KillSwitchMode
+    #: BOOTSTRAP 专用：写边界闸门（owns the single write-attempt quota）
+    bootstrap_gate: BootstrapWriteGate | None = None
+    #: BOOTSTRAP 专用：当前 private latency 可测性状态（未提供 ⇒ 按 UNKNOWN 处理 ⇒ 拒绝）
+    latency_status: PrivateLatencyStatus | None = None
+    #: BOOTSTRAP 专用（JIT）：collect 到写请求之间 private continuity 是否仍有效
+    #: （未提供 / False ⇒ 写边界拒绝；WS reconnect 后必须重新 recovery+readiness）
+    private_continuity_valid: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +208,10 @@ class BinanceExecutionAdapter:
     local_status_provider: Callable[[str], OrderStatus | None] | None = None
     #: 外部事实 provider（reconciliation 输入）。**未注入 ⇒ unavailable（不是空）**。
     private_read: ExternalFactsProvider | None = None
+    #: P0001.9.7.2：**显式注入**的订单参数归一化器（price/quantity 的 tick/step 量化）。
+    #: 为 None 时 adapter 不做任何隐式 round（D-048 不变）；启用后 REST 请求只使用
+    #: Decimal 精确字符串，不经过 float 往返。
+    normalizer: OrderNormalizer | None = None
     _queue: list[ExecutionEvent] = field(default_factory=list)
     _submitted: dict[str, tuple[str, str]] = field(default_factory=dict)  # client_id -> (symbol, exchange_id)
     _skipped_transitions: int = 0
@@ -235,12 +274,20 @@ class BinanceExecutionAdapter:
                 detail=refusal.detail,
             )
 
+        # P0001.9.7.2：归一化（仅在**显式注入** normalizer 时）：REST 请求使用 Decimal 精确字符串。
+        price: float | Decimal = order.price
+        quantity: float | Decimal = order.quantity
+        if self.normalizer is not None:
+            normalized = self.normalizer.normalize(price=order.price, quantity=order.quantity)
+            price = normalized.price
+            quantity = normalized.quantity
+
         try:
             raw = self.rest.submit_post_only_limit(
                 symbol=order.symbol,
                 side=OrderSide(order.side.value.upper()),
-                quantity=order.quantity,
-                price=order.price,
+                quantity=quantity,
+                price=price,
                 client_order_id=order.client_order_id,
                 reduce_only=order.reduce_only,
             )
@@ -414,7 +461,10 @@ class BinanceExecutionAdapter:
                     is_maker=observation.is_maker,
                 )
             )
-        target = _STATUS_MAP.get(observation.order_status)
+        # 成交类事实**只**产出 FillReceived：既有 `OrderTracker` 会依据成交量推导
+        # PARTIALLY_FILLED / FILLED（D-021）。若这里再补一条状态事件，会在"整单成交"时出现
+        # 同一批事件内 FILLED -> PARTIALLY_FILLED 的非法回退。
+        target = None if observation.is_fill else _STATUS_MAP.get(observation.order_status)
         if target is not None:
             self._submitted.setdefault(
                 observation.client_order_id, (observation.symbol, str(observation.order_id))
@@ -452,7 +502,7 @@ class BinanceExecutionAdapter:
             raise SubmitRefusedError("trading_rules_unavailable", "exchangeInfo rules are required before submit")
         self._require_rules(order, rules=rules)
         # §13：adapter **不**判断"是否真的降险"（那是 RiskGate 的业务约束）；reduceOnly 原样透传。
-        self._require_authority()
+        self._require_authority(order)
 
     def _require_rules(self, order: Order, *, rules: TradingRules) -> None:
         """§14：不合规就**本地拒绝**，绝不自动 round。"""
@@ -471,14 +521,46 @@ class BinanceExecutionAdapter:
         if order.price * order.quantity < rules.min_notional:
             raise SubmitRefusedError("notional_below_min", f"{order.price * order.quantity} < {rules.min_notional}")
 
-    def _require_authority(self) -> None:
-        """§2 / SC-1 / SC-19：authority 无效 ⇒ **不发送任何 HTTP 请求**。"""
+    def _require_authority(self, order: Order) -> None:
+        """§2 / SC-1 / SC-19：authority 无效 ⇒ **不发送任何 HTTP 请求**。
+
+        P0001.9.7.1：在**最邻近真实写请求**的位置分派 authority kind。
+        BOOTSTRAP 分支比 NORMAL 更窄，且在通过校验后**立即消耗**唯一额度（网络调用之前）。
+        """
         context = self.authority_provider()
         if not isinstance(context, ExecutionAuthorityContext):
             raise SubmitRefusedError("authority_context_missing")
         authority = context.authority
         if authority is None:
             raise SubmitRefusedError("AUTHORITY_MISSING")
+        if isinstance(authority, BootstrapAuthority):
+            gate = context.bootstrap_gate
+            if gate is None:
+                raise SubmitRefusedError(
+                    "BOOTSTRAP_WRITE_GATE_MISSING", "bootstrap authority requires an explicit write gate"
+                )
+            verdict = gate.authorize(
+                authority=authority,
+                now_ms=self._now_ms(),
+                requested_environment=self.environment,
+                symbol=order.symbol,
+                notional_usdt=float(order.price) * float(order.quantity),
+                # adapter 的唯一写路径就是 post-only limit（GTX）；不存在非 post-only 写入口
+                post_only=True,
+                private_continuity_valid=context.private_continuity_valid,
+                latency_status=(
+                    PrivateLatencyStatus.UNKNOWN
+                    if context.latency_status is None
+                    else context.latency_status
+                ),
+                recovery_generation=context.recovery_generation,
+                market_generation=context.market_generation,
+                kill_switch_mode=context.kill_switch_mode,
+            )
+            if not verdict.valid:
+                reason = verdict.reasons[0] if verdict.reasons else AuthorityInvalidReason.NOT_LIVE_READY
+                raise SubmitRefusedError(reason.value, verdict.details[0] if verdict.details else "")
+            return
         verdict = self.validator.validate(
             authority,
             now_ms=self._now_ms(),

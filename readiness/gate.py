@@ -4,7 +4,10 @@
 
     当前 runtime / account / environment，**是否具备进入真实 ExecutionAdapter 阶段的前置条件**？
 
-输出只有 `LIVE_READY` / `BLOCKED`（+ 完整 reason code 列表）。`RECOVERED` 只是其中一个输入。
+输出只有 `LIVE_READY` / `BOOTSTRAP_ELIGIBLE` / `BLOCKED`（+ 完整 reason code 列表）。`RECOVERED` 只是其中一个输入。
+
+`BOOTSTRAP_ELIGIBLE`（P0001.9.7.1）**只**用于"干净冷启动"：唯一的阻塞原因是 `PRIVATE_LATENCY_UNOBSERVED`。
+它不给任何权限；是否能签发一次性 BOOTSTRAP authority 由 `readiness.authority` 单独判定。
 
 纪律：
 
@@ -28,6 +31,7 @@ from readiness.types import (
     LiveReadinessResult,
     LiveReadinessScope,
     LiveReadinessStatus,
+    PrivateLatencyStatus,
     ReadinessError,
     ReadinessPolicy,
 )
@@ -56,6 +60,7 @@ class LiveReadinessGate:
 
         reasons: list[LiveReadinessReason] = []
         details: list[str] = []
+        latency_status = self._classify_private_latency(evidence)
 
         def fail(reason: LiveReadinessReason, detail: str) -> None:
             if reason not in reasons:
@@ -76,18 +81,28 @@ class LiveReadinessGate:
                 "; ".join(evidence.market.problems) or "market data / feature engine is not healthy",
             )
 
+        if reasons == [LiveReadinessReason.PRIVATE_LATENCY_UNOBSERVED]:
+            return LiveReadinessResult(
+                status=LiveReadinessStatus.BOOTSTRAP_ELIGIBLE,
+                scope=None,
+                reasons=tuple(reasons),
+                details=tuple(details),
+                latency_status=latency_status,
+            )
         if reasons:
             return LiveReadinessResult(
                 status=LiveReadinessStatus.BLOCKED,
                 scope=None,
                 reasons=tuple(reasons),
                 details=tuple(details),
+                latency_status=latency_status,
             )
         return LiveReadinessResult(
             status=LiveReadinessStatus.LIVE_READY,
             scope=self._scope_for(evidence),
             reasons=(),
             details=(),
+            latency_status=latency_status,
         )
 
     # ------------------------------------------------------------------ 单项检查
@@ -98,6 +113,23 @@ class LiveReadinessGate:
                 LiveReadinessReason.RECOVERY_NOT_READY,
                 f"recovery status is {evidence.recovery_status.value}",
             )
+
+    def _classify_private_latency(self, evidence: LiveReadinessEvidence) -> PrivateLatencyStatus:
+        """private 延迟的**可测性**分类（P0001.9.7.1 §设计）。
+
+        - 有样本 ⇒ `HEALTHY` / `UNHEALTHY`（阀值在此判定）；
+        - 无样本且**有**事件因校准不可用而无法测量 ⇒ `UNKNOWN`（测量链异常）；
+        - 无样本且**没有**任何无法测量的事件 ⇒ `UNOBSERVED`（干净冷启动）。
+        """
+        stream = evidence.private_stream
+        median = stream.median_private_lag_ms
+        if median is not None:
+            if median <= self.policy.max_median_private_lag_ms:
+                return PrivateLatencyStatus.HEALTHY
+            return PrivateLatencyStatus.UNHEALTHY
+        if stream.unmeasured_lag_samples > 0:
+            return PrivateLatencyStatus.UNKNOWN
+        return PrivateLatencyStatus.UNOBSERVED
 
     def _check_private_stream(self, evidence: LiveReadinessEvidence, fail: _Fail) -> None:
         stream = evidence.private_stream
@@ -113,7 +145,17 @@ class LiveReadinessGate:
 
         median = stream.median_private_lag_ms
         if median is None:
-            fail(LiveReadinessReason.PRIVATE_LATENCY_UNKNOWN, "no corrected private lag samples yet")
+            if stream.unmeasured_lag_samples > 0:
+                fail(
+                    LiveReadinessReason.PRIVATE_LATENCY_UNKNOWN,
+                    f"{stream.unmeasured_lag_samples} private event(s) arrived but the measurement chain is "
+                    "unavailable (no clock calibration) ⇒ corrected lag is not measurable",
+                )
+            else:
+                fail(
+                    LiveReadinessReason.PRIVATE_LATENCY_UNOBSERVED,
+                    "no private business events observed yet (cold start: no sample exists)",
+                )
         elif median > self.policy.max_median_private_lag_ms:
             fail(
                 LiveReadinessReason.PRIVATE_LATENCY_TOO_HIGH,

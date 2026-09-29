@@ -36,6 +36,9 @@ class FakeExecutionFetcher:
         self.calls.append((method, url.split("?")[0]))
         self.seen_queries.append(url)
         result = self.responses.get(method)
+        if callable(result):
+            # 允许按请求回显（例如把 newClientOrderId / origClientOrderId 放进响应）
+            result = result(url)
         if isinstance(result, BaseException):
             raise result
         if result is None:
@@ -58,6 +61,27 @@ def client(
         offset=ServerTimeOffset(),
         clock=lambda: (BASE_TS if now_ms is None else now_ms),
     )
+
+
+def client_order_id_from_url(url: str) -> str:
+    """从写请求 URL 里取出客户端订单 id（`newClientOrderId` 优先，其次 `origClientOrderId`）。"""
+    import urllib.parse
+
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+    for key in ("newClientOrderId", "origClientOrderId"):
+        values = query.get(key)
+        if values:
+            return values[0]
+    raise ValueError("url carries neither newClientOrderId nor origClientOrderId")
+
+
+def echoing_ack(url: str, *, status: str = "NEW") -> dict:
+    """回显 clientOrderId 的 ACK（多单场景下避免"响应指向别人的订单"）。"""
+    return ack_payload(client_order_id=client_order_id_from_url(url), status=status)
+
+
+def echoing_cancel(url: str) -> dict:
+    return ack_payload(client_order_id=client_order_id_from_url(url), status="CANCELED")
 
 
 def ack_payload(
@@ -91,5 +115,8 @@ __all__ = [
     "FakeExecutionFetcher",
     "ack_payload",
     "client",
+    "client_order_id_from_url",
     "credentials",
+    "echoing_ack",
+    "echoing_cancel",
 ]

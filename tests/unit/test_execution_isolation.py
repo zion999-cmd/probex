@@ -9,7 +9,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 EXECUTION_DIR = PROJECT_ROOT / "execution"
 
-STDLIB_ROOTS = {"__future__", "collections", "dataclasses", "enum", "math", "typing"}
+STDLIB_ROOTS = {"__future__", "collections", "dataclasses", "decimal", "enum", "math", "typing"}
 LAYER_ROOTS = {"execution", "market", "portfolio", "risk"}
 
 FORBIDDEN_ROOTS = {

@@ -9,7 +9,7 @@
 3. **显式 TTL**（§8）：过期即拒绝（`AUTHORITY_EXPIRED`），需要重新收集 evidence + 重新 evaluate；
 4. **scope 强隔离**（§14）：TESTNET 授权永远不能用于 MAINNET。
 
-授权**不包含任何下单/撤单能力**（SC-18），也不绕过逐订单 `RiskGate`（§13 / SC-19）。
+授权**不包含任何写入/撤单能力**（SC-18），也不绕过逐订单 `RiskGate`（§13 / SC-19）。
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from readiness.types import (
     LiveReadinessResult,
     LiveReadinessScope,
     LiveReadinessStatus,
+    PrivateLatencyStatus,
     ReadinessError,
     RecoveryGeneration,
 )
@@ -46,6 +47,22 @@ class AuthorityInvalidReason(Enum):
     MARKET_GENERATION_CHANGED = "MARKET_GENERATION_CHANGED"
     HIGH_WATERMARK_CHANGED = "HIGH_WATERMARK_CHANGED"
     KILL_SWITCH_NOT_NORMAL = "KILL_SWITCH_NOT_NORMAL"
+    #: P0001.9.7.1：BOOTSTRAP authority 专用
+    #: 首个**可测量 private latency 的业务事件**（OrderUpdate / AccountUpdate 均可，不要求是 fill）
+    #: 一旦形成 corrected latency 样本，bootstrap 立即失效——这是正式、可判定的失效原因。
+    BOOTSTRAP_SUPERSEDED = "BOOTSTRAP_SUPERSEDED"
+    #: write **attempt** 计数已达 `max_orders`（口径：发生过一次真实 write attempt 即消耗，
+    #: **不是**等 `CONFIRMED_ACCEPTED`；否则 UNKNOWN 结果会被误认为"还没写入"而重提）。
+    ORDERS_USED_EXCEEDS_MAX = "ORDERS_USED_EXCEEDS_MAX"
+    #: BOOTSTRAP 要求只写 post-only 报价
+    POST_ONLY_REQUIRED = "POST_ONLY_REQUIRED"
+    #: 超过 BOOTSTRAP 的 notional 上限
+    NOTIONAL_EXCEEDS_MAX = "NOTIONAL_EXCEEDS_MAX"
+    #: BOOTSTRAP **永远**只能在 TESTNET 使用（包括"请求环境是 MAINNET"）
+    ENVIRONMENT_NOT_TESTNET = "ENVIRONMENT_NOT_TESTNET"
+    #: P0001.9.7.1 §JIT：从 collect 到写请求之间 private continuity 已失效
+    #: （例：WS reconnect 后尚未重新 recovery/readiness）⇒ 该 authority 不得再用于写
+    PRIVATE_CONTINUITY_INVALID = "PRIVATE_CONTINUITY_INVALID"
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +198,11 @@ def issue_authority(
         raise AuthorityError("issue_authority requires a LiveReadinessResult")
     if result.status is not LiveReadinessStatus.LIVE_READY:
         raise AuthorityError(f"cannot issue execution authority for {result.status.value} readiness (SC-6)")
+    if result.latency_status is not None and result.latency_status is not PrivateLatencyStatus.HEALTHY:
+        # P0001.9.7.1：NORMAL authority **绝不**接受 UNOBSERVED（只能走显式 BOOTSTRAP 路径）
+        raise AuthorityError(
+            f"NORMAL authority requires HEALTHY private latency, got {result.latency_status.value}"
+        )
     if result.scope is None:
         raise AuthorityError("LIVE_READY result must carry a scope")
     if not isinstance(provenance, ReadinessProvenance):
@@ -288,6 +310,86 @@ class ExecutionReadinessAuthorityValidator:
                 f"high-watermark {authority.hwm_activation_id}/{authority.hwm_generation} -> "
                 f"{hwm_activation_id}/{hwm_generation}"
             )
+        if kill_switch_mode is not KillSwitchMode.NORMAL:
+            reasons.append(AuthorityInvalidReason.KILL_SWITCH_NOT_NORMAL)
+            details.append(f"kill switch is {kill_switch_mode.value}")
+        return AuthorityVerdict(valid=not reasons, reasons=tuple(reasons), details=tuple(details))
+
+    def validate_bootstrap(
+        self,
+        authority: object,
+        *,
+        now_ms: Milliseconds,
+        requested_environment: Environment,
+        symbol: str,
+        write_attempts_used: int,
+        latency_status: PrivateLatencyStatus,
+        recovery_generation: RecoveryGeneration,
+        market_generation: int,
+        kill_switch_mode: KillSwitchMode,
+    ) -> AuthorityVerdict:
+        """BOOTSTRAP authority 的校验（P0001.9.7.1 §三 / §二）。
+
+        与 NORMAL 校验的差别（都是**更窄**的约束）：
+
+        - 只在 TESTNET；且请求环境必须也是 TESTNET（Mainnet 永远不可 bootstrap）；
+        - `symbol` 必须匹配（scope = environment + symbol）；
+        - `write_attempts_used` ≥ `max_orders` ⇒ `ORDERS_USED_EXCEEDS_MAX`（**按 attempt 计数**）；
+        - `latency_status is not UNOBSERVED` ⇒ `BOOTSTRAP_SUPERSEDED`（首笔可测事件已到达）；
+        - generation / kill switch 与 NORMAL 同一套口径（同一份事实绑定）。
+        """
+        from readiness.bootstrap import BootstrapAuthority  # 延迟导入避免循环
+
+        if not isinstance(authority, BootstrapAuthority):
+            raise AuthorityError("validate_bootstrap() requires a BootstrapAuthority")
+        if not isinstance(requested_environment, Environment):
+            raise AuthorityError("validate_bootstrap() requires an Environment")
+        if not isinstance(symbol, str) or not symbol:
+            raise AuthorityError("validate_bootstrap() requires a non-empty symbol")
+        if isinstance(write_attempts_used, bool) or not isinstance(write_attempts_used, int) \
+                or write_attempts_used < 0:
+            raise AuthorityError("validate_bootstrap() requires a non-negative int write_attempts_used")
+        if not isinstance(latency_status, PrivateLatencyStatus):
+            raise AuthorityError("validate_bootstrap() requires a PrivateLatencyStatus")
+        if not isinstance(recovery_generation, RecoveryGeneration):
+            raise AuthorityError("validate_bootstrap() requires a RecoveryGeneration")
+        if not isinstance(kill_switch_mode, KillSwitchMode):
+            raise AuthorityError("validate_bootstrap() requires a KillSwitchMode")
+        if isinstance(now_ms, bool) or not isinstance(now_ms, int) or now_ms < 0:
+            raise AuthorityError("validate_bootstrap() requires a non-negative int now_ms")
+        if isinstance(market_generation, bool) or not isinstance(market_generation, int) \
+                or market_generation < 0:
+            raise AuthorityError("validate_bootstrap() requires a non-negative int market_generation")
+
+        reasons: list[AuthorityInvalidReason] = []
+        details: list[str] = []
+        if now_ms > authority.expires_at_ms:
+            reasons.append(AuthorityInvalidReason.AUTHORITY_EXPIRED)
+            details.append(f"expired at {authority.expires_at_ms}, now {now_ms}")
+        if requested_environment is not Environment.TESTNET:
+            reasons.append(AuthorityInvalidReason.ENVIRONMENT_NOT_TESTNET)
+            details.append(f"bootstrap authority is never valid for {requested_environment.value}")
+        if authority.symbol != symbol:
+            reasons.append(AuthorityInvalidReason.SCOPE_MISMATCH)
+            details.append(f"authority symbol {authority.symbol!r} != requested {symbol!r}")
+        if write_attempts_used >= authority.max_orders:
+            reasons.append(AuthorityInvalidReason.ORDERS_USED_EXCEEDS_MAX)
+            details.append(
+                f"write attempts used {write_attempts_used} >= max_orders {authority.max_orders} "
+                "(counted at write attempt, not acceptance)"
+            )
+        if latency_status is not PrivateLatencyStatus.UNOBSERVED:
+            reasons.append(AuthorityInvalidReason.BOOTSTRAP_SUPERSEDED)
+            details.append(
+                f"private latency is now {latency_status.value} (a measurable private event arrived) "
+                "⇒ bootstrap is superseded; re-collect readiness and issue a NORMAL authority"
+            )
+        if not authority.recovery_generation.matches(recovery_generation):
+            reasons.append(AuthorityInvalidReason.RECOVERY_GENERATION_CHANGED)
+            details.append(f"recovery generation {authority.recovery_generation} -> {recovery_generation}")
+        if authority.market_generation != market_generation:
+            reasons.append(AuthorityInvalidReason.MARKET_GENERATION_CHANGED)
+            details.append(f"market generation {authority.market_generation} -> {market_generation}")
         if kill_switch_mode is not KillSwitchMode.NORMAL:
             reasons.append(AuthorityInvalidReason.KILL_SWITCH_NOT_NORMAL)
             details.append(f"kill switch is {kill_switch_mode.value}")

@@ -52,6 +52,7 @@ from readiness.types import (
     LiveReadinessScope,
     LiveReadinessStatus,
     LiveRiskPolicy,
+    PrivateLatencyStatus,
     PrivateStreamEvidence,
     ReadinessError,
     ReadinessPolicy,
@@ -87,6 +88,7 @@ __all__ = [
     "LiveReadinessScope",
     "LiveReadinessStatus",
     "LiveRiskPolicy",
+    "PrivateLatencyStatus",
     "PrivateStreamEvidence",
     "ReadinessError",
     "ReadinessPolicy",
@@ -97,4 +99,30 @@ __all__ = [
     "historical_risk_evidence",
     "historical_risk_evidence_from_snapshot",
     "private_stream_evidence",
+]
+
+from readiness.bootstrap import (
+    AuthorityKind,
+    BOOTSTRAP_MAX_NOTIONAL_USDT,
+    BOOTSTRAP_MAX_ORDERS,
+    BootstrapActivation,
+    BootstrapAuthority,
+    BootstrapAuthorityCoordinator,
+    BootstrapEligibility,
+    BootstrapPhase,
+    BootstrapWriteGate,
+    issue_bootstrap_authority,
+)
+
+__all__ += [
+    "AuthorityKind",
+    "BOOTSTRAP_MAX_NOTIONAL_USDT",
+    "BOOTSTRAP_MAX_ORDERS",
+    "BootstrapActivation",
+    "BootstrapAuthority",
+    "BootstrapAuthorityCoordinator",
+    "BootstrapEligibility",
+    "BootstrapPhase",
+    "BootstrapWriteGate",
+    "issue_bootstrap_authority",
 ]
