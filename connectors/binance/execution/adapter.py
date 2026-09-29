@@ -25,7 +25,7 @@ Binance 事实      → ExecutionEvent（供既有 OrderTracker / Accounting 消
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Protocol
 
 from market.events.types import Milliseconds, Venue
@@ -258,8 +258,18 @@ class BinanceExecutionAdapter:
         """与 `submit()` 相同，但返回结构化三分类（供上层审计与 uncertain 处理）。"""
         if not isinstance(order, Order):
             raise ExecutionAdapterError("submit() requires an Order")
+        price: float | Decimal = order.price
+        quantity: float | Decimal = order.quantity
+        validation_order = order
+        if self.normalizer is not None:
+            normalized = self.normalizer.normalize(price=order.price, quantity=order.quantity)
+            price = normalized.price
+            quantity = normalized.quantity
+            # 本地规则校验必须使用**归一后**的值（float 仅用于校验，REST 仍用 Decimal 精确值）
+            validation_order = replace(order, price=float(normalized.price),
+                                       quantity=float(normalized.quantity))
         try:
-            self._require_submittable(order)
+            self._require_submittable(validation_order)
         except SubmitRefusedError as refusal:
             event = OrderRejected(
                 client_order_id=order.client_order_id,
@@ -273,14 +283,6 @@ class BinanceExecutionAdapter:
                 rejection_message=refusal.reason,
                 detail=refusal.detail,
             )
-
-        # P0001.9.7.2：归一化（仅在**显式注入** normalizer 时）：REST 请求使用 Decimal 精确字符串。
-        price: float | Decimal = order.price
-        quantity: float | Decimal = order.quantity
-        if self.normalizer is not None:
-            normalized = self.normalizer.normalize(price=order.price, quantity=order.quantity)
-            price = normalized.price
-            quantity = normalized.quantity
 
         try:
             raw = self.rest.submit_post_only_limit(

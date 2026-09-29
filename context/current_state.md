@@ -462,3 +462,10 @@ P0001.9.5 已作为 `a2ab8da`（1631 passed）、P0001.9.6 已作为 `afc0196`�
 - 待办：harness 侧修复 private-link 生命周期（listenKey ACTIVE + continuity）后重跑真实 Testnet cold-start（§六），
   以取得 A/B/C verdict。
 - 测试：全量 1772 passed / 0 failed / 24 skipped；未 commit。
+
+### P0001.9.7.1 / P0001.9.7.2 收口
+
+- P0001.9.7.1：**已完成（代码完成 / live happy-path deferred）**，真实 Testnet verdict = C（fail closed，第二笔写零网络调用）。
+- P0001.9.7.2：**已完成**（price/quantity Decimal normalization ownership = 执行边界显式配置的归一化步骤）。
+- 短 Testnet execution smoke：**PASS**（一笔 post-only 被接受 → cancel → 0 挂单 / 0 持仓）。
+- 全量测试 1790 passed / 0 failed / 24 skipped；`currentProposal = null`；未 push；未跑 30 分钟策略表现测试。

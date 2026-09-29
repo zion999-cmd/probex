@@ -1550,3 +1550,20 @@ harness（仓库外）新增：private 心跳（pump + 每 20 s `refresh_snapsho
 `refresh_snapshot: PrivateStreamError`（continuity 从未建立、recovery not_recovered）**正确 fail closed**：未签 authority、未发写请求。
 历史多轮已达到"一笔 PostOnly 写尝试 + 第二笔零网络调用"的真实证据，但从未有订单被接受 ⇒ **verdict 仍为 C**（无 A/B）。
 交易所侧复核 open orders 0 / position 0.0000 / leverage 1；未 commit / 未 push；未跑 30 分钟 Phase B。
+
+## 2026-09-29（续 11）：P0001.9.7.1 收口 + P0001.9.7.2 完成 + 短 Testnet execution smoke PASS
+
+- **P0001.9.7.1 = 已完成（代码完成 / live happy-path deferred）**：真实 Testnet 上已实测
+  `BOOTSTRAP_ELIGIBLE` → 签发 → 自然合法 PLACE → **一笔 PostOnly 写尝试** → **第二笔零网络调用**
+  （`ORDERS_USED_EXCEEDS_MAX`）；但从未有订单被接受 ⇒ 无 private 事件 ⇒ 无 supersede/NORMAL authority。
+  happy path deferred（本机网络层不稳定：WS 重连 / `refresh_snapshot: PrivateStreamError` / 代理超时）。
+- **P0001.9.7.2 新增并完成（order price/qty Decimal normalization ownership）**：
+  `execution/normalization.py`（Decimal 量化 + 舍入模式必须显式）+ connector 侧 `normalizer_from_rules`；
+  adapter 仅在显式注入 normalizer 时归一（默认仍不 round，D-048 不变），
+  且**归一化先于本地规则校验**（否则校验用未归一的 float ⇒ `price_not_on_tick`）。
+- **短 Testnet execution smoke = PASS**：raw `83692.64968206566` → 归一 `83692.6` →
+  `CONFIRMED_ACCEPTED`（exchange id 28609115773）→ cancel → open orders 0 / position 0.0（无 POSITION_REMAINS）。
+- 全量测试 **1790 passed / 0 failed / 24 skipped**。
+- 阶段提交：`1822be7`（P0001.9.7 + P0001.9.7.1）与本次 P0001.9.7.2 提交；未 push。
+- `context/status.json.currentProposal = null`（两个 Proposal 均已完成，无切换授权）。
+- 未跑 30 分钟策略表现测试。
