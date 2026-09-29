@@ -264,3 +264,236 @@ class RealFeedSlice2Test(ProductRuntimeTest):
         paper = self.feed_profile(RuntimeMode.PAPER)
         self.assertEqual(replay.feed.event_store, paper.feed.event_store)       # 同一市场数据来源
         self.assertIsNot(replay.mode, paper.mode)
+
+
+class AccountingFactsStep4Test(ProductRuntimeTest):
+    """Step 4 守卫：accounting 接线后 snapshot 必须 200；callable/对象不得进入产品 schema。"""
+
+    def accounting_profile(self):
+        from runtime.accounting_facts import AccountingFactsProvider
+        from runtime.assembly import RuntimeProfile
+
+        return RuntimeProfile(symbol="BTCUSDT",
+                              config_entries=self.cfg + (
+                                  ConfigEntry(name="accounting.initial_balance",
+                                              source=ConfigSource.CLI, value=Fact.of(10_000.0)),
+                                  ConfigEntry(name="accounting.timeline_capacity",
+                                              source=ConfigSource.CLI, value=Fact.of(50))),
+                              run_registry_dir=str(self.tmp / "runs-acct"))
+
+    def test_snapshot_is_200_when_accounting_is_wired(self) -> None:
+        runtime = ProductRuntime(profile=self.accounting_profile())
+        runtime.start()
+        try:
+            snap = runtime.service.snapshot()
+            self.assertTrue(snap.portfolio.equity.known)
+            self.assertEqual(snap.portfolio.equity.value, 10_000.0)
+            self.assertEqual(snap.health.accounting.value, "HEALTHY")
+        finally:
+            runtime.stop()
+
+    def test_snapshot_serializes_without_callables_or_unknown_types(self) -> None:
+        from product.serialization import snapshot_to_json
+
+        runtime = ProductRuntime(profile=self.accounting_profile())
+        runtime.start()
+        try:
+            text = snapshot_to_json(runtime.service.snapshot())
+        finally:
+            runtime.stop()
+        self.assertIn('"equity"', text)
+        self.assertNotIn("method", text)
+
+    def test_equity_as_method_is_called_explicitly(self) -> None:
+        from runtime.accounting_facts import AccountingFactsProvider
+
+        class MethodEquity:
+            @property
+            def balance(self) -> float:
+                return 500.0
+
+            def equity(self) -> float:
+                return 750.0
+
+            def realized_trade_pnl(self) -> float:
+                return 12.5
+
+            def unrealized_pnl(self) -> float:
+                return 5.0
+
+            def position(self, symbol: str) -> object:  # noqa: ARG002
+                return type("P", (), {"qty": 0.0})()
+
+            @property
+            def baseline_applied(self) -> bool:
+                return True
+
+            def mark_timestamp(self, symbol: str):  # noqa: ARG002
+                return None
+
+        facts = AccountingFactsProvider(accounting=MethodEquity(), symbol="BTCUSDT",
+                                       clock=lambda: 1_000).facts()
+        self.assertTrue(facts.equity.known)
+        self.assertEqual(facts.equity.value, 750.0)
+        self.assertEqual(facts.unrealized_pnl.value, 5.0)
+        self.assertEqual(facts.baseline_state.value, "APPLIED")
+
+    def test_unsupported_types_become_unknown_and_do_not_raise(self) -> None:
+        from runtime.accounting_facts import AccountingFactsProvider
+        from product.types import Fact
+
+        class Hostile:
+            equity = lambda self: object()          # noqa: E731 - 返回对象实例（不允许进入 schema）
+
+            @property
+            def balance(self) -> Fact:
+                return Fact.of(1.0)                 # 返回 Fact 实例（非标量；同样不允许）
+
+            def position(self, symbol: str):        # noqa: ARG002
+                raise RuntimeError("no position")
+
+        facts = AccountingFactsProvider(accounting=Hostile(), symbol="BTCUSDT",
+                                        clock=lambda: 1_000).facts()
+        self.assertFalse(facts.equity.known)
+        self.assertIn("unsupported type", facts.equity.reason)
+        self.assertFalse(facts.available_balance.known)
+        self.assertTrue(facts.anomalies)
+
+    def test_unknown_facts_still_produce_a_valid_snapshot(self) -> None:
+        from product.serialization import snapshot_to_json
+
+        class Empty:
+            def position(self, symbol: str) -> object:  # noqa: ARG002
+                return type("P", (), {"qty": None})()
+
+            def mark_timestamp(self, symbol: str):       # noqa: ARG002
+                return None
+
+        from runtime.accounting_facts import AccountingFactsProvider
+
+        runtime = ProductRuntime(profile=self.accounting_profile())
+        runtime.start()
+        try:
+            runtime._accounting_provider = AccountingFactsProvider(  # noqa: SLF001
+                accounting=Empty(), symbol="BTCUSDT", clock=lambda: 1_000)
+            text = snapshot_to_json(runtime.service.snapshot())
+        finally:
+            runtime.stop()
+        self.assertIn('"known": false', text)
+
+
+class AccountSamplingStep4bTest(ProductRuntimeTest):
+    """Step 4b 守卫：account sampling 只转发既有事实；失败不打断 feed；未知字段不变 0。"""
+
+    def feed_profile_with_accounting(self, *, hostile: bool = False):
+        import json as _json
+
+        from runtime.assembly import FeedProfile
+        from tests import scenarios
+        from tests.support import write_store
+
+        store = self.tmp / "events.jsonl"
+        write_store(store, scenarios.reference_events())
+        (self.tmp / "profile.json").write_text(_json.dumps({
+            "projection.window_ms": 600_000, "projection.bucket_ms": 1_000,
+            "projection.max_points": 200, "projection.price_levels": 5,
+            "projection.history_capacity": 500, "projection.view_depth": 10}), encoding="utf-8")
+        return RuntimeProfile(symbol="BTCUSDT", config_entries=self.cfg + (
+            ConfigEntry(name="accounting.initial_balance", source=ConfigSource.CLI, value=Fact.of(10_000.0)),
+            ConfigEntry(name="accounting.timeline_capacity", source=ConfigSource.CLI, value=Fact.of(100))),
+            mode=RuntimeMode.REPLAY, run_registry_dir=str(self.tmp / "runs-acct-feed"),
+            feed=FeedProfile(event_store=str(store), window_ms=600_000, bucket_ms=1_000,
+                             max_points=200, price_levels=5, history_capacity=500, view_depth=10))
+
+    def feed_profile(self, mode: RuntimeMode):
+        """无 accounting 的 feed profile（用于"未接线语义不变"的守卫）。"""
+        import json as _json
+
+        from runtime.assembly import FeedProfile
+        from tests import scenarios
+        from tests.support import write_store
+
+        store = self.tmp / "events-plain.jsonl"
+        write_store(store, scenarios.reference_events())
+        (self.tmp / "profile-plain.json").write_text(_json.dumps({
+            "projection.window_ms": 600_000, "projection.bucket_ms": 1_000,
+            "projection.max_points": 200, "projection.price_levels": 5,
+            "projection.history_capacity": 500, "projection.view_depth": 10}), encoding="utf-8")
+        return RuntimeProfile(symbol="BTCUSDT", config_entries=self.cfg, mode=mode,
+                              run_registry_dir=str(self.tmp / f"runs-plain-{mode.value}"),
+                              feed=FeedProfile(event_store=str(store), window_ms=600_000, bucket_ms=1_000,
+                                               max_points=200, price_levels=5, history_capacity=500,
+                                               view_depth=10))
+
+    def provider_stats(self, runtime) -> dict:
+        provider = runtime._feed_provider                                   # noqa: SLF001
+        return provider.stats if provider is not None else {}
+
+    def run_until_done(self, runtime) -> None:
+        deadline = __import__("time").time() + 8
+        while __import__("time").time() < deadline and not self.provider_stats(runtime).get("completed"):
+            __import__("time").sleep(0.05)
+
+    def test_portfolio_timeline_gets_points_and_matches_accounting_equity(self) -> None:
+        runtime = ProductRuntime(profile=self.feed_profile_with_accounting())
+        runtime.start()
+        self.run_until_done(runtime)
+        try:
+            samples = runtime.service.account_timeline_view().samples()
+            self.assertGreater(len(samples), 0)
+            self.assertEqual(runtime.service.snapshot().portfolio.equity.value,
+                             runtime._accounting_provider.facts().equity.value)  # noqa: SLF001
+            self.assertEqual(samples[-1].equity, 10_000.0)
+            # 未知字段不得变成 0
+            self.assertIsNone(samples[-1].position_qty)
+            self.assertIsNone(samples[-1].exposure_total)
+        finally:
+            runtime.stop()
+
+    def test_unknown_account_fields_stay_unknown_in_the_projection(self) -> None:
+        from product.account_timeline import project_account_timeline
+        from product.market_projection import MarketProjectionConfig
+
+        runtime = ProductRuntime(profile=self.feed_profile_with_accounting())
+        runtime.start()
+        self.run_until_done(runtime)
+        try:
+            timeline = project_account_timeline(
+                runtime.service.account_timeline_view().samples(),
+                config=MarketProjectionConfig(window_ms=600_000, bucket_ms=1_000, max_points=200,
+                                              price_levels=5))
+            self.assertTrue(timeline.points)
+            point = timeline.points[-1]
+            self.assertTrue(point.equity.known)
+            self.assertFalse(point.position_qty.known)
+            self.assertIsNone(point.position_qty.value)          # 不是 0
+        finally:
+            runtime.stop()
+
+    def test_account_provider_failure_does_not_break_the_feed(self) -> None:
+        runtime = ProductRuntime(profile=self.feed_profile_with_accounting())
+        runtime.start()
+
+        def hostile(now_ms: int) -> object:  # noqa: ARG001
+            raise RuntimeError("sampling blew up")
+
+        runtime._feed_provider.account_provider = hostile     # noqa: SLF001
+        self.run_until_done(runtime)
+        try:
+            stats = self.provider_stats(runtime)
+            self.assertTrue(stats.get("completed"))
+            self.assertGreater(runtime.service.market_history_view().counts["states"], 0)
+            self.assertGreaterEqual(stats.get("account_sampling_errors", 0), 1)
+        finally:
+            runtime.stop()
+        self.assertIs(runtime.service.run_registry_view().load(runtime.run_id).status, RunStatus.COMPLETED)
+
+    def test_without_accounting_provider_semantics_unchanged(self) -> None:
+        runtime = ProductRuntime(profile=self.feed_profile(RuntimeMode.REPLAY))
+        runtime.start()
+        self.run_until_done(runtime)
+        try:
+            self.assertIsNone(runtime.service.account_timeline_view())      # 未接线 ⇒ None（不伪造）
+            self.assertGreater(runtime.service.market_history_view().counts["states"], 0)
+        finally:
+            runtime.stop()

@@ -1793,3 +1793,20 @@ UI HTML 可打开；`/api/v1/actions` 10 个基线 handler 可用；`inspect.sna
 - 仍开放小项（不阻塞）：运行期 snapshot 的 `runtime.data_timestamp` 仍 UNKNOWN（停止时更新）；本 Slice 不驱动策略。
 
 下一步：Slice 3（F-03/F-04/F-05/F-06/F-07：venue facts / policy 注入 / latency 采样 / health facts / Assistant explain+基线动作）。
+
+## 2026-09-29（续 26）：Closure Slice 3（Real Facts + Assistant Wiring）完成并复验
+
+按人类"小步接线 + 每步全量"实施 7 步：`runtime/safety_config.py`（policy/rules/definition/usage 构造，缺键 ⇒ 不构造）、
+`runtime/accounting_facts.py`（稳定只读 accounting 事实：显式取值、只收标量、异常 ⇒ UNKNOWN 不外抛、含 health()）、
+`runtime/provider.py` 账户采样转发、`runtime/assembly.py` 组合注入、`/api/v1/assistant/explain` 只读端点、
+`profiles/trial-local.json`（trial-only，非默认）。
+
+守卫测试 +20（snapshot 200 / equity 方法调用 / hostile 类型 ⇒ UNKNOWN / timeline points>0 且与 accounting 一致 /
+未知字段不变 0 / provider 异常不打断 feed / 无 accounting 语义不变）。全量 **2186 passed / 0 failed / 24 skipped**。
+
+真实 E2E（REPLAY+PAPER）：market timeline 11 states、**portfolio timeline equity=10000**、snapshot equity known + acct health HEALTHY、
+execution limits 定义侧真实、execution health DEGRADED 带 reasons、reconciliation 409→200 且 `reconciliation_duration` samples=1、
+assistant/explain=200、PAPER 未产生订单、SIGTERM ⇒ durable COMPLETED。
+仍 UNKNOWN（保持原样，均有 reason）：venue usage、四个未触达的 latency 阶段、prediction_provider、private_latency。
+
+`context/status.json.currentProposal` 恢复 `null`（Slice 3 完成；Slice 4 时按需回开 `P0001.12.1`）。

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 PATH = "/api/v1/assistant/context"
+EXPLAIN_PATH = "/api/v1/assistant/explain"
 SECTIONS = ()
 
 

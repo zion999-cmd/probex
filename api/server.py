@@ -21,6 +21,7 @@ from api.routes import (
     EXECUTION_SUB_PATHS,
     ACTIONS_PATH,
     ASSISTANT_CONTEXT_PATH,
+    ASSISTANT_EXPLAIN_PATH,
     CAPABILITIES_PATH,
     FACTS_PATH,
     PORTFOLIO_TIMELINE_PATH,
@@ -123,7 +124,7 @@ class ProductApiHandler(BaseHTTPRequestHandler):
             api_read=tuple(sorted([*ROUTES, SNAPSHOT_PATH, REPORT_PATH, METRICS_PATH, RUNS_PATH,
                                    RUNS_COMPARE_PATH, FACTS_PATH, PORTFOLIO_TIMELINE_PATH,
                                    ACTIONS_PATH, ACTIONS_AUDIT_PATH, ASSISTANT_CONTEXT_PATH,
-                                   *sorted(EXECUTION_SUB_PATHS),
+                                   ASSISTANT_EXPLAIN_PATH, *sorted(EXECUTION_SUB_PATHS),
                                    MARKET_TIMELINE_PATH, MARKET_DEPTH_PATH, MARKET_TRADES_PATH,
                                    MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH])),
             cli_commands=COMMAND_SPEC,
@@ -407,6 +408,21 @@ class ProductApiHandler(BaseHTTPRequestHandler):
                               "context": context.as_payload(),
                               "suggested_actions": list(assistant.suggested_actions(context))})
 
+    def _serve_assistant_explain(self, query: str) -> None:
+        """只读 explain（P0001.12.3 的确定性实现；不引入 LLM）。"""
+        assistant = self.service.assistant_view()
+        if assistant is None:
+            self._error(503, "assistant_unavailable", "no assistant service is wired")
+            return
+        params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
+        kind = params.get("kind", "order")
+        identity = params.get("identity", "")
+        if not identity:
+            self._error(400, "missing_identity", "explain requires identity=<id>")
+            return
+        self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE,
+                              "explanation": assistant.explain(kind, identity)})
+
     def _serve_action_invoke(self, action_id: str, body: dict) -> None:
         """执行一个受控 action：状态通过 body.status 表达（HTTP 码只区分类别）。"""
         gateway = self._gateway()
@@ -528,6 +544,9 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         if path == ASSISTANT_CONTEXT_PATH:
             self._serve_assistant_context(query)
             return
+        if path == ASSISTANT_EXPLAIN_PATH:
+            self._serve_assistant_explain(query)
+            return
         if path in EXECUTION_SUB_PATHS:
             self._serve_execution_safety(path)
             return
@@ -570,6 +589,7 @@ class ProductApiHandler(BaseHTTPRequestHandler):
                                                        FACTS_PATH, PORTFOLIO_TIMELINE_PATH,
                                                        ACTIONS_PATH, ACTIONS_AUDIT_PATH,
                                                        ASSISTANT_CONTEXT_PATH,
+    ASSISTANT_EXPLAIN_PATH,
                                                        *sorted(EXECUTION_SUB_PATHS)])})
             return
         module = ROUTES.get(path)

@@ -97,6 +97,9 @@ class MarketFeedProvider:
     engine: FeatureEngine = field(init=False)
     paper_broker: PaperBroker | None = field(default=None, init=False)
     paper_manager: OrderManager | None = field(default=None, init=False)
+    #: composition root 注入：真实账户采样（复用既有 accounting 事实）
+    account_provider: Callable[[int], object | None] | None = None
+    history_account: object | None = None
     _thread: threading.Thread | None = field(default=None, init=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False)
     _stats: dict[str, object] = field(default_factory=dict, init=False)
@@ -168,6 +171,17 @@ class MarketFeedProvider:
                 state = self.engine.on_market_event(event)
                 self.history.feed_snapshot(self._book_snapshot(event.exchange_ts))
                 self.history.feed_state(state)
+                # 账户采样：只转发既有 AccountingFactsProvider 的事实（不重算、不伪造 0、失败不打断 feed）
+                if self.account_provider is not None and self.history_account is not None:
+                    try:
+                        sample = self.account_provider(self.clock())
+                    except Exception as exc:  # noqa: BLE001 - 采样失败不得打断 market feed
+                        self._stats["account_sampling_errors"] = int(
+                            self._stats.get("account_sampling_errors", 0)) + 1
+                        self._stats["account_sampling_last_error"] = type(exc).__name__
+                        sample = None
+                    if sample is not None:
+                        self.history_account.feed(sample)
                 transition = self.book.last_transition
                 if transition is not None:
                     self.history.feed_health(self._health_segment(transition, event.exchange_ts))

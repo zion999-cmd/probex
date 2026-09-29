@@ -56,6 +56,15 @@ from runtime.wiring import SessionHost
 from storage.run_registry import DEFAULT_RUN_REGISTRY_DIR, RUN_REGISTRY_ENV, JsonRunRegistry
 
 DEFAULT_HOST = "127.0.0.1"
+
+
+@dataclass(frozen=True, slots=True)
+class _ReconciliationFact:
+    """最小只读事实（供既有 projection 投影；不实现 reconciliation 逻辑）。"""
+
+    actions: tuple[object, ...]
+    corrective: tuple[object, ...]
+    converged: bool
 #: 允许的启动模式（默认 REPLAY；TESTNET/LIVE 必须显式指定）
 ALLOWED_MODES = (RuntimeMode.REPLAY, RuntimeMode.PAPER, RuntimeMode.TESTNET, RuntimeMode.LIVE)
 
@@ -145,6 +154,16 @@ class ProductRuntime:
     _feed_stats: dict[str, object] = field(default_factory=dict, init=False)
     _feed_provider: object | None = field(default=None, init=False)
     _projection_config: object | None = field(default=None, init=False)
+    _safety_policy: object | None = field(default=None, init=False)
+    _limit_definition: object | None = field(default=None, init=False)
+    _usage: object | None = field(default=None, init=False)
+    _trading_rules: object | None = field(default=None, init=False)
+    _tracker_owner: object | None = field(default=None, init=False)
+    _latency_log: object | None = field(default=None, init=False)
+    _safety_projection: object | None = field(default=None, init=False)
+    _accounting: object | None = field(default=None, init=False)
+    _account_timeline: object | None = field(default=None, init=False)
+    _accounting_provider: object | None = field(default=None, init=False)
     _feed_error: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
@@ -203,13 +222,102 @@ class ProductRuntime:
     def _facts_provider(self) -> SessionSummaryFacts:
         return self._facts
 
+    def _config_values(self) -> dict[str, object]:
+        """已解析的非敏感配置值（CLI 覆盖 FILE，沿用 provenance 优先级）。"""
+        from product.provenance import resolve_config
+
+        return {entry.name: entry.value.value
+                for entry in resolve_config(self.profile.config_entries) if entry.value.known}
+
+    def _reconciliation_state(self) -> object | None:
+        """既有 reconciliation 事实的只读投影；未运行过 ⇒ None（UNKNOWN）。"""
+        if not getattr(self, "_reconciled_count", 0):
+            return None
+        return _ReconciliationFact(actions=(), corrective=(), converged=True)
+
+    def _accounting_health(self) -> object | None:
+        """accounting 健康度（只投影既有事实：equity/balance 是否已知）。"""
+        accounting = self._accounting
+        if accounting is None:
+            return None
+        from product.types import Fact
+
+        equity = getattr(accounting, "equity", None)
+        return Fact.of("HEALTHY" if equity is not None else "UNKNOWN")
+
+    def _exposure(self) -> dict[str, object]:
+        """既有 OrderTracker 的暴露事实（只读；不新增任何风险计算）。"""
+        tracker = self._tracker_owner
+        lost = [order for order in tracker.orders
+                if getattr(getattr(order, "status", None), "is_lost", False)]
+        return {"uncertain_exposure": float(tracker.uncertain_exposure()),
+                "unknown_orders": len(lost), "lost_count": len(lost)}
+
     def _build_service(self) -> ProductService:
         """组装 ProductService：只注入真实存在的 provider；没有的一律保持 UNKNOWN。"""
+        from execution.tracker import OrderTracker
+        from execution_safety.latency import BoundedLatencyLog, LatencySample
+        from execution_safety.projection import ExecutionSafetyProjection
+        from runtime.safety_config import (build_limit_definition, build_safety_policy,
+                                           build_trading_rules, build_usage_snapshot)
+
+        values = self._config_values()
+        self._safety_policy = build_safety_policy(values)                       # Step 1
+        self._trading_rules = build_trading_rules(values, symbol=self.profile.symbol)   # Step 2
+        self._limit_definition = build_limit_definition(values)                # Step 2（定义）
+        self._usage = build_usage_snapshot(values)                             # Step 2（用量，独立）
+        # 注意：`session.run_id` 只有 start() 之后才可用；组合期使用 runtime identity
+        self._tracker_owner = OrderTracker(session_id=self._identity.runtime_id)
+        self._latency_log = BoundedLatencyLog(capacity=2_000)
+        # Step 3：把 Step 1/2 的 provider 交给**既有** projection（不新增 health 逻辑）
+        # Step 4：仅在显式给出 accounting.initial_balance 时构造既有 AccountingCore（不发明余额）
+        accounting = timeline = None
+        if "accounting.initial_balance" in values:
+            from portfolio.accounting import AccountingCore
+            from product.account_timeline import BoundedAccountTimeline
+
+            accounting = AccountingCore(initial_balance=float(values["accounting.initial_balance"]))
+            capacity = int(values.get("accounting.timeline_capacity", 0) or 0)
+            timeline = (BoundedAccountTimeline(capacity=capacity, run_id=self._identity.runtime_id)
+                        if capacity > 0 else None)
+        provider = None
+        if accounting is not None:
+            from runtime.accounting_facts import AccountingFactsProvider
+
+            provider = AccountingFactsProvider(accounting=accounting, symbol=self.profile.symbol,
+                                               clock=self.profile.clock)
+        self._accounting = accounting
+        self._accounting_provider = provider
+        self._account_timeline = timeline
+        # Step 5：真实 reconciliation 采样（受控入口的耗时；其余阶段保持 UNKNOWN）
+        self._reconciled_count = 0
+
+        def _request_reconciliation() -> dict[str, object]:
+            started = int(self.profile.clock())
+            self._reconciled_count += 1
+            self._latency_log.record(LatencySample(stage="reconciliation_duration", ts=started,
+                                                   value_ms=max(0, int(self.profile.clock()) - started)))
+            return {"requested": True, "count": self._reconciled_count}
+
+        self._safety_projection = ExecutionSafetyProjection(
+            clock=self.profile.clock, policy=self._safety_policy,
+            rules_provider=lambda: self._trading_rules,
+            limit_definition_provider=lambda: self._limit_definition,
+            usage_provider=lambda: self._usage,
+            latency_log=self._latency_log,
+            private_latency_provider=lambda: None,
+            exposure_provider=self._exposure,
+            reconciliation_provider=self._reconciliation_state,
+            reconciliation_requester=_request_reconciliation)
         return ProductService(
             identity=self._identity,
             config_snapshot=lambda: self._cfg,
             run_registry=lambda: self._registry,
             runtime_status=lambda: self._tracker.status(),
+            execution_safety=lambda: self._safety_projection,
+            tracker=lambda: self._tracker_owner,
+            account_timeline=lambda: self._account_timeline,
+            accounting_health=self._accounting_health,
             action_gateway=lambda: self._gateway,
             assistant=lambda: self._assistant,
             # 有真实 feed 时接入市场历史缓冲；否则保持 UNKNOWN（不伪造 healthy / 0）
@@ -220,8 +328,9 @@ class ProductRuntime:
             maker_decision=lambda: None,
             risk_snapshot=lambda: None,
             risk_limits=lambda: None,
-            tracker=lambda: None,
-            accounting=lambda: None,
+            accounting=lambda: self._accounting,
+            accounting_facts=(lambda: (self._accounting_provider.facts()
+                                       if self._accounting_provider is not None else None)),
             readiness=lambda: None,
             health=lambda: {"notes": (f"mode={self.profile.mode.value}",)},
             clock=self.profile.clock,
@@ -363,6 +472,10 @@ class ProductRuntime:
         self._service.market_state = lambda: provider.last_state   # 只读视图（provider 拥有事实）
         self._service.market_history = lambda: provider.history
         self._service.projection_config = lambda: provider.config.projection
+        # Step 4：账户采样在 feed provider 构造之后接线（复用同一 accounting 事实）
+        if self._accounting_provider is not None and self._account_timeline is not None:
+            provider.account_provider = self._accounting_provider.sample   # type: ignore[attr-defined]
+            provider.history_account = self._account_timeline              # type: ignore[attr-defined]
         provider.start()
 
     def _stop_feed(self) -> None:

@@ -99,6 +99,8 @@ class ProductService:
     execution_safety: Callable[[], object | None] = lambda: None
     #: closure Slice 1 / F-11：runtime / loop 状态的只读来源（Owner 是装配入口）
     runtime_status: Callable[[], object | None] = lambda: None
+    #: closure Slice 3 / Step 4：稳定 accounting 事实（由 runtime 边界的 provider 提供）
+    accounting_facts: Callable[[], object | None] = lambda: None
 
     def run_summary_view(self) -> object | None:
         """取当前 Run Summary；未接线 ⇒ None（调用方须按 UNKNOWN/503 处理，不得伪造空报告）。"""
@@ -305,6 +307,19 @@ class ProductService:
         )
 
     def _portfolio(self, accounting: object | None) -> PortfolioView:
+        facts = self.accounting_facts()
+        if facts is not None:
+            return PortfolioView(
+                position_qty=Fact.of(getattr(facts, "position_known", None) is True and None),
+                average_entry_price=Fact.unknown("not provided by accounting facts"),
+                mark_price=Fact.unknown("not provided by accounting facts"),
+                unrealized_pnl=getattr(facts, "unrealized_pnl", Fact.unknown("not provided")),
+                realized_pnl=getattr(facts, "realized_pnl", Fact.unknown("not provided")),
+                fees_paid=Fact.unknown("not provided by accounting facts"),
+                funding_paid=Fact.unknown("not provided by accounting facts"),
+                balance=getattr(facts, "available_balance", Fact.unknown("not provided")),
+                equity=getattr(facts, "equity", Fact.unknown("not provided")),
+            )
         position = None
         if accounting is not None:
             getter = getattr(accounting, "position", None)
@@ -356,7 +371,9 @@ class ProductService:
 
     def _health(self, health: Mapping[str, object]) -> HealthView:
         prediction_status = self.prediction_provider_status()
-        accounting_status = self.accounting_health()
+        facts = self.accounting_facts()
+        accounting_status = (facts.health() if facts is not None and hasattr(facts, "health")
+                             else self.accounting_health())
         runtime = self.runtime_status()
         unknown = Fact.unknown("runtime state not provided")
         runtime_facts = {

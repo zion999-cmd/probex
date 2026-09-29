@@ -1,0 +1,76 @@
+{
+  "profile.name": "trial-local",
+  "profile.disclaimer": "LOCAL TRIAL ONLY - not for TESTNET/LIVE, not a default policy; thresholds are operator-supplied trial values",
+  "safety.near_limit_ratio": 0.25,
+  "safety.exhausted_ratio": 0.05,
+  "safety.order_rate_near_limit_ratio": 0.25,
+  "safety.venue_facts_max_age_ms": 60000,
+  "safety.latency_min_samples": 1,
+  "safety.latency_window_ms": 900000,
+  "safety.reconciliation_required_after_unknown": true,
+  "safety.latency_budget_ms": {
+    "decision_to_submit": 250,
+    "submit_to_ack": 750,
+    "cancel_to_ack": 750,
+    "event_receive_lag": 500,
+    "reconciliation_duration": 5000
+  },
+  "safety.health_rules": {
+    "rate_limit_state": {
+      "severity": "DEGRADED",
+      "downgrades": true,
+      "required": true
+    },
+    "venue_facts_state": {
+      "severity": "DEGRADED",
+      "downgrades": true,
+      "required": true
+    },
+    "latency_state": {
+      "severity": "DEGRADED",
+      "downgrades": true,
+      "required": true
+    },
+    "private_latency": {
+      "severity": "DEGRADED",
+      "downgrades": true,
+      "required": false
+    },
+    "uncertain_exposure": {
+      "severity": "BLOCKING",
+      "downgrades": true,
+      "required": true
+    },
+    "unknown_lost_orders": {
+      "severity": "DEGRADED",
+      "downgrades": true,
+      "required": true
+    },
+    "reconciliation_state": {
+      "severity": "BLOCKING",
+      "downgrades": true,
+      "required": false
+    }
+  },
+  "venue.rules.tick_size": 0.1,
+  "venue.rules.step_size": 0.0001,
+  "venue.rules.min_qty": 0.0001,
+  "venue.rules.max_qty": 100,
+  "venue.rules.min_notional": 50,
+  "venue.definition.request_weight_limit": 2400,
+  "venue.definition.order_rate_limit": 300,
+  "venue.definition.max_orders": 200,
+  "venue.definition.window_ms": 60000,
+  "venue.definition.source": "trial-local:operator-supplied exchangeInfo.rateLimits",
+  "venue.usage.source": "trial-local:no live usage headers in replay",
+  "accounting.initial_balance": 10000,
+  "accounting.timeline_capacity": 500,
+  "projection.window_ms": 600000,
+  "projection.bucket_ms": 1000,
+  "projection.max_points": 200,
+  "projection.price_levels": 5,
+  "projection.history_capacity": 500,
+  "projection.view_depth": 10,
+  "venue.rules.min_price": 1.0,
+  "venue.rules.max_price": 1000000.0
+}

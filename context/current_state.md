@@ -583,3 +583,14 @@ P0001.9.5 已作为 `a2ab8da`（1631 passed）、P0001.9.6 已作为 `afc0196`�
   `runtime/assembly.py` 仅为 composition root；REPLAY 与 PAPER 真实跑通，`/runs` 运行中 `RUNNING`、timeline 有真实事实、SIGTERM ⇒ `COMPLETED`。
 - CLI：`--event-store` 必填（REPLAY/PAPER），bounds 来自 `--config-file`。
 - 测试：全量 **2165 passed / 0 failed / 24 skipped**。
+
+### Closure Slice 3 — Real Facts + Assistant Wiring（已完成并复验）
+
+- `runtime/safety_config.py`：policy / rules / limit definition / usage 的构造（缺键 ⇒ 不构造，保持 UNKNOWN）。
+- `runtime/accounting_facts.py`：AccountingCore → 稳定只读事实（显式取值、只收标量、异常 ⇒ UNKNOWN 不外抛、`health()`）；
+  assembly 仅注入 provider（不再拼字段）；仅在显式 `accounting.initial_balance` 时构造。
+- `runtime/provider.py`：每轮 market state 后转发 account 事实到 `BoundedAccountTimeline`（失败隔离、不伪造 0）。
+- `/api/v1/assistant/explain`（确定性 explain，无 LLM）；`profiles/trial-local.json`（trial-only、非默认）。
+- 真实 E2E：REPLAY + PAPER 均通过（market 11 states / portfolio equity 10000 / limits 真实 / health DEGRADED 带 reasons /
+  reconciliation_duration samples=1 / explain 200 / SIGTERM ⇒ COMPLETED）。
+- 测试：全量 **2186 passed / 0 failed / 24 skipped**。

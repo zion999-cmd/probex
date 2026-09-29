@@ -35,6 +35,9 @@ class ExecutionSafetyProjection:
     policy: ExecutionSafetyPolicy | None = None
     rules_provider: Callable[[], object | None] = lambda: None
     rate_facts_provider: Callable[[], VenueRateLimitFacts | None] = lambda: None
+    #: 限额**定义**（exchangeInfo/rateLimits 类事实）与当前**用量**（响应 header/计数器）分开注入
+    limit_definition_provider: Callable[[], object | None] = lambda: None
+    usage_provider: Callable[[], object | None] = lambda: None
     latency_log: BoundedLatencyLog = field(default_factory=BoundedLatencyLog)
     private_latency_provider: Callable[[], object | None] = lambda: None
     exposure_provider: Callable[[], Mapping[str, object]] = dict
@@ -45,6 +48,21 @@ class ExecutionSafetyProjection:
 
     # ------------------------------------------------------------------ 事实
 
+    def _rate_facts(self) -> VenueRateLimitFacts | None:
+        """定义 + 用量合成只读视图（供应商未提供时回落到单一 provider）。"""
+        provided = self.rate_facts_provider()
+        if provided is not None:
+            return provided
+        from execution_safety.venue import VenueLimitDefinition, VenueRateLimitFacts, VenueUsageSnapshot
+
+        definition = self.limit_definition_provider()
+        usage = self.usage_provider()
+        if definition is None and usage is None:
+            return None
+        return VenueRateLimitFacts.combine(
+            definition=definition if isinstance(definition, VenueLimitDefinition) else None,
+            usage=usage if isinstance(usage, VenueUsageSnapshot) else None)
+
     def limits(self) -> VenueLimitState:
         rules = self.rules_provider()
         if rules is None:
@@ -54,13 +72,15 @@ class ExecutionSafetyProjection:
             return _State(tick_size=unknown, step_size=unknown, min_qty=unknown, max_qty=unknown,
                           min_notional=unknown, max_orders=unknown, request_weight_limit=unknown,
                           order_rate_limit=unknown, source="unavailable", observed_at=unknown, age_ms=unknown)
-        return venue_limit_state(rules=rules, rate=self.rate_facts_provider(),  # type: ignore[arg-type]
-                                 now_ms=int(self.clock()))
+        definition = self.limit_definition_provider()
+        return venue_limit_state(rules=rules, rate=self._rate_facts(),  # type: ignore[arg-type]
+                                 now_ms=int(self.clock()),
+                                 definition=definition if definition is not None else None)  # type: ignore[arg-type]
 
     def rate_limits(self) -> GovernorState | None:
         if self.policy is None:
             return None
-        return evaluate_governor(policy=self.policy, facts=self.rate_facts_provider(),
+        return evaluate_governor(policy=self.policy, facts=self._rate_facts(),
                                  now_ms=int(self.clock()))
 
     def latency(self) -> LatencyState | None:
