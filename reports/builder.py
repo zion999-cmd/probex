@@ -43,6 +43,8 @@ def build_run_summary(
     config_fingerprints: Mapping[str, object] | None = None,
     ended_at: Milliseconds | None = None,
     data_range: tuple[int, int] | None = None,
+    config_id: str | None = None,
+    metrics_payload: dict[str, object] | None = None,
 ) -> RunSummary:
     """汇总一轮运行的事实（计数来自 telemetry 记录，不重算策略）。"""
     market_healthy_rounds = sum(1 for t in telemetry if bool(getattr(t, "market_healthy", False)))
@@ -75,6 +77,7 @@ def build_run_summary(
             config_fingerprints=fingerprints,
             data_range=(Fact.unknown("data range not provided") if data_range is None
                         else Fact.of([int(data_range[0]), int(data_range[1])])),
+            config_id=(Fact.unknown("no config snapshot bound") if config_id is None else Fact.of(config_id)),
         ),
         duration_ms=duration,
         market_health={"healthy_rounds": market_healthy_rounds,
@@ -97,6 +100,7 @@ def build_run_summary(
                         else Fact.of(final_position)),
         readiness_blockers=tuple(str(r) for r in readiness_blocks),
         anomalies=tuple(str(a) for a in anomalies) + tuple(r for r in authority_reasons if r),
+        metrics=dict(metrics_payload or {}),
     )
 
 

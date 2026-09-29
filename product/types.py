@@ -15,7 +15,7 @@ from enum import Enum
 from market.events.types import Milliseconds
 
 #: 产品 schema 版本（API 契约版本；内部 Python 类型不得裸序列化）
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 #: 未知原因码（用于 `Fact.reason`）
 UNKNOWN_NOT_PROVIDED = "not_provided"
@@ -83,6 +83,73 @@ class RuntimeIdentity:
             raise TypeError("RuntimeIdentity.started_at must be an int (ms)")
         if not isinstance(self.data_timestamp, Fact):
             raise TypeError("RuntimeIdentity.data_timestamp must be a Fact")
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigEntryView:
+    """配置条目视图：**只有非敏感值 + secret 引用名**（P0001.11 §1）。"""
+
+    name: str
+    source: str
+    value: Fact
+    secret_ref: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigView:
+    """配置来源视图（`config_id` / `fingerprint` / 来源统计 / secret 引用清单）。"""
+
+    config_id: Fact
+    fingerprint: Fact
+    created_at: Fact
+    sources: dict[str, int] = field(default_factory=dict)
+    secret_refs: tuple[str, ...] = ()
+    entries: tuple[ConfigEntryView, ...] = ()
+
+
+class BlockerOwner(Enum):
+    """blocker 责任 Owner（不是优先级；裁决 D）。"""
+
+    READINESS = "READINESS"
+    RISK = "RISK"
+    STRATEGY = "STRATEGY"
+    ORCHESTRATOR = "ORCHESTRATOR"
+    MARKET = "MARKET"
+    PREDICTION = "PREDICTION"
+
+
+class BlockerSeverity(Enum):
+    """严重度三档（裁决 D）。"""
+
+    BLOCKING = "BLOCKING"
+    DEGRADED = "DEGRADED"
+    INFO = "INFO"
+
+
+@dataclass(frozen=True, slots=True)
+class BlockerView:
+    """统一 blocker 视图（P0001.11 §4；字段由人类裁决固定）。"""
+
+    owner: BlockerOwner
+    reason_code: str
+    severity: BlockerSeverity
+    message: str
+    source_ref: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.owner, BlockerOwner):
+            raise TypeError("BlockerView.owner must be a BlockerOwner")
+        if not isinstance(self.severity, BlockerSeverity):
+            raise TypeError("BlockerView.severity must be a BlockerSeverity")
+        for name in ("reason_code", "message", "source_ref"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"BlockerView.{name} must be a non-empty string")
+
+    @property
+    def key(self) -> str:
+        """去重键 = owner + reason_code + source_ref（裁决 D）。"""
+        return f"{self.owner.value}|{self.reason_code}|{self.source_ref}"
 
 
 @dataclass(frozen=True, slots=True)

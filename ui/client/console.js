@@ -3,7 +3,7 @@ import { fetchSnapshot } from "/ui/client/api.js";
 import { escapeHtml, fact } from "/ui/client/render.js";
 
 const PAGES = ["overview", "market", "prediction", "strategy", "risk", "orders", "portfolio",
-               "readiness", "evidence", "runs"];
+               "readiness", "evidence", "runs", "metrics", "capabilities"];
 export const POLL_INTERVAL_MS = 2000;
 
 function currentSlug() {

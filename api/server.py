@@ -15,11 +15,21 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from api.routes import REPORT_PATH, ROUTES
+from api.capabilities import build_capabilities_manifest
+from api.routes import (
+    CAPABILITIES_PATH,
+    METRICS_PATH,
+    REPORT_PATH,
+    ROUTES,
+    RUNS_COMPARE_PATH,
+    RUNS_PATH,
+)
 from product.serialization import snapshot_to_jsonable
 from product.service import ProductService
+from product.types import SCHEMA_VERSION
 
 UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
+SCHEMA_VERSION_VALUE = SCHEMA_VERSION
 UI_PATH = UI_ROOT / "app" / "index.html"
 REPORT_MARKDOWN = "markdown"
 REPORT_JSON = "json"
@@ -92,6 +102,67 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         self._send_text(200, target.read_text(encoding="utf-8"), content_type=content_type)
         return True
 
+    def _serve_capabilities(self, query: str) -> None:
+        """能力清单：从路由表 + CLI 注册表生成（避免手写漂移）。"""
+        from cli.main import COMMAND_SPEC, EXIT_CODES
+
+        manifest = build_capabilities_manifest(
+            schema_version=SCHEMA_VERSION_VALUE,
+            api_read=tuple(sorted([*ROUTES, SNAPSHOT_PATH, REPORT_PATH, METRICS_PATH, RUNS_PATH,
+                                   RUNS_COMPARE_PATH])),
+            cli_commands=COMMAND_SPEC,
+            exit_codes=EXIT_CODES,
+        )
+        self._send_json(200, manifest)
+
+    def _serve_metrics(self) -> None:
+        """Metric Contract 定义（UI 只读定义与报告值，不得自行计算）。"""
+        from reports.metrics import definitions_payload
+
+        self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE,
+                              "definitions": list(definitions_payload())})
+
+    def _registry(self):
+        registry = self.service.run_registry_view()
+        if registry is None:
+            self._error(503, "run_registry_unavailable",
+                        "no run registry is wired (runs are UNKNOWN, not empty)")
+            return None
+        return registry
+
+    def _serve_runs(self, path: str, query: str) -> None:
+        """Run Registry 只读端点：列表 / 单个 / 对比。"""
+        registry = self._registry()
+        if registry is None:
+            return
+        try:
+            if path == RUNS_PATH:
+                records = registry.list()
+                self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE,
+                                      "runs": [registry._record_payload(record) for record in records]})
+                return
+            if path == RUNS_COMPARE_PATH:
+                params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
+                left, right = params.get("left", ""), params.get("right", "")
+                if not left or not right:
+                    self._error(400, "missing_run_ids", "left and right run ids are required")
+                    return
+                comparison = registry.compare(left, right)
+                from product.serialization import to_jsonable
+
+                self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE,
+                                      "comparison": to_jsonable(comparison)})
+                return
+            run_id = path[len(RUNS_PATH) + 1:]
+            record = registry.load(run_id)
+            if record is None:
+                self._error(NOT_FOUND, "unknown_run", run_id)
+                return
+            self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE,
+                                  "run": registry._record_payload(record)})
+        except Exception as exc:  # noqa: BLE001 - 注册表错误必须显式，不返回空壳
+            self._error(503, "run_registry_error", type(exc).__name__)
+
     def _serve_report(self, query: str) -> None:
         """只读 Run Summary（json 默认 / markdown）。"""
         try:
@@ -127,6 +198,15 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         if path == REPORT_PATH:
             self._serve_report(query)
             return
+        if path == CAPABILITIES_PATH:
+            self._serve_capabilities(query)
+            return
+        if path == METRICS_PATH:
+            self._serve_metrics()
+            return
+        if path == RUNS_PATH or path == RUNS_COMPARE_PATH or path.startswith(f"{RUNS_PATH}/"):
+            self._serve_runs(path, query)
+            return
         if path in ("/", "/index.html"):
             if not UI_PATH.exists():
                 self._error(NOT_FOUND, "ui_not_found", str(UI_PATH))
@@ -144,7 +224,8 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         if path == SCHEMA_VERSION_PATH:
             self._send_json(200, {"schema_version": snapshot["schema_version"],
                                   "endpoints": sorted([*ROUTES, SNAPSHOT_PATH, SCHEMA_VERSION_PATH,
-                                                       REPORT_PATH])})
+                                                       REPORT_PATH, CAPABILITIES_PATH, METRICS_PATH,
+                                                       RUNS_PATH, RUNS_COMPARE_PATH])})
             return
         module = ROUTES.get(path)
         if module is None:

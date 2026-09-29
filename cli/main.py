@@ -46,6 +46,25 @@ SLICE_COMMANDS: dict[str, tuple[str, str | None]] = {
     "inspect": ("/api/v1/snapshot", None),
 }
 REPORT_PATH = "/api/v1/reports/run-summary"
+#: P0001.11 端点（与 api.routes 的常量必须一致；由 tests/unit/test_cli.py 固定，防手写漂移）
+CAPABILITIES_PATH = "/api/v1/capabilities"
+METRICS_PATH = "/api/v1/metrics"
+RUNS_PATH = "/api/v1/runs"
+RUNS_COMPARE_PATH = "/api/v1/runs/compare"
+BLOCKERS_PATH = "/api/v1/blockers"
+
+#: 机器可读命令表（供 `GET /api/v1/capabilities` 生成；**单一事实来源**）
+COMMAND_SPEC: dict[str, str] = {}
+
+#: 稳定退出码（人类裁决：不改动 0/2/10/11/20/30）
+EXIT_CODES: dict[str, str] = {
+    "0": "success",
+    "2": "invalid arguments",
+    "10": "product API unavailable",
+    "11": "unknown / insufficient evidence",
+    "20": "blocked by policy or readiness",
+    "30": "internal failure",
+}
 
 
 class CliUnavailable(Exception):
@@ -96,6 +115,28 @@ def build_parser() -> argparse.ArgumentParser:
                              help="exit 20 when readiness is blocked (policy/readiness gate)")
         if name == "evidence":
             sub.add_argument("--decision-id", default=None, help="filter trace by decision identity")
+
+    for name, help_text in (("blockers", "unified blockers (why nothing is happening)"),
+                            ("metrics", "metric definitions (formulas and UNKNOWN conditions)"),
+                            ("capabilities", "machine-readable capability manifest"),
+                            ("runs", "list recorded runs")):
+        sub = subparsers.add_parser(name, help=help_text)
+        sub.add_argument("--json", action="store_true")
+        if name == "blockers":
+            sub.add_argument("--strict", action="store_true",
+                             help="exit 20 when any BLOCKING blocker is present")
+        if name == "runs":
+            sub.add_argument("--limit", type=int, default=None)
+
+    run = subparsers.add_parser("run", help="inspect one run / compare two runs")
+    run_sub = run.add_subparsers(dest="run_mode", metavar="mode")
+    show = run_sub.add_parser("show", help="show one run")
+    show.add_argument("run_id")
+    show.add_argument("--json", action="store_true")
+    compare = run_sub.add_parser("compare", help="compare two runs by metric name")
+    compare.add_argument("left")
+    compare.add_argument("right")
+    compare.add_argument("--json", action="store_true")
 
     explain = subparsers.add_parser("explain", help="explain a decision / order")
     explain.add_argument("target", choices=["decision", "order"])
@@ -163,6 +204,81 @@ def main(argv: Sequence[str] | None = None, *, stdout=None, stderr=None,
             if not args.json:
                 stdout.write(f"markdown_hint: {api_url}{REPORT_PATH}?format=markdown\n")
             return EXIT_OK
+
+        if command in ("blockers", "metrics", "capabilities", "runs"):
+            path = {"blockers": BLOCKERS_PATH, "metrics": METRICS_PATH,
+                    "capabilities": CAPABILITIES_PATH, "runs": RUNS_PATH}[command]
+            if command == "runs" and getattr(args, "limit", None):
+                path = f"{path}?limit={int(args.limit)}"
+            payload = fetch(api_url, path, opener=opener)
+            if command == "runs":
+                runs = payload.get("runs") or []
+                _emit({"count": len(runs),
+                       "runs": [{"run_id": run.get("run_id"), "status": run.get("status"),
+                                 "started_at": run.get("started_at"),
+                                 "config_fingerprint": (run.get("config_fingerprint") or {}).get("value")}
+                                for run in runs]} if args.json else
+                      {"count": str(len(runs))}, as_json=args.json, stdout=stdout, stderr=stderr)
+                if not args.json:
+                    for run in runs:
+                        stdout.write(f"- {run.get('run_id')} {run.get('status')} "
+                                     f"started_at={run.get('started_at')}\n")
+                return EXIT_OK
+            if command == "blockers":
+                blockers = payload.get("blockers") or []
+                _emit({"count": len(blockers), "blockers": blockers} if args.json
+                      else {"count": str(len(blockers))}, as_json=args.json, stdout=stdout, stderr=stderr)
+                if not args.json:
+                    for blocker in blockers:
+                        stdout.write(f"- [{blocker.get('severity')}] {blocker.get('owner')} "
+                                     f"{blocker.get('reason_code')} ({blocker.get('source_ref')}): "
+                                     f"{blocker.get('message')}\n")
+                blocking = [b for b in blockers
+                            if isinstance(b, dict) and b.get("severity") == "BLOCKING"]
+                if args.strict and blocking:
+                    stderr.write(f"error: {len(blocking)} BLOCKING blocker(s) present\n")
+                    return EXIT_BLOCKED
+                return EXIT_OK
+            _emit(payload, as_json=args.json, stdout=stdout, stderr=stderr)
+            return EXIT_OK
+
+        if command == "run":
+            mode = getattr(args, "run_mode", None)
+            if mode == "show":
+                try:
+                    payload = fetch(api_url, f"{RUNS_PATH}/{args.run_id}", opener=opener)
+                except CliUnavailable as error:
+                    if "HTTP 404" in str(error):
+                        stderr.write(f"error: unknown run {args.run_id!r}\n")
+                        return EXIT_UNKNOWN
+                    raise
+                run = payload.get("run") or {}
+                _emit(run if args.json else {"run_id": run.get("run_id"), "status": run.get("status"),
+                                             "started_at": str(run.get("started_at"))},
+                      as_json=args.json, stdout=stdout, stderr=stderr)
+                return EXIT_OK
+            if mode == "compare":
+                try:
+                    payload = fetch(api_url, f"{RUNS_COMPARE_PATH}?left={args.left}&right={args.right}",
+                                    opener=opener)
+                except CliUnavailable as error:
+                    if "HTTP 404" in str(error):
+                        stderr.write(f"error: unknown run in comparison {args.left!r} / {args.right!r}\n")
+                        return EXIT_UNKNOWN
+                    raise
+                comparison = payload.get("comparison") or {}
+                _emit(comparison if args.json else
+                      {"left": comparison.get("left_run_id"), "right": comparison.get("right_run_id"),
+                       "metrics": str(len(comparison.get("metrics") or []))},
+                      as_json=args.json, stdout=stdout, stderr=stderr)
+                if not args.json:
+                    for metric in comparison.get("metrics") or []:
+                        delta = metric.get("delta") or {}
+                        stdout.write(f"- {metric.get('name')}: "
+                                     f"{'UNKNOWN' if not delta.get('known') else delta.get('value')}\n")
+                return EXIT_OK
+            stderr.write("error: run requires a mode (show | compare)\n")
+            return EXIT_USAGE
 
         if command == "explain":
             evidence = fetch(api_url, "/api/v1/evidence", opener=opener).get("evidence", {})
@@ -244,5 +360,18 @@ def run() -> None:  # pragma: no cover - console entry
     raise SystemExit(main())
 
 
-__all__ = ["EXIT_BLOCKED", "EXIT_INTERNAL", "EXIT_OK", "EXIT_UNAVAILABLE", "EXIT_UNKNOWN", "EXIT_USAGE",
-           "CliUnavailable", "build_parser", "fetch", "main", "run"]
+COMMAND_SPEC.update({name: path for name, (path, _) in SLICE_COMMANDS.items()})
+COMMAND_SPEC.update({
+    "blockers": BLOCKERS_PATH,
+    "metrics": METRICS_PATH,
+    "capabilities": CAPABILITIES_PATH,
+    "runs": RUNS_PATH,
+    "run show": RUNS_PATH,
+    "run compare": RUNS_COMPARE_PATH,
+    "explain": "/api/v1/evidence",
+    "report run": REPORT_PATH,
+})
+
+__all__ = ["BLOCKERS_PATH", "CAPABILITIES_PATH", "COMMAND_SPEC", "EXIT_BLOCKED", "EXIT_CODES",
+           "EXIT_INTERNAL", "EXIT_OK", "EXIT_UNAVAILABLE", "EXIT_UNKNOWN", "EXIT_USAGE", "METRICS_PATH",
+           "RUNS_COMPARE_PATH", "RUNS_PATH", "CliUnavailable", "build_parser", "fetch", "main", "run"]

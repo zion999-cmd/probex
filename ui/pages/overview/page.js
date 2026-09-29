@@ -1,6 +1,6 @@
-/** Overview 页面（P0001.10.2 §1）：只消费 Product API 切片 `snapshot`。 */
-import { ENDPOINTS, fetchJson, fetchRunSummary, fetchSnapshot } from "/ui/client/api.js";
-import { escapeHtml, fact, factRows, rows, section, table } from "/ui/client/render.js";
+/** Overview（P0001.11）：runtime identity + headline + **统一 blockers** + config provenance。 */
+import { fetchSnapshot } from "/ui/client/api.js";
+import { escapeHtml, fact, factRows, rows, section } from "/ui/client/render.js";
 
 export const title = "Overview";
 export const slug = "overview";
@@ -21,7 +21,6 @@ export async function render() {
     ["market healthy", fact(s.market.healthy)],
     ["market tradeable", fact(s.market.tradeable)],
     ["prediction fresh", fact(s.prediction.freshest)],
-    ["prediction confidence", fact(s.prediction.derived_confidence)],
     ["strategy mode", fact(s.strategy.mode)],
     ["strategy blocked_by", fact(s.strategy.blocked_by)],
     ["risk kill switch", fact(s.risk.kill_switch_mode)],
@@ -31,6 +30,21 @@ export async function render() {
     ["equity", fact(s.portfolio.equity)],
     ["realized pnl", fact(s.portfolio.realized_pnl)],
   ]);
-  return section("Runtime", banner) + section("Headline", headline) +
-    section("Readiness blockers", rows((s.evidence.readiness_blockers || []).map((b, i) => [`blocker ${i + 1}`, `<span class="bad">${escapeHtml(b)}</span>`])) || rows([["blockers", "none"]]));
+  const blockers = (s.blockers || []);
+  const blockerRows = blockers.length
+    ? blockers.map((b, i) => [`${i + 1}. ${b.severity} · ${b.owner}`,
+        `<span class="${b.severity === "BLOCKING" ? "bad" : "unknown"}">${escapeHtml(b.reason_code)}</span> ` +
+        `<span class="k">${escapeHtml(b.source_ref)}</span> ${escapeHtml(b.message || "")}`])
+    : [["blockers", "none"]];
+  const config = s.config || {};
+  return banner ? section("Runtime", banner) : "" +
+    section("Headline", headline) +
+    section("Blockers (unified)", rows(blockerRows)) +
+    section("Config provenance", rows([
+      ["config_id", fact(config.config_id)],
+      ["fingerprint", fact(config.fingerprint)],
+      ["created_at", fact(config.created_at)],
+      ["sources", escapeHtml(JSON.stringify(config.sources || {}))],
+      ["secret refs", escapeHtml((config.secret_refs || []).join(", ") || "none")],
+    ]));
 }

@@ -12,6 +12,11 @@ export const ENDPOINTS = {
   readiness: "/api/v1/readiness",
   evidence: "/api/v1/evidence",
   runSummary: "/api/v1/reports/run-summary",
+  metrics: "/api/v1/metrics",
+  capabilities: "/api/v1/capabilities",
+  blockers: "/api/v1/blockers",
+  runs: "/api/v1/runs",
+  runCompare: "/api/v1/runs/compare",
 };
 
 export async function fetchJson(path) {
@@ -24,6 +29,14 @@ export async function fetchJson(path) {
 
 export async function fetchSnapshot() {
   return fetchJson(ENDPOINTS.snapshot);
+}
+
+export async function fetchOrUnavailable(path) {
+  try {
+    return await fetchJson(path);
+  } catch (error) {
+    return { unavailable: String(error) };
+  }
 }
 
 /** 报告端点：缺失时返回 null（UI 必须显示 UNKNOWN，而不是空报告）。 */

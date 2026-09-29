@@ -9,14 +9,18 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from market.events.types import Milliseconds
 
+from product.blockers import project_blockers
 from product.snapshot import SystemSnapshot
 from product.types import (
     UNKNOWN_NOT_AVAILABLE,
     UNKNOWN_NOT_PROVIDED,
+    BlockerView,
+    ConfigEntryView,
+    ConfigView,
     EvidenceView,
     ExecutionView,
     Fact,
@@ -62,10 +66,20 @@ class ProductService:
     prediction_fresh: Callable[[], bool | None] = lambda: None
     #: Run Summary provider（P0001.10.2 §4）：由已记录事实构造；未接线 ⇒ None（不是空报告）
     run_summary: Callable[[], object | None] = lambda: None
+    #: Config Provenance（P0001.11 §1）：已解析的 provenance metadata（**不含 secret 值**）
+    config_snapshot: Callable[[], object | None] = lambda: None
+    #: Run Registry（P0001.11 §2）：产品数据（与 governance 完全分离）
+    run_registry: Callable[[], object | None] = lambda: None
+    #: 编排层 notes（P0001.11 §4：统一 blocker 投影的输入之一）
+    orchestrator_notes: Callable[[], tuple[str, ...]] = tuple
 
     def run_summary_view(self) -> object | None:
         """取当前 Run Summary；未接线 ⇒ None（调用方须按 UNKNOWN/503 处理，不得伪造空报告）。"""
         return self.run_summary()
+
+    def run_registry_view(self) -> object | None:
+        """取 Run Registry（只读）；未接线 ⇒ None（端点须按 UNKNOWN/503 处理）。"""
+        return self.run_registry()
 
     # ------------------------------------------------------------------ snapshot
 
@@ -81,7 +95,7 @@ class ProductService:
         readiness = self.readiness()
         health = dict(self.health())
 
-        return SystemSnapshot(
+        snapshot = SystemSnapshot(
             generated_at=generated_at,
             runtime=self.identity,
             market=self._market(market_state),
@@ -93,7 +107,11 @@ class ProductService:
             readiness=self._readiness(readiness),
             health=self._health(health),
             evidence=self._evidence(market_state, prediction, decision, readiness, tracker),
+            config=self._config(),
+            blockers=(),
         )
+        # Unified Blockers 是**只读投影**：由已组装的事实推导，再替换回快照（不重排、不丢弃）
+        return replace(snapshot, blockers=self._blockers(snapshot))
 
     # ------------------------------------------------------------------ 各段（纯搬运）
 
@@ -253,6 +271,32 @@ class ProductService:
             uptime_ms=Fact.of(health.get("uptime_ms")),
             notes=tuple(str(n) for n in (health.get("notes") or ())),
         )
+
+    def _config(self) -> ConfigView:
+        """Config Provenance 视图（只有非敏感值 + secret 引用名）。"""
+        snapshot = self.config_snapshot()
+        if snapshot is None:
+            unknown = Fact.unknown("no config snapshot recorded")
+            return ConfigView(config_id=unknown, fingerprint=unknown, created_at=unknown)
+        entries = tuple(
+            ConfigEntryView(name=entry.name, source=entry.source.value, value=entry.value,
+                            secret_ref=entry.secret_ref)
+            for entry in getattr(snapshot, "entries", ())
+        )
+        return ConfigView(
+            config_id=Fact.of(getattr(snapshot, "config_id", None)),
+            fingerprint=Fact.of(getattr(snapshot, "fingerprint", None)),
+            created_at=Fact.of(getattr(snapshot, "created_at", None)),
+            sources=dict(getattr(snapshot, "sources", lambda: {})()) if callable(
+                getattr(snapshot, "sources", None)) else dict(getattr(snapshot, "sources", {}) or {}),
+            secret_refs=tuple(getattr(snapshot, "secret_refs", lambda: ())()) if callable(
+                getattr(snapshot, "secret_refs", None)) else tuple(getattr(snapshot, "secret_refs", ()) or ()),
+            entries=entries,
+        )
+
+    def _blockers(self, snapshot: SystemSnapshot) -> tuple[BlockerView, ...]:
+        """统一 blocker 投影（readiness / risk / strategy / orchestrator / market / prediction）。"""
+        return project_blockers(snapshot=snapshot, orchestrator_notes=tuple(self.orchestrator_notes()))
 
     # ------------------------------------------------------------------ evidence
 

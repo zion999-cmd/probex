@@ -12,6 +12,8 @@ from market.events.types import Milliseconds
 
 from product.types import (
     SCHEMA_VERSION,
+    BlockerView,
+    ConfigView,
     EvidenceView,
     ExecutionView,
     HealthView,
@@ -38,4 +40,6 @@ class SystemSnapshot:
     readiness: ReadinessView
     health: HealthView
     evidence: EvidenceView
+    config: ConfigView
+    blockers: tuple[BlockerView, ...] = ()
     schema_version: str = SCHEMA_VERSION

@@ -38,16 +38,41 @@ class CliTest(unittest.TestCase):
             telemetry=(__import__("tests.unit.test_report_builder", fromlist=["telemetry"]).telemetry(
                 submit=1, ts=1_000),),
             final_position=0.0, realized_pnl=-0.25)
-        cls.server = create_server(service(run_summary=lambda: summary), host="127.0.0.1", port=0)
+        from product.provenance import ConfigEntry, ConfigSource, build_config_snapshot
+        from reports.metrics import compute_metrics, metrics_payload
+        from storage.run_registry import JsonRunRegistry
+        import tempfile
+        from pathlib import Path
+
+        cls.root = Path(tempfile.mkdtemp(prefix="probex-cli-runs-"))
+        registry = JsonRunRegistry(cls.root)
+        config = build_config_snapshot(config_id="cfg-cli",
+                                       entries=[ConfigEntry(name="symbol", source=ConfigSource.CONSTRUCTOR,
+                                                            value=Fact.of("BTCUSDT"))],
+                                       created_at=1_000)
+        metrics = metrics_payload(compute_metrics(owner_facts={"net_pnl": 1.0, "fees": 0.01}))
+        registry.start(runtime=summary.run.runtime, run_id="rt-1", now_ms=1_000, config=config)
+        registry.finalize(run_id="rt-1", ended_at=2_000,
+                          summary={"run": {"run_id": "rt-1"}, "metrics": metrics})
+        summary = build_run_summary(
+            identity=summary.run.runtime, run_id="rt-1", started_at=1_000, final_position=0.0,
+            config_id="cfg-cli", metrics_payload=metrics)
+        cls.server = create_server(
+            service(run_summary=lambda: summary, run_registry=lambda: registry,
+                    config_snapshot=lambda: config, orchestrator_notes=lambda: ("reconciling:x",)),
+            host="127.0.0.1", port=0)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
         cls.api = f"http://127.0.0.1:{cls.server.server_address[1]}"
 
     @classmethod
     def tearDownClass(cls) -> None:
+        import shutil
+
         cls.server.shutdown()
         cls.server.server_close()
         cls.thread.join(timeout=5)
+        shutil.rmtree(cls.root, ignore_errors=True)
 
     def test_every_read_command_works_in_json_mode(self) -> None:
         for command in ("status", "snapshot", "market", "prediction", "strategy", "risk", "orders",
@@ -141,3 +166,59 @@ class CliTest(unittest.TestCase):
         entry = pathlib.Path("cli/__main__.py")
         self.assertTrue(entry.exists())
         self.assertIn("run()", entry.read_text(encoding="utf-8"))
+
+
+class ProductOperationsCliTest(CliTest):
+    """P0001.11 CLI：runs / run show / run compare / metrics / capabilities / blockers。"""
+
+    def test_capabilities_command_is_machine_readable(self) -> None:
+        code, out, err = run_cli("--api-url", self.api, "capabilities", "--json")
+        self.assertEqual(code, EXIT_OK)
+        manifest = json.loads(out)
+        self.assertEqual(manifest["api"]["write"], "unavailable_by_design")
+        self.assertIn("runs", manifest["cli"]["commands"])
+
+    def test_metrics_command_exposes_definitions(self) -> None:
+        code, out, err = run_cli("--api-url", self.api, "metrics", "--json")
+        self.assertEqual(code, EXIT_OK)
+        names = {item["name"] for item in json.loads(out)["definitions"]}
+        self.assertIn("profit_factor", names)
+
+    def test_blockers_command_lists_unified_blockers_and_strict_exit_20(self) -> None:
+        code, out, err = run_cli("--api-url", self.api, "blockers", "--json")
+        self.assertEqual(code, EXIT_OK)
+        self.assertTrue(json.loads(out)["blockers"])
+        strict_code, strict_out, strict_err = run_cli("--api-url", self.api, "blockers", "--strict")
+        self.assertEqual(strict_code, EXIT_BLOCKED)
+        self.assertIn("BLOCKING", strict_err)
+
+    def test_runs_and_run_show_and_compare(self) -> None:
+        code, out, err = run_cli("--api-url", self.api, "runs", "--json")
+        self.assertEqual(code, EXIT_OK)
+        self.assertEqual(json.loads(out)["count"], 1)
+
+        show_code, show_out, _ = run_cli("--api-url", self.api, "run", "show", "rt-1", "--json")
+        self.assertEqual(show_code, EXIT_OK)
+        self.assertEqual(json.loads(show_out)["run_id"], "rt-1")
+
+        compare_code, compare_out, _ = run_cli("--api-url", self.api, "run", "compare", "rt-1", "rt-1", "--json")
+        self.assertEqual(compare_code, EXIT_OK)
+        comparison = json.loads(compare_out)
+        self.assertEqual(comparison["left_run_id"], "rt-1")
+        self.assertEqual(len(comparison["metrics"]), len(json.loads(compare_out)["metrics"]))
+
+    def test_unknown_run_returns_exit_11(self) -> None:
+        code, out, err = run_cli("--api-url", self.api, "run", "show", "nope")
+        self.assertEqual(code, EXIT_UNKNOWN)
+        self.assertIn("unknown run", err)
+
+    def test_cli_paths_match_the_api_registry(self) -> None:
+        """防手写漂移：CLI 常量必须与 API 路由常量一致。"""
+        from api.routes import CAPABILITIES_PATH as api_caps, METRICS_PATH as api_metrics, \
+            RUNS_COMPARE_PATH as api_compare, RUNS_PATH as api_runs
+        from cli.main import CAPABILITIES_PATH, METRICS_PATH, RUNS_COMPARE_PATH, RUNS_PATH
+
+        self.assertEqual(CAPABILITIES_PATH, api_caps)
+        self.assertEqual(METRICS_PATH, api_metrics)
+        self.assertEqual(RUNS_PATH, api_runs)
+        self.assertEqual(RUNS_COMPARE_PATH, api_compare)

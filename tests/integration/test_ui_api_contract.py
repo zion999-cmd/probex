@@ -10,7 +10,7 @@ import unittest
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 UI_ROOT = PROJECT_ROOT / "ui"
 PAGES = ("overview", "market", "prediction", "strategy", "risk", "orders", "portfolio",
-         "readiness", "evidence", "runs")
+         "readiness", "evidence", "runs", "metrics", "capabilities")
 
 
 class UiApiContractTest(unittest.TestCase):
@@ -57,6 +57,17 @@ class UiApiContractTest(unittest.TestCase):
         client = (UI_ROOT / "client" / "api.js").read_text(encoding="utf-8")
         self.assertIn("/api/v1/snapshot", client)
         self.assertIn("/api/v1/reports/run-summary", client)
+        for endpoint in ("/api/v1/metrics", "/api/v1/capabilities", "/api/v1/runs", "/api/v1/runs/compare"):
+            with self.subTest(endpoint=endpoint):
+                self.assertIn(endpoint, client)
+
+    def test_ui_does_not_compute_metrics(self) -> None:
+        """P0001.11 SC-6：UI 只显示报告里的指标值，不得自行计算。"""
+        for path in sorted(UI_ROOT.rglob("*.js")):
+            source = path.read_text(encoding="utf-8")
+            with self.subTest(module=path.name):
+                for forbidden in ("Math.sqrt", "stdev", "profitFactor", "sharpe(", "drawdown ="):
+                    self.assertNotIn(forbidden, source)
         console = (UI_ROOT / "client" / "console.js").read_text(encoding="utf-8")
         self.assertIn("POLL_INTERVAL_MS", console)
 

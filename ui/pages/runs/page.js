@@ -1,24 +1,38 @@
-/** Runs 页面（P0001.10.2 §1）：只消费 Product API 切片 `run-summary`。 */
-import { ENDPOINTS, fetchJson, fetchRunSummary, fetchSnapshot } from "/ui/client/api.js";
+/** Runs（P0001.11 §2）：run 列表 + 单个 run 的 summary/metrics + 两个 run 对比（UNKNOWN 不填 0）。 */
+import { ENDPOINTS, fetchOrUnavailable } from "/ui/client/api.js";
 import { escapeHtml, fact, factRows, rows, section, table } from "/ui/client/render.js";
 
 export const title = "Runs";
 export const slug = "runs";
 
 export async function render() {
-  const summary = await fetchRunSummary();
-  if (summary.unavailable) {
-    return section("Run summary", rows([["report", `<span class="unknown">UNKNOWN (${escapeHtml(summary.unavailable)})</span>`],
-      ["markdown", `<a href="${ENDPOINTS.runSummary}?format=markdown">download</a>`]]));
+  const runsPayload = await fetchOrUnavailable(ENDPOINTS.runs);
+  if (runsPayload.unavailable) {
+    return section("Run registry", rows([["registry",
+      `<span class="unknown">UNKNOWN (${escapeHtml(runsPayload.unavailable)})</span>`]]));
   }
-  return section("Run identity", factRows(summary.run_summary.run)) +
-    section("Counts", rows(Object.entries(summary.run_summary.decision_counts || {}).map(([k, v]) => [k, String(v)])) +
-      rows(Object.entries(summary.run_summary.order_counts || {}).map(([k, v]) => [`order ${k}`, String(v)]))) +
-    section("Facts", factRows({
-      fills: summary.run_summary.fills, fees: summary.run_summary.fees,
-      realized_pnl: summary.run_summary.realized_pnl, unrealized_pnl: summary.run_summary.unrealized_pnl,
-      max_exposure: summary.run_summary.max_exposure, final_position: summary.run_summary.final_position,
-    })) +
-    section("Anomalies", rows((summary.run_summary.anomalies || []).map((a, i) => [`anomaly ${i + 1}`, `<span class="bad">${escapeHtml(a)}</span>`])) ||
-      rows([["anomalies", "none"]]));
+  const runs = runsPayload.runs || [];
+  const list = table(["run_id", "status", "started_at", "config_id", "fingerprint"],
+    runs.map((run) => [escapeHtml(run.run_id || ""), escapeHtml(run.status || ""),
+      String(run.started_at ?? ""), fact(run.config_id), fact(run.config_fingerprint)]));
+  const summary = await fetchOrUnavailable(ENDPOINTS.runSummary);
+  const summaryBlock = summary.unavailable
+    ? rows([["run summary", `<span class="unknown">UNKNOWN (${escapeHtml(summary.unavailable)})</span>`]])
+    : factRows(summary.run_summary || {});
+  const metrics = summary.unavailable ? "" : section("Metrics (from the run summary)",
+    factRows(summary.run_summary.metrics || {}));
+  let compare = rows([["compare", "provide two run ids via the API (left/right)"]]) ;
+  if (runs.length >= 2) {
+    const comparison = await fetchOrUnavailable(
+      `${ENDPOINTS.runCompare}?left=${encodeURIComponent(runs[0].run_id)}&right=${encodeURIComponent(runs[1].run_id)}`);
+    if (!comparison.unavailable) {
+      const data = comparison.comparison || {};
+      compare = table(["metric", "left", "right", "delta"],
+        (data.metrics || []).map((metric) => [escapeHtml(metric.name), fact(metric.left), fact(metric.right),
+          fact(metric.delta)]));
+    }
+  }
+  return section("Runs", list) + section("Latest run summary", summaryBlock) + metrics +
+    section(`Compare (${runs.length >= 2 ? escapeHtml(runs[0].run_id) + " vs " + escapeHtml(runs[1].run_id) : "n/a"})`,
+      compare);
 }
