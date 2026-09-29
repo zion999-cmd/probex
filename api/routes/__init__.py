@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from api.routes import (
+    actions,
+    assistant,
     blockers,
     capabilities,
     evidence,
@@ -41,6 +43,9 @@ MARKET_HEALTH_PATH = market_health.PATH
 MARKET_OVERLAYS_PATH = market_overlays.PATH
 REPLAY_PATH = replay.PATH
 FACTS_PATH = facts.PATH
+ACTIONS_PATH = actions.PATH
+ACTIONS_AUDIT_PATH = actions.AUDIT_PATH
+ASSISTANT_CONTEXT_PATH = assistant.PATH
 PORTFOLIO_TIMELINE_PATH = portfolio_timeline.PATH
 
 

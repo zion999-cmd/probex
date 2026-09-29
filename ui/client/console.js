@@ -2,6 +2,7 @@
 import { ENDPOINTS, fetchJson, fetchSnapshot } from "/ui/client/api.js";
 import { escapeHtml, fact } from "/ui/client/render.js";
 import { SURFACES, surfaceForHash } from "/ui/app/surfaces.js";
+import { mountAssistant } from "/ui/assistant/drawer.js";
 
 export const POLL_INTERVAL_MS = 2000;
 
@@ -58,6 +59,8 @@ async function renderSurface() {
 }
 
 export function boot() {
+  const shell = document.querySelector("main");
+  if (shell && !document.getElementById("assistant-drawer")) mountAssistant(document.body);
   window.addEventListener("hashchange", renderSurface);
   renderSurface();
   renderHeaderAndBlockers();

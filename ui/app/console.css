@@ -20,3 +20,12 @@ table { width: 100%; border-collapse: collapse; }
 td, th { text-align: left; padding: 3px 4px; border-bottom: 1px solid #22262f; font-weight: normal; vertical-align: top; }
 pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-size: 12px; }
 .tag { display: inline-block; padding: 0 6px; border-radius: 4px; background: #232936; color: #cbd5e1; }
+
+#assistant-drawer { position: fixed; right: 0; top: 0; bottom: 0; width: 320px; background: #14181f;
+  border-left: 1px solid #2a2f3a; padding: 10px 12px; overflow: auto; font-size: 12px; z-index: 10; }
+#assistant-drawer.collapsed { width: 46px; height: 34px; bottom: auto; }
+#assistant-drawer.collapsed #assistant-body { display: none; }
+#assistant-drawer header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+#assistant-drawer button { background: #232936; color: #d7dae0; border: 1px solid #39404e; border-radius: 4px;
+  padding: 3px 6px; margin: 2px 2px 2px 0; cursor: pointer; font: inherit; }
+main { padding-right: 340px; }

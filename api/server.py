@@ -17,6 +17,9 @@ from pathlib import Path
 
 from api.capabilities import build_capabilities_manifest
 from api.routes import (
+    ACTIONS_AUDIT_PATH,
+    ACTIONS_PATH,
+    ASSISTANT_CONTEXT_PATH,
     CAPABILITIES_PATH,
     FACTS_PATH,
     PORTFOLIO_TIMELINE_PATH,
@@ -118,6 +121,7 @@ class ProductApiHandler(BaseHTTPRequestHandler):
             schema_version=SCHEMA_VERSION_VALUE,
             api_read=tuple(sorted([*ROUTES, SNAPSHOT_PATH, REPORT_PATH, METRICS_PATH, RUNS_PATH,
                                    RUNS_COMPARE_PATH, FACTS_PATH, PORTFOLIO_TIMELINE_PATH,
+                                   ACTIONS_PATH, ACTIONS_AUDIT_PATH, ASSISTANT_CONTEXT_PATH,
                                    MARKET_TIMELINE_PATH, MARKET_DEPTH_PATH, MARKET_TRADES_PATH,
                                    MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH])),
             cli_commands=COMMAND_SPEC,
@@ -284,6 +288,79 @@ class ProductApiHandler(BaseHTTPRequestHandler):
                               "control": {"paused": control.paused, "speed": control.speed,
                                           "position": control.position}})
 
+    # ------------------------------------------------------------------ Action Plane
+
+    def _gateway(self):
+        gateway = self.service.action_gateway_view()
+        if gateway is None:
+            self._error(503, "action_gateway_unavailable",
+                        "no action gateway is wired (actions are REFUSED, not silently executed)")
+            return None
+        return gateway
+
+    def _serve_actions(self) -> None:
+        gateway = self._gateway()
+        if gateway is None:
+            return
+        self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE, "actions": list(gateway.manifest()),
+                              "levels": {"L0_READ": "auto", "L1_PRODUCT": "auto",
+                                         "L2_RUNTIME": "confirmation_per_action",
+                                         "L3_CAPITAL": "unavailable_by_design"},
+                              "registered": list(gateway.registered)})
+
+    def _serve_action_audit(self) -> None:
+        gateway = self._gateway()
+        if gateway is None:
+            return
+        from product.serialization import to_jsonable
+
+        entries = list(gateway.audit.entries())
+        self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE,
+                              "entries": to_jsonable(entries), "counts": gateway.audit.counts})
+
+    def _serve_assistant_context(self, query: str) -> None:
+        assistant = self.service.assistant_view()
+        if assistant is None:
+            self._error(503, "assistant_unavailable", "no assistant service is wired")
+            return
+        params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
+        surface = params.get("surface", "monitor")
+        selection = {key: params[key] for key in ("run", "decision", "order", "fill") if params.get(key)}
+        context = assistant.context(surface=surface, selected=selection)
+        self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE,
+                              "context": context.as_payload(),
+                              "suggested_actions": list(assistant.suggested_actions(context))})
+
+    def _serve_action_invoke(self, action_id: str, body: dict) -> None:
+        """执行一个受控 action：状态通过 body.status 表达（HTTP 码只区分类别）。"""
+        gateway = self._gateway()
+        if gateway is None:
+            return
+        assistant = self.service.assistant_view()
+        if assistant is None:
+            self._error(503, "assistant_unavailable", "no assistant service is wired")
+            return
+        from actions.types import ActionRequest, ActionStatus
+        from product.serialization import to_jsonable
+
+        selection = body.get("selection") if isinstance(body.get("selection"), dict) else {}
+        context = assistant.context(surface=str(body.get("surface") or "monitor"),
+                                    selected={str(k): str(v) for k, v in selection.items()},
+                                    replay_position=(int(body["replay_position"])
+                                                     if body.get("replay_position") is not None else None))
+        request = ActionRequest(
+            action_id=action_id,
+            parameters=body.get("parameters") if isinstance(body.get("parameters"), dict) else {},
+            requested_by=str(body.get("requested_by") or "ui"),
+            confirmation=(str(body["confirmation"]) if body.get("confirmation") else None),
+            context_reference=(str(body["context_reference"]) if body.get("context_reference") else None),
+        )
+        outcome = gateway.invoke(request, assistant.action_context(context))
+        payload = {"schema_version": SCHEMA_VERSION_VALUE, "action": to_jsonable(outcome)}
+        status_map = {ActionStatus.SUCCEEDED: 200, ActionStatus.CONFIRMATION_REQUIRED: 409,
+                      ActionStatus.REFUSED: 409, ActionStatus.FAILED: 502, ActionStatus.UNKNOWN: 202}
+        self._send_json(status_map[outcome.status], payload)
+
     def _serve_facts(self, path: str) -> None:
         """G2：Raw Facts drill-down（只读、有界；缺失 ⇒ 404，非法 kind ⇒ 400）。"""
         remainder = path[len(FACTS_PATH) + 1:]
@@ -366,6 +443,15 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         if path.startswith(f"{RUNS_PATH}/") and path.endswith("/market"):
             self._serve_run_market(path)
             return
+        if path == ACTIONS_PATH:
+            self._serve_actions()
+            return
+        if path == ACTIONS_AUDIT_PATH:
+            self._serve_action_audit()
+            return
+        if path == ASSISTANT_CONTEXT_PATH:
+            self._serve_assistant_context(query)
+            return
         if path == PORTFOLIO_TIMELINE_PATH:
             self._serve_account_timeline()
             return
@@ -402,7 +488,9 @@ class ProductApiHandler(BaseHTTPRequestHandler):
                                                        RUNS_PATH, RUNS_COMPARE_PATH, MARKET_TIMELINE_PATH,
                                                        MARKET_DEPTH_PATH, MARKET_TRADES_PATH,
                                                        MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH,
-                                                       FACTS_PATH, PORTFOLIO_TIMELINE_PATH])})
+                                                       FACTS_PATH, PORTFOLIO_TIMELINE_PATH,
+                                                       ACTIONS_PATH, ACTIONS_AUDIT_PATH,
+                                                       ASSISTANT_CONTEXT_PATH])})
             return
         module = ROUTES.get(path)
         if module is None:
@@ -417,6 +505,19 @@ class ProductApiHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib 接口
         path = self.path.split("?", 1)[0]
+        if path.startswith(f"{ACTIONS_PATH}/"):
+            action_id = path[len(ACTIONS_PATH) + 1:]
+            body: dict = {}
+            length = int(self.headers.get("Content-Length") or 0)
+            if length:
+                try:
+                    parsed = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                    body = parsed if isinstance(parsed, dict) else {}
+                except json.JSONDecodeError:
+                    self._error(400, "invalid_json_body", "request body must be JSON")
+                    return
+            self._serve_action_invoke(action_id, body)
+            return
         if path.startswith(f"{REPLAY_PATH}/"):
             verb = path[len(REPLAY_PATH) + 1:]
             body: dict = {}

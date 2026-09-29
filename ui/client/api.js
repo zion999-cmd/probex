@@ -25,6 +25,9 @@ export const ENDPOINTS = {
   replay: "/api/v1/replay",
   facts: "/api/v1/facts",
   portfolioTimeline: "/api/v1/portfolio/timeline",
+  actions: "/api/v1/actions",
+  actionsAudit: "/api/v1/actions/audit",
+  assistantContext: "/api/v1/assistant/context",
 };
 
 /** 唯一允许的 POST：local replay session control（只作用于 REPLAY runtime）。 */

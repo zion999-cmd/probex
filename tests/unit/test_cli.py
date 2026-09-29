@@ -57,9 +57,20 @@ class CliTest(unittest.TestCase):
         summary = build_run_summary(
             identity=summary.run.runtime, run_id="rt-1", started_at=1_000, final_position=0.0,
             config_id="cfg-cli", metrics_payload=metrics)
+        from actions import ActionAuditLog, ActionGateway, ConfirmationRegistry, HandlerResult
+        from assistant import AssistantService
+
+        gateway = ActionGateway(clock=lambda: 1_000, confirmations=ConfirmationRegistry(ttl_ms=30_000),
+                                audit=ActionAuditLog(capacity=20))
+        gateway.register("replay.control", lambda request, ctx: HandlerResult(result={"verb": "play"}))
+        gateway.register("runtime.stop_replay", lambda request, ctx: HandlerResult(result={"stopped": True}))
+        snapshot = service(identity=__import__("tests.unit.test_product_snapshot", fromlist=["identity"])
+                           .identity(RuntimeMode.REPLAY)).snapshot()
+        assistant = AssistantService(snapshot_provider=lambda: snapshot, gateway=gateway)
         cls.server = create_server(
             service(run_summary=lambda: summary, run_registry=lambda: registry,
-                    config_snapshot=lambda: config, orchestrator_notes=lambda: ("reconciling:x",)),
+                    config_snapshot=lambda: config, orchestrator_notes=lambda: ("reconciling:x",),
+                    action_gateway=lambda: gateway, assistant=lambda: assistant),
             host="127.0.0.1", port=0)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -211,6 +222,46 @@ class ProductOperationsCliTest(CliTest):
         code, out, err = run_cli("--api-url", self.api, "run", "show", "nope")
         self.assertEqual(code, EXIT_UNKNOWN)
         self.assertIn("unknown run", err)
+
+    def test_actions_manifest_and_invoke(self) -> None:
+        code, out, err = run_cli("--api-url", self.api, "actions", "--json")
+        self.assertEqual(code, EXIT_OK)
+        manifest = json.loads(out)["actions"]
+        self.assertTrue(any(entry["level"] == "L3_CAPITAL" for entry in manifest))
+
+        describe_code, describe_out, _ = run_cli("--api-url", self.api, "action", "describe",
+                                                 "replay.control", "--json")
+        self.assertEqual(describe_code, EXIT_OK)
+        self.assertEqual(json.loads(describe_out)["action_id"], "replay.control")
+
+        invoke_code, invoke_out, _ = run_cli("--api-url", self.api, "action", "invoke",
+                                             "replay.control", "--param", "verb=play", "--json")
+        self.assertEqual(invoke_code, EXIT_OK)
+        self.assertEqual(json.loads(invoke_out)["status"], "SUCCEEDED")
+
+    def test_capital_action_is_refused_with_exit_20(self) -> None:
+        code, out, err = run_cli("--api-url", self.api, "action", "invoke", "capital.place_order",
+                                 "--param", "symbol=BTCUSDT", "--json")
+        self.assertEqual(code, EXIT_BLOCKED)
+        self.assertEqual(json.loads(out)["status"], "REFUSED")
+        self.assertIn("UNAVAILABLE_BY_DESIGN", err)
+
+    def test_runtime_action_requires_confirmation_then_succeeds(self) -> None:
+        pending_code, pending_out, pending_err = run_cli("--api-url", self.api, "action", "invoke",
+                                                         "runtime.stop_replay", "--json")
+        self.assertEqual(pending_code, EXIT_BLOCKED)
+        confirmation = json.loads(pending_out)["confirmation_id"]
+        self.assertIn("confirmation required", pending_err)
+
+        confirmed_code, confirmed_out, _ = run_cli("--api-url", self.api, "action", "invoke",
+                                                   "runtime.stop_replay", "--confirm", confirmation,
+                                                   "--json")
+        self.assertEqual(confirmed_code, EXIT_OK)
+        self.assertEqual(json.loads(confirmed_out)["status"], "SUCCEEDED")
+
+    def test_unknown_action_is_a_usage_error(self) -> None:
+        code, out, err = run_cli("--api-url", self.api, "action", "describe", "nope.nope")
+        self.assertEqual(code, EXIT_USAGE)
 
     def test_cli_paths_match_the_api_registry(self) -> None:
         """防手写漂移：CLI 常量必须与 API 路由常量一致。"""

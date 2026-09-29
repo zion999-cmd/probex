@@ -1705,3 +1705,19 @@ P0001.12.1 commit 再加入 Live/Replay/Run Review 二级入口（历史上真�
 真实证据：fill 视图齐备、trace 末段 `['order','fill']`、facts 端点 200/404/400、timeline `truncated=true`、
 `prediction_provider=BACKING_OFF`、`authority_kind=BOOTSTRAP` + TTL/gen 齐备。全量 **2054 passed / 0 failed / 24 skipped**（+24）。
 **未进入 P0001.12.3**（按指示）。未 commit / 未 push（本阶段未授权）。
+
+## 2026-09-29（续 21）：P0001.12.2 推送 + P0001.12.3（AI Assistant & Action Gateway）实施完成
+
+**提交/推送**：`78dce93`（P0001.12.2，检出点 2054 passed）已 push（`f88ee54..78dce93`）。
+注意：该 commit 的 `git add -A` 顺带纳入了当时未跟踪的 `proposals/P0001.12.3-*.md`（纯文档、无代码）。
+
+**P0001.12.3（已完成）**：新增 `actions/`（types / manifest（23 条 action，CAPITAL 8 条全 unavailable_by_design）
+/ gateway（拒绝注册 CAPITAL handler、Confirmation 前置、审计、UNKNOWN 不伪装）/ confirmation（绑定 action+参数指纹+runtime+TTL）
+/ audit（有界 + 参数指纹））与 `assistant/`（context + 建议动作仅来自 Manifest + 确定性 explain，不调 LLM）；
+API：`GET /api/v1/actions`、`GET /api/v1/actions/audit`、`POST /api/v1/actions/<id>`、`GET /api/v1/assistant/context`；
+CLI：`actions` / `action describe` / `action invoke [--confirm]`；UI：可折叠 Assistant Drawer（全局、按钮来自 Manifest、确认流程绑定 confirmation_id）。
+
+真实证据：CAPITAL ⇒ 409 `UNAVAILABLE_BY_DESIGN`；`replay.control`/`report.generate` ⇒ SUCCEEDED；
+`runtime.stop_replay` 未确认 ⇒ 409 且 handler 未调用、确认后 ⇒ 200 且真实执行；重放确认 ⇒ `CONFIRMATION_INVALID`；
+审计记录 7 条（含拒绝）；assistant context + 3 条建议动作；CLI 与 UI 共用同一 Gateway。
+全量 **2101 passed / 0 failed / 24 skipped**（+47）。**未进入 P0001.13**。未 commit / 未 push（本阶段未授权）。

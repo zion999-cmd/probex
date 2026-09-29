@@ -44,6 +44,13 @@ def build_capabilities_manifest(
             #: 交易写能力仍然不可用（产品边界）；replay 控制单独列出，且只作用于 REPLAY runtime
             "write": WRITE_UNAVAILABLE,
             "simulation_control": sorted(SIMULATION_CONTROL),
+            #: P0001.12.3：受控 Action Plane（L0/L1 自动、L2 需确认、L3 恒不可用）
+            "action_plane": {
+                "manifest": "/api/v1/actions",
+                "audit": "/api/v1/actions/audit",
+                "invoke": "/api/v1/actions/<action_id>",
+                "capital": "unavailable_by_design",
+            },
             "reserved": sorted(RESERVED_ENDPOINTS),
         },
         "cli": {"commands": dict(sorted(cli_commands.items())), "exit_codes": dict(sorted(exit_codes.items()))},

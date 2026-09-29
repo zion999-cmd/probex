@@ -545,3 +545,13 @@ P0001.9.5 已作为 `a2ab8da`（1631 passed）、P0001.9.6 已作为 `afc0196`�
 - UI：Activity（fill + raw facts）、Performance（equity/exposure 时间线）、System/Health（G4）、System/Readiness（G5）。
 - 测试：全量 **2054 passed / 0 failed / 24 skipped**（+24）；`currentProposal = null`；未 commit。
 - 未做：P0001.12.3（Assistant / Action Gateway）、P0001.13（rate limit / latency / reconciliation 后端）。
+
+### P0001.12.3 AI Assistant & Action Gateway（已完成）
+
+- Action Plane：`actions/`（Manifest 23 条：L0 READ 6 / L1 PRODUCT 5 / L2 RUNTIME 4 / L3 CAPITAL 8 全 `unavailable_by_design`；
+  Gateway（拒绝 CAPITAL handler、Confirmation、审计、UNKNOWN 保留）；Confirmation（action+参数指纹+runtime+TTL、一次性）；Audit（有界+参数指纹））。
+- Assistant：`assistant/`（上下文 + 建议动作仅来自 Manifest 且按 mode 过滤 + 确定性 explain，不调用 LLM）。
+- 表面：`GET/POST /api/v1/actions*`、`GET /api/v1/assistant/context`；CLI `actions` / `action describe|invoke`；
+  UI 全局可折叠 Assistant Drawer（按钮来自 Manifest，确认流程绑定 confirmation_id）。
+- 测试：全量 **2101 passed / 0 failed / 24 skipped**（+47）；`currentProposal = null`；未 commit。
+- 未做：P0001.13（rate limit / latency / reconciliation 后端）；未开放任何 CAPITAL 能力。

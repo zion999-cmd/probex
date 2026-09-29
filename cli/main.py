@@ -52,6 +52,9 @@ METRICS_PATH = "/api/v1/metrics"
 RUNS_PATH = "/api/v1/runs"
 RUNS_COMPARE_PATH = "/api/v1/runs/compare"
 BLOCKERS_PATH = "/api/v1/blockers"
+ACTIONS_PATH = "/api/v1/actions"
+ACTIONS_AUDIT_PATH = "/api/v1/actions/audit"
+ASSISTANT_CONTEXT_PATH = "/api/v1/assistant/context"
 
 #: 机器可读命令表（供 `GET /api/v1/capabilities` 生成；**单一事实来源**）
 COMMAND_SPEC: dict[str, str] = {}
@@ -127,6 +130,21 @@ def build_parser() -> argparse.ArgumentParser:
                              help="exit 20 when any BLOCKING blocker is present")
         if name == "runs":
             sub.add_argument("--limit", type=int, default=None)
+
+    actions = subparsers.add_parser("actions", help="list the action manifest (what an agent may do)")
+    actions.add_argument("--json", action="store_true")
+
+    action = subparsers.add_parser("action", help="describe or invoke a controlled action")
+    action_sub = action.add_subparsers(dest="action_mode", metavar="mode")
+    describe = action_sub.add_parser("describe", help="describe one action")
+    describe.add_argument("action_id")
+    describe.add_argument("--json", action="store_true")
+    invoke = action_sub.add_parser("invoke", help="invoke an action through the Action Gateway")
+    invoke.add_argument("action_id")
+    invoke.add_argument("--param", action="append", default=[], help="parameter as key=value")
+    invoke.add_argument("--confirm", default=None, help="confirmation id returned by a previous call")
+    invoke.add_argument("--surface", default="monitor")
+    invoke.add_argument("--json", action="store_true")
 
     run = subparsers.add_parser("run", help="inspect one run / compare two runs")
     run_sub = run.add_subparsers(dest="run_mode", metavar="mode")
@@ -241,6 +259,74 @@ def main(argv: Sequence[str] | None = None, *, stdout=None, stderr=None,
                 return EXIT_OK
             _emit(payload, as_json=args.json, stdout=stdout, stderr=stderr)
             return EXIT_OK
+
+        if command == "actions":
+            payload = fetch(api_url, ACTIONS_PATH, opener=opener)
+            entries = payload.get("actions") or []
+            _emit({"count": len(entries), "actions": entries} if args.json else {"count": str(len(entries))},
+                  as_json=args.json, stdout=stdout, stderr=stderr)
+            if not args.json:
+                for entry in entries:
+                    state = "available" if entry.get("available") else (entry.get("availability") or "unavailable")
+                    stdout.write(f"- {entry.get('action_id')} [{entry.get('level')}] {state}\n")
+            return EXIT_OK
+
+        if command == "action":
+            mode = getattr(args, "action_mode", None)
+            if mode == "describe":
+                payload = fetch(api_url, ACTIONS_PATH, opener=opener)
+                entry = next((item for item in payload.get("actions") or []
+                              if item.get("action_id") == args.action_id), None)
+                if entry is None:
+                    stderr.write(f"error: unknown action {args.action_id!r}\n")
+                    return EXIT_USAGE
+                _emit(entry, as_json=args.json, stdout=stdout, stderr=stderr)
+                return EXIT_OK
+            if mode == "invoke":
+                parameters: dict[str, object] = {}
+                for item in args.param:
+                    key, _, value = str(item).partition("=")
+                    if not key:
+                        stderr.write("error: --param requires key=value\n")
+                        return EXIT_USAGE
+                    parameters[key] = value
+                body = {"parameters": parameters, "requested_by": "cli", "surface": args.surface}
+                if args.confirm:
+                    body["confirmation"] = args.confirm
+                request = urllib.request.Request(
+                    f"{api_url.rstrip('/')}{ACTIONS_PATH}/{args.action_id}", method="POST",
+                    data=json.dumps(body).encode("utf-8"),
+                    headers={"Content-Type": "application/json"})
+                try:
+                    with (opener or _opener(api_url)).open(request, timeout=10) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+                except urllib.error.HTTPError as error:      # 409/502 也带结构化 body
+                    try:
+                        payload = json.loads(error.read().decode("utf-8"))
+                    except Exception:  # noqa: BLE001
+                        stderr.write(f"error: action failed with HTTP {error.code}\n")
+                        return EXIT_INTERNAL
+                except (urllib.error.URLError, OSError) as error:
+                    stderr.write(f"error: product API unavailable: {type(error).__name__}\n")
+                    return EXIT_UNAVAILABLE
+                action_result = payload.get("action") or {}
+                _emit(action_result, as_json=args.json, stdout=stdout, stderr=stderr)
+                status = action_result.get("status")
+                if status == "SUCCEEDED":
+                    return EXIT_OK
+                if status == "CONFIRMATION_REQUIRED":
+                    stderr.write("error: confirmation required: "
+                                 f"{action_result.get('confirmation_id')}\n")
+                    return EXIT_BLOCKED
+                if status == "REFUSED":
+                    stderr.write(f"error: refused ({action_result.get('reason_code')})\n")
+                    return EXIT_USAGE if action_result.get("reason_code") == "UNKNOWN_ACTION" else EXIT_BLOCKED
+                if status == "UNKNOWN":
+                    stderr.write("error: action outcome is UNKNOWN (not failed, not succeeded)\n")
+                    return EXIT_UNKNOWN
+                return EXIT_INTERNAL
+            stderr.write("error: action requires a mode (describe | invoke)\n")
+            return EXIT_USAGE
 
         if command == "run":
             mode = getattr(args, "run_mode", None)
@@ -360,8 +446,10 @@ def run() -> None:  # pragma: no cover - console entry
     raise SystemExit(main())
 
 
-COMMAND_SPEC.update({name: path for name, (path, _) in SLICE_COMMANDS.items()})
 COMMAND_SPEC.update({
+    "actions": ACTIONS_PATH,
+    "action describe": ACTIONS_PATH,
+    "action invoke": ACTIONS_PATH,
     "blockers": BLOCKERS_PATH,
     "metrics": METRICS_PATH,
     "capabilities": CAPABILITIES_PATH,
@@ -372,6 +460,7 @@ COMMAND_SPEC.update({
     "report run": REPORT_PATH,
 })
 
-__all__ = ["BLOCKERS_PATH", "CAPABILITIES_PATH", "COMMAND_SPEC", "EXIT_BLOCKED", "EXIT_CODES",
+__all__ = ["ACTIONS_AUDIT_PATH", "ACTIONS_PATH", "ASSISTANT_CONTEXT_PATH", "BLOCKERS_PATH",
+           "CAPABILITIES_PATH", "COMMAND_SPEC", "EXIT_BLOCKED", "EXIT_CODES",
            "EXIT_INTERNAL", "EXIT_OK", "EXIT_UNAVAILABLE", "EXIT_UNKNOWN", "EXIT_USAGE", "METRICS_PATH",
            "RUNS_COMPARE_PATH", "RUNS_PATH", "CliUnavailable", "build_parser", "fetch", "main", "run"]

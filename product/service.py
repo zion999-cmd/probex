@@ -91,6 +91,9 @@ class ProductService:
     accounting_health: Callable[[], object | None] = lambda: None
     #: G5：当前 execution readiness authority（完整事实）
     authority: Callable[[], object | None] = lambda: None
+    #: P0001.12.3：Action Plane（Action Gateway）与 Assistant（只读上下文/解释）
+    action_gateway: Callable[[], object | None] = lambda: None
+    assistant: Callable[[], object | None] = lambda: None
 
     def run_summary_view(self) -> object | None:
         """取当前 Run Summary；未接线 ⇒ None（调用方须按 UNKNOWN/503 处理，不得伪造空报告）。"""
@@ -107,6 +110,14 @@ class ProductService:
     def replay_control_view(self) -> object | None:
         """取 replay 控制对象（仅 REPLAY runtime 会提供）。"""
         return self.replay_control()
+
+    def action_gateway_view(self) -> object | None:
+        """Action Plane 入口；未接线 ⇒ None（动作端点 503，绝不静默成功）。"""
+        return self.action_gateway()
+
+    def assistant_view(self) -> object | None:
+        """Assistant 服务；未接线 ⇒ None。"""
+        return self.assistant()
 
     def account_timeline_view(self) -> object | None:
         """G3：取有界账户序列缓冲；未接线 ⇒ None。"""
