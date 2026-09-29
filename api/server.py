@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import unquote
 
 from api.capabilities import build_capabilities_manifest
 from api.routes import (
@@ -49,6 +50,8 @@ REPORT_JSON = "json"
 
 SCHEMA_VERSION_PATH = "/api/v1/schema"
 SNAPSHOT_PATH = "/api/v1/snapshot"
+#: F-09：reason code 解释目录（presentation-only；UI/CLI/Assistant 共用）
+REASONS_PATH = "/api/v1/reasons"
 STOP_PATH = "/api/v1/runtime/stop"
 NOT_IMPLEMENTED = 501
 METHOD_NOT_ALLOWED = 405
@@ -124,7 +127,7 @@ class ProductApiHandler(BaseHTTPRequestHandler):
             api_read=tuple(sorted([*ROUTES, SNAPSHOT_PATH, REPORT_PATH, METRICS_PATH, RUNS_PATH,
                                    RUNS_COMPARE_PATH, FACTS_PATH, PORTFOLIO_TIMELINE_PATH,
                                    ACTIONS_PATH, ACTIONS_AUDIT_PATH, ASSISTANT_CONTEXT_PATH,
-                                   ASSISTANT_EXPLAIN_PATH, *sorted(EXECUTION_SUB_PATHS),
+                                   ASSISTANT_EXPLAIN_PATH, REASONS_PATH, *sorted(EXECUTION_SUB_PATHS),
                                    MARKET_TIMELINE_PATH, MARKET_DEPTH_PATH, MARKET_TRADES_PATH,
                                    MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH])),
             cli_commands=COMMAND_SPEC,
@@ -138,6 +141,21 @@ class ProductApiHandler(BaseHTTPRequestHandler):
 
         self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE,
                               "definitions": list(definitions_payload())})
+
+    def _serve_reasons(self, path: str) -> None:
+        """F-09：reason code → 人类解释（catalog 或单个 code；原始 code 永远保留）。"""
+        from product.reason_catalog import catalog_payload, explain_reason
+
+        if path == REASONS_PATH:
+            self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE,
+                                  "catalog": list(catalog_payload())})
+            return
+        code = path[len(f"{REASONS_PATH}/"):]
+        if not code:
+            self._error(400, "missing_reason_code", "a reason code is required")
+            return
+        self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE,
+                              "explanation": explain_reason(unquote(code)).to_payload()})
 
     def _registry(self):
         registry = self.service.run_registry_view()
@@ -154,9 +172,27 @@ class ProductApiHandler(BaseHTTPRequestHandler):
             return
         try:
             if path == RUNS_PATH:
-                records = registry.list()
+                # F-19：列表必须有界（limit 必有上限；offset 作为简单游标），绝不无界返回
+                from storage.run_registry import DEFAULT_RUN_PAGE_LIMIT, MAX_RUN_PAGE_LIMIT
+
+                params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
+                try:
+                    limit = int(params.get("limit", DEFAULT_RUN_PAGE_LIMIT))
+                    offset = int(params.get("offset", 0))
+                except (TypeError, ValueError):
+                    self._error(400, "invalid_pagination", "limit / offset must be integers")
+                    return
+                if limit <= 0 or limit > MAX_RUN_PAGE_LIMIT:
+                    self._error(400, "invalid_pagination",
+                                f"limit must be 1..{MAX_RUN_PAGE_LIMIT} (bounded list)")
+                    return
+                if offset < 0:
+                    self._error(400, "invalid_pagination", "offset must be >= 0")
+                    return
+                page = registry.page(limit=limit, offset=offset)
                 self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE,
-                                      "runs": [registry._record_payload(record) for record in records]})
+                                      "runs": [registry._record_payload(record) for record in page.items],
+                                      "pagination": page.to_payload()})
                 return
             if path == RUNS_COMPARE_PATH:
                 params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
@@ -428,6 +464,8 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         gateway = self._gateway()
         if gateway is None:
             return
+        # 幂等：invoke 前先接线执行安全 / reconciliation handler（否则先 invoke 会 NO_HANDLER）
+        self._wire_execution_actions(gateway)
         assistant = self.service.assistant_view()
         if assistant is None:
             self._error(503, "assistant_unavailable", "no assistant service is wired")
@@ -562,6 +600,9 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         if path == METRICS_PATH:
             self._serve_metrics()
             return
+        if path == REASONS_PATH or path.startswith(f"{REASONS_PATH}/"):
+            self._serve_reasons(path)
+            return
         if path == RUNS_PATH or path == RUNS_COMPARE_PATH or path.startswith(f"{RUNS_PATH}/"):
             self._serve_runs(path, query)
             return
@@ -589,7 +630,7 @@ class ProductApiHandler(BaseHTTPRequestHandler):
                                                        FACTS_PATH, PORTFOLIO_TIMELINE_PATH,
                                                        ACTIONS_PATH, ACTIONS_AUDIT_PATH,
                                                        ASSISTANT_CONTEXT_PATH,
-    ASSISTANT_EXPLAIN_PATH,
+                                                       ASSISTANT_EXPLAIN_PATH, REASONS_PATH,
                                                        *sorted(EXECUTION_SUB_PATHS)])})
             return
         module = ROUTES.get(path)

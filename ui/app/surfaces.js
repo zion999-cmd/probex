@@ -44,20 +44,21 @@ export const SURFACES = [
   },
 ];
 
-/** 旧页面 → 新 Surface（SC-10：不得出现孤儿页面）。 */
+/**
+ * 旧页面 → 新 Surface（SC-10：不得出现孤儿页面）。
+ *
+ * F-16：`risk` / `readiness` / `capabilities` 已被 System 的 section **完全覆盖**，因此删除；
+ * 其余旧页面保留为可到达的 detail route（见 `app/navigation.js` DETAIL_PAGE_MODULES）。
+ */
 export const LEGACY_PAGE_HOME = {
   overview: "monitor",
-  market: "market",
+  portfolio: "monitor",
   prediction: "activity",
   strategy: "activity",
   orders: "activity",
   evidence: "activity",
-  portfolio: "monitor",
-  risk: "system",
-  readiness: "system",
   runs: "performance",
   metrics: "performance",
-  capabilities: "system",
 };
 
 /** 全局 Header 的永久字段（Mode 必须永远明显，SC：Mode 显式）。 */

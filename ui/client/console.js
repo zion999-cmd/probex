@@ -2,6 +2,7 @@
 import { ENDPOINTS, fetchJson, fetchSnapshot } from "/ui/client/api.js";
 import { escapeHtml, fact } from "/ui/client/render.js";
 import { SURFACES, surfaceForHash } from "/ui/app/surfaces.js";
+import { BLOCKER_SECTION, resolveRoute, surfaceHash } from "/ui/app/navigation.js";
 import { mountAssistant } from "/ui/assistant/drawer.js";
 
 export const POLL_INTERVAL_MS = 2000;
@@ -36,7 +37,11 @@ async function renderHeaderAndBlockers() {
       ? '<span class="known">no blockers</span>'
       : blockers.map((b) => {
           const cls = b.severity === "BLOCKING" ? "bad" : "unknown";
-          return `<a class="${cls}" href="#/system" title="${escapeHtml(b.message)}">${escapeHtml(b.owner)}:${escapeHtml(b.reason_code)}</a>`;
+          // F-16：Blocker → System 对应 section（canonical owner 映射）
+          const href = surfaceHash("system", BLOCKER_SECTION[b.owner] || "execution");
+          const explanation = b.explanation || {};
+          const title = explanation.explanation || b.message;
+          return `<a class="${cls}" href="${href}" title="${escapeHtml(title)}">${escapeHtml(b.owner)}:${escapeHtml(b.reason_code)}</a>`;
         }).join(" · ");
     document.getElementById("strip").dataset.blocking = String(blocking.length);
   } catch (error) {
@@ -51,8 +56,10 @@ async function renderSurface() {
   const view = document.getElementById("view");
   view.innerHTML = '<section><h2>loading</h2></section>';
   try {
-    const module = await import(`/ui/pages/${surface.slug}/page.js`);
-    view.innerHTML = await module.render(rest);
+    // F-16：detail route（legacy page）与 Surface page 共用同一解析（无死页面）
+    const route = resolveRoute(surface, rest);
+    const module = await import(route.module);
+    view.innerHTML = await module.render(route.args);
   } catch (error) {
     view.innerHTML = `<section><h2>error</h2><div class="row"><span class="k">page</span><span class="v bad">${escapeHtml(String(error))}</span></div></section>`;
   }

@@ -15,7 +15,8 @@ from enum import Enum
 from market.events.types import Milliseconds
 
 #: 产品 schema 版本（API 契约版本；内部 Python 类型不得裸序列化）
-SCHEMA_VERSION = "3"
+#: F-08：TraceEntry 增加 ts / identity_kind / latency_ms ⇒ schema 3 → 4
+SCHEMA_VERSION = "4"
 
 #: 未知原因码（用于 `Fact.reason`）
 UNKNOWN_NOT_PROVIDED = "not_provided"
@@ -313,13 +314,21 @@ class HealthView:
 
 @dataclass(frozen=True, slots=True)
 class TraceEntry:
-    """结构化决策链的一环（提案 §4）：只搬运既有 reason code / identity。"""
+    """结构化因果链的一环（F-08）：只搬运既有 reason code / canonical identity。
+
+    - `ts`：该事实发生时间（UNKNOWN 表示该阶段没有事实 ⇒ 排在已定时序之后）；
+    - `identity_kind`：`identity` 是哪一类 canonical id（`client_order_id` / `fill_id` / ...）；
+    - `latency_ms`：仅 ack 阶段使用（来自 Slice 3 已接的真实 observer）。
+    """
 
     stage: str
     identity: Fact
     outcome: str
     reason_code: Fact
     detail: str = ""
+    ts: Fact = field(default_factory=lambda: Fact.unknown("stage has no timestamp"))
+    identity_kind: str = ""
+    latency_ms: Fact = field(default_factory=lambda: Fact.unknown("no latency fact at this stage"))
 
 
 @dataclass(frozen=True, slots=True)

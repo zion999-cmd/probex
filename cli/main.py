@@ -55,6 +55,7 @@ BLOCKERS_PATH = "/api/v1/blockers"
 ACTIONS_PATH = "/api/v1/actions"
 ACTIONS_AUDIT_PATH = "/api/v1/actions/audit"
 ASSISTANT_CONTEXT_PATH = "/api/v1/assistant/context"
+REASONS_PATH = "/api/v1/reasons"
 EXECUTION_SUBCOMMANDS = {
     "health": "/api/v1/execution/health",
     "limits": "/api/v1/execution/limits",
@@ -130,6 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name, help_text in (("blockers", "unified blockers (why nothing is happening)"),
                             ("metrics", "metric definitions (formulas and UNKNOWN conditions)"),
                             ("capabilities", "machine-readable capability manifest"),
+                            ("reasons", "reason-code human explanation catalog (F-09)"),
                             ("runs", "list recorded runs")):
         sub = subparsers.add_parser(name, help=help_text)
         sub.add_argument("--json", action="store_true")
@@ -138,6 +140,10 @@ def build_parser() -> argparse.ArgumentParser:
                              help="exit 20 when any BLOCKING blocker is present")
         if name == "runs":
             sub.add_argument("--limit", type=int, default=None)
+            sub.add_argument("--offset", type=int, default=0)
+        if name == "reasons":
+            sub.add_argument("code", nargs="?", default=None,
+                             help="optional reason code (omit for the full catalog)")
 
     execution = subparsers.add_parser("execution", help="execution safety facts (read-only)")
     execution.add_argument("topic", choices=sorted(EXECUTION_SUBCOMMANDS))
@@ -235,24 +241,39 @@ def main(argv: Sequence[str] | None = None, *, stdout=None, stderr=None,
                 stdout.write(f"markdown_hint: {api_url}{REPORT_PATH}?format=markdown\n")
             return EXIT_OK
 
-        if command in ("blockers", "metrics", "capabilities", "runs"):
+        if command in ("blockers", "metrics", "capabilities", "reasons", "runs"):
             path = {"blockers": BLOCKERS_PATH, "metrics": METRICS_PATH,
-                    "capabilities": CAPABILITIES_PATH, "runs": RUNS_PATH}[command]
-            if command == "runs" and getattr(args, "limit", None):
-                path = f"{path}?limit={int(args.limit)}"
+                    "capabilities": CAPABILITIES_PATH, "reasons": REASONS_PATH,
+                    "runs": RUNS_PATH}[command]
+            if command == "reasons" and getattr(args, "code", None):
+                path = f"{REASONS_PATH}/{args.code}"
+            if command == "runs":
+                # F-19：列表有界；limit / offset 均交给服务端校验（安全上限在 registry）
+                query = []
+                if getattr(args, "limit", None):
+                    query.append(f"limit={int(args.limit)}")
+                if getattr(args, "offset", 0):
+                    query.append(f"offset={int(args.offset)}")
+                if query:
+                    path = f"{path}?{'&'.join(query)}"
             payload = fetch(api_url, path, opener=opener)
             if command == "runs":
                 runs = payload.get("runs") or []
-                _emit({"count": len(runs),
+                pagination = payload.get("pagination") or {}
+                _emit({"count": len(runs), "pagination": pagination,
                        "runs": [{"run_id": run.get("run_id"), "status": run.get("status"),
                                  "started_at": run.get("started_at"),
                                  "config_fingerprint": (run.get("config_fingerprint") or {}).get("value")}
                                 for run in runs]} if args.json else
-                      {"count": str(len(runs))}, as_json=args.json, stdout=stdout, stderr=stderr)
+                      {"count": str(len(runs)), "has_more": str(bool(pagination.get("has_more")))},
+                      as_json=args.json, stdout=stdout, stderr=stderr)
                 if not args.json:
                     for run in runs:
                         stdout.write(f"- {run.get('run_id')} {run.get('status')} "
                                      f"started_at={run.get('started_at')}\n")
+                    if pagination.get("has_more"):
+                        stdout.write(f"more: next_offset={pagination.get('next_offset')} "
+                                     f"total={pagination.get('total')}\n")
                 return EXIT_OK
             if command == "blockers":
                 blockers = payload.get("blockers") or []
@@ -260,9 +281,14 @@ def main(argv: Sequence[str] | None = None, *, stdout=None, stderr=None,
                       else {"count": str(len(blockers))}, as_json=args.json, stdout=stdout, stderr=stderr)
                 if not args.json:
                     for blocker in blockers:
+                        explanation = blocker.get("explanation") or {}
                         stdout.write(f"- [{blocker.get('severity')}] {blocker.get('owner')} "
                                      f"{blocker.get('reason_code')} ({blocker.get('source_ref')}): "
                                      f"{blocker.get('message')}\n")
+                        # F-09：原始 code 保留，另附人类解释（同一 catalog）
+                        stdout.write(f"    {explanation.get('title', '')} — "
+                                     f"{explanation.get('explanation', '')}\n")
+                        stdout.write(f"    next: {explanation.get('suggested_next_step', '')}\n")
                 blocking = [b for b in blockers
                             if isinstance(b, dict) and b.get("severity") == "BLOCKING"]
                 if args.strict and blocking:
@@ -390,12 +416,23 @@ def main(argv: Sequence[str] | None = None, *, stdout=None, stderr=None,
             if not trace:
                 stderr.write(f"error: no evidence entry matches {args.target} {args.identifier!r}\n")
                 return EXIT_UNKNOWN
-            _emit({"target": args.target, "identifier": args.identifier, "trace": trace}
+            # F-09：同一 catalog 给 trace 的 reason_code 附人类解释（原始 code 保留）
+            reasons = {item.get("reason_code"): item
+                       for item in (fetch(api_url, REASONS_PATH, opener=opener).get("catalog") or [])}
+            explanations = {code: reasons.get(code) for code in
+                            sorted({e.get("reason_code") for e in trace
+                                    if isinstance(e.get("reason_code"), str)})}
+            _emit({"target": args.target, "identifier": args.identifier, "trace": trace,
+                   "reason_explanations": explanations}
                   if args.json else {"matches": str(len(trace))},
                   as_json=args.json, stdout=stdout, stderr=stderr)
             if not args.json:
                 for entry in trace:
                     stdout.write(f"- {entry.get('stage')}: {entry.get('outcome')}\n")
+                    code = entry.get("reason_code")
+                    if code and explanations.get(code):
+                        stdout.write(f"    {code}: {explanations[code].get('title', '')} — "
+                                     f"{explanations[code].get('explanation', '')}\n")
             return EXIT_OK
 
         entry = SLICE_COMMANDS.get(command)
@@ -471,6 +508,7 @@ COMMAND_SPEC.update({
     "blockers": BLOCKERS_PATH,
     "metrics": METRICS_PATH,
     "capabilities": CAPABILITIES_PATH,
+    "reasons": REASONS_PATH,
     "runs": RUNS_PATH,
     "run show": RUNS_PATH,
     "run compare": RUNS_COMPARE_PATH,

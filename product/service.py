@@ -101,6 +101,16 @@ class ProductService:
     runtime_status: Callable[[], object | None] = lambda: None
     #: closure Slice 3 / Step 4：稳定 accounting 事实（由 runtime 边界的 provider 提供）
     accounting_facts: Callable[[], object | None] = lambda: None
+    #: F-08：真实执行边界的风险判定观测（allow + reject；引用既有 RiskDecision，不复制）
+    risk_decisions: Callable[[], tuple[object, ...]] = tuple
+    #: F-08：执行边界归一化只读证据（空 ⇒ 如实 ABSENT，不伪造）
+    normalization_evidence: Callable[[], tuple[object, ...]] = tuple
+    #: F-08：受控 reconciliation 事件（来自真实入口，不是推测）
+    reconciliation_events: Callable[[], tuple[object, ...]] = tuple
+    #: F-08：ack 延迟来源（Slice 3 已接的真实 observer / BoundedLatencyLog）
+    ack_latency: Callable[[], object | None] = lambda: None
+    #: F-08：MarketState 的 canonical 指纹（既有 prediction.schema.market_state_hash，经注入避免反向依赖）
+    market_state_hash: Callable[[], object | None] = lambda: None
 
     def run_summary_view(self) -> object | None:
         """取当前 Run Summary；未接线 ⇒ None（调用方须按 UNKNOWN/503 处理，不得伪造空报告）。"""
@@ -475,82 +485,212 @@ class ProductService:
 
     def _evidence(self, state: object | None, prediction: object | None, decision: object | None,
                   readiness: object | None, tracker: object | None) -> EvidenceView:
-        """把既有 reason code / identity 串成稳定结构（提案 §4，不建图数据库）。"""
-        trace: list[TraceEntry] = []
-        trace.append(TraceEntry(
-            stage="market_state",
-            identity=Fact.of(_get(_get(state, "identity"), "state_hash")),
-            outcome=("unknown" if state is None
-                     else str(bool(_get(_get(state, "quality"), "tradeable")))),
-            reason_code=Fact.unknown("market gate is a boolean fact, not a reason code"),
-            detail="",
-        ))
-        trace.append(TraceEntry(
-            stage="prediction",
-            identity=Fact.of(_get(prediction, "request_id")),
-            outcome=("unknown" if prediction is None else "present"),
-            reason_code=Fact.unknown("no reason code at this stage"),
-            detail=str(_get(prediction, "provider") or ""),
-        ))
-        trace.append(TraceEntry(
-            stage="maker_decision",
-            # SC-6：MakerDecision 必须能给出其**输入 prediction identity**
-            identity=Fact.of(_get(prediction, "request_id"),
-                             unknown_reason="no prediction was used for this decision"),
-            outcome=(str(getattr(_get(decision, "mode"), "value", "unknown")) if decision is not None
-                     else "unknown"),
-            reason_code=Fact.of(str(getattr(_get(decision, "blocked_by"), "value", None)),
-                                unknown_reason="not blocked"),
-            detail=str(_get(decision, "detail") or ""),
-        ))
-        if readiness is not None:
-            reasons = tuple(r.value if hasattr(r, "value") else str(r) for r in (_get(readiness, "reasons") or ()))
-            trace.append(TraceEntry(
-                stage="readiness",
-                identity=Fact.of(str(getattr(_get(readiness, "status"), "value", "unknown"))),
-                outcome="blocked" if reasons else "ready",
-                reason_code=Fact.of(reasons[0]) if reasons else Fact.unknown("no blocker"),
-                detail="; ".join(reasons[:3]),
-            ))
+        """F-08：把既有 owner 事实串成**一条按时间排序的因果链**。
+
+        规则：
+        - 只搬运既有事实（不建第二套 evidence store、不复制 Risk/Execution/Reconciliation）；
+        - stage 缺事实时**显式**给出 outcome/ABSENT + reason（不静默跳过）；
+        - 每个 entry 带 canonical `identity_kind`（client_order_id / fill_id / ...）。
+        """
         active = tuple(getattr(tracker, "active", lambda: ())()) if tracker is not None else ()
         decision_index = self._decision_index(decision)
-        for order in active:
+        entries: list[TraceEntry] = []
+
+        def add(stage: str, ts: object, *, identity: object, identity_kind: str, outcome: str,
+                reason_code: Fact, detail: str = "", latency: Fact | None = None,
+                unknown_reason: str = "fact not available at this stage") -> None:
+            entries.append(TraceEntry(
+                stage=stage, ts=Fact.of(ts, unknown_reason=unknown_reason),
+                identity=Fact.of(identity, unknown_reason=unknown_reason),
+                identity_kind=identity_kind, outcome=outcome, reason_code=reason_code, detail=detail,
+                latency_ms=(latency if latency is not None
+                            else Fact.unknown("no latency fact at this stage")),
+            ))
+
+        # market → prediction → decision（既有三阶段，语义不变）
+        state_time = _get(state, "time")
+        add("market_state", _get(state_time, "as_of_exchange_ts"),
+            identity=(self.market_state_hash() if state is not None else None),
+            identity_kind="market_state_hash",
+            outcome=("unknown" if state is None else str(bool(_get(_get(state, "quality"), "tradeable")))),
+            reason_code=Fact.unknown("market gate is a boolean fact, not a reason code"),
+            unknown_reason=("market state has no canonical hash yet" if state is not None
+                            else "no market state yet"))
+        add("prediction", _get(prediction, "as_of"), identity=_get(prediction, "request_id"),
+            identity_kind="prediction_request_id",
+            outcome=("absent" if prediction is None else "present"),
+            reason_code=Fact.unknown("no prediction record yet (downstream stages show why)"
+                                     if prediction is None else "no reason code at this stage"),
+            detail=str(_get(prediction, "provider") or ""),
+            unknown_reason="no prediction record yet" if prediction is None else "no timestamp")
+        blocked_by = _get(decision, "blocked_by") if decision is not None else None
+        blocked_code = None if blocked_by is None else getattr(blocked_by, "value", blocked_by)
+        add("maker_decision", _get(decision, "at_ms"), identity=_get(prediction, "request_id"),
+            identity_kind="prediction_request_id",
+            outcome=(str(getattr(_get(decision, "mode"), "value", "unknown")) if decision is not None
+                     else "absent"),
+            reason_code=Fact.of(blocked_code,
+                                unknown_reason=("no maker decision yet" if decision is None
+                                                else "not blocked")),
+            detail=str(_get(decision, "detail") or ""),
+            unknown_reason="no maker decision yet" if decision is None else "no timestamp")
+
+        # risk（F-08 新增）：allow 与 reject 都记录（引用既有 RiskDecision）
+        for observation in tuple(self.risk_decisions()):
+            rd = _get(observation, "decision")
+            code = _get(rd, "reason_code")
+            client_id = _get(observation, "client_order_id")
+            add("risk", _get(observation, "timestamp"), identity=client_id,
+                identity_kind="client_order_id",
+                outcome=("allow" if code is None else "reject"),
+                reason_code=(Fact.unknown("risk decision allowed")
+                             if code is None else Fact.of(getattr(code, "value", code))),
+                detail=("" if code is None else str(getattr(code, "value", code))),
+                unknown_reason="proposal has no order identity (rejected before order creation)")
+
+        # readiness
+        reasons = (() if readiness is None
+                   else tuple(r.value if hasattr(r, "value") else str(r)
+                              for r in (_get(readiness, "reasons") or ())))
+        add("readiness", _get(readiness, "evaluated_at_ms") or _get(readiness, "at_ms"),
+            identity=(self.authority_id() or str(getattr(_get(readiness, "status"), "value", "unknown"))),
+            identity_kind="authority_id",
+            outcome=("absent" if readiness is None else ("blocked" if reasons else "ready")),
+            reason_code=Fact.of(reasons[0]) if reasons else Fact.unknown("no blocker"),
+            detail="; ".join(reasons[:3]),
+            unknown_reason="readiness not evaluated" if readiness is None else "readiness has no timestamp")
+
+        # normalization（F-08 新增；空 ⇒ 如实 ABSENT）
+        for evidence in tuple(self.normalization_evidence()):
+            rejected = bool(_get(evidence, "rejected"))
+            rounding = f"tick={_get(evidence, 'price_rounding')} step={_get(evidence, 'quantity_rounding')}"
+            if rejected:
+                outcome, code, detail = "rejected", Fact.of(str(_get(evidence, "reject_reason"))), rounding
+            else:
+                outcome = "adjusted" if _get(evidence, "adjusted") else "normalized"
+                code = Fact.unknown("normalization accepted")
+                detail = (f"{_get(evidence, 'input_price')} -> {_get(evidence, 'normalized_price')} | "
+                          f"{_get(evidence, 'input_quantity')} -> {_get(evidence, 'normalized_quantity')} | {rounding}")
+            add("normalization", _get(evidence, "ts"), identity=_get(evidence, "client_order_id"),
+                identity_kind="client_order_id", outcome=outcome, reason_code=code, detail=detail,
+                unknown_reason="normalization evidence has no client order id")
+
+        # order（submit 阶段）：包含 active 与已终态订单（终态订单才是真实提交过的事实）
+        candidate = getattr(tracker, "orders", None) if tracker is not None else None
+        if callable(candidate):
+            all_orders = tuple(candidate())
+        elif candidate is not None:
+            all_orders = tuple(candidate)
+        else:
+            all_orders = active
+        for order in all_orders:
             client_id = str(_get(order, "client_order_id") or "")
-            trace.append(TraceEntry(
-                stage="order",
-                identity=Fact.of(decision_index.get(client_id),
-                                 unknown_reason="order has no matching maker decision"),
+            decision_ref = decision_index.get(client_id)
+            add("order", _get(order, "created_at"), identity=client_id,
+                identity_kind="client_order_id",
                 outcome=str(getattr(_get(order, "status"), "value", "unknown")),
                 reason_code=Fact.unknown("order carries no rejection reason code"),
-                detail=client_id,
-            ))
+                detail=(f"decision_id={decision_ref}" if decision_ref
+                        else "no matching maker decision"),
+                unknown_reason="order without client_order_id")
+
+        # ack（F-08 新增）：只读 Slice 3 已接的真实 observer
+        observer = self.ack_latency()
+        latency_log = getattr(observer, "log", observer)
+        samples = getattr(latency_log, "samples", None)
+        if callable(samples):
+            for stage_name, label in (("submit_to_ack", "acked"), ("cancel_to_ack", "cancel_acked")):
+                for sample in samples(stage=stage_name):
+                    sample_ts = int(getattr(sample, "ts", 0))
+                    candidates = [(int(_get(o, "created_at") or 0), str(_get(o, "client_order_id") or ""))
+                                  for o in all_orders if int(_get(o, "created_at") or 0) <= sample_ts]
+                    client_id = max(candidates)[1] if candidates else None
+                    add("ack", sample_ts, identity=client_id, identity_kind="client_order_id",
+                        outcome=label, reason_code=Fact.unknown("ack carries no rejection reason code"),
+                        detail=f"{stage_name}={getattr(sample, 'value_ms', None)} ms",
+                        latency=Fact.of(getattr(sample, "value_ms", None)),
+                        unknown_reason="ack could not be paired to an active order")
+
+        # execution_event / cancel
         for event in self.execution_events():
-            trace.append(TraceEntry(
-                stage="execution_event",
-                identity=Fact.of(str(getattr(event, "client_order_id", "") or ""),
-                                 unknown_reason="execution event without client_order_id"),
-                outcome=type(event).__name__,
-                reason_code=Fact.of(str(getattr(event, "reason", "") or ""),
-                                    unknown_reason="no reason attached"),
-                detail="",
-            ))
+            client_id = str(getattr(event, "client_order_id", "") or "") or None
+            event_name = str(_get(event, "event_name") or type(event).__name__)
+            reason = str(getattr(event, "reason", "") or "")
+            add("execution_event", getattr(event, "timestamp", None), identity=client_id,
+                identity_kind="client_order_id", outcome=event_name,
+                reason_code=(Fact.of(reason) if reason else Fact.unknown("no reason attached")),
+                unknown_reason="execution event without client_order_id")
+            if event_name in ("OrderCanceled", "OrderStatus:CANCELED"):
+                add("cancel", getattr(event, "timestamp", None), identity=client_id,
+                    identity_kind="client_order_id", outcome="canceled",
+                    reason_code=Fact.unknown("cancel carries no rejection reason code"),
+                    detail="confirmed by execution event (request != success)")
+
+        # fill
         limit = int(self.recent_fill_limit)
         if limit > 0:
             for fill in tuple(self.fills())[-limit:]:
-                trace.append(TraceEntry(
-                    stage="fill",
-                    identity=Fact.of(_get(fill, "client_order_id"),
-                                     unknown_reason="fill without client order id"),
-                    outcome="filled",
+                add("fill", _get(fill, "ts"), identity=_get(fill, "client_order_id"),
+                    identity_kind="client_order_id", outcome="filled",
                     reason_code=Fact.unknown("fill carries no rejection reason code"),
-                    detail=str(_get(fill, "trade_id") or ""),
-                ))
-        blockers = (() if readiness is None
-                    else tuple(r.value if hasattr(r, "value") else str(r)
-                               for r in (_get(readiness, "reasons") or ())))
+                    detail=f"fill_id={_get(fill, 'trade_id')}",
+                    unknown_reason="fill without client order id")
+
+        # unknown（聚合计数；不伪装成某笔订单）
+        unknown_submit = int(_get(tracker, "unknown_submit_count") or 0)
+        unknown_cancel = int(_get(tracker, "unknown_cancel_count") or 0)
+        if unknown_submit or unknown_cancel:
+            add("unknown", None, identity=None, identity_kind="aggregate_count",
+                outcome=f"submit={unknown_submit} cancel={unknown_cancel}",
+                reason_code=Fact.unknown("unknown outcomes are counted, not attributed"),
+                detail="UNKNOWN != rejected/canceled; converge via query/reconciliation",
+                unknown_reason="aggregate count has no single timestamp/identity")
+
+        # reconciliation（F-08 新增；来自受控入口的真实事件）
+        for event in tuple(self.reconciliation_events()):
+            add("reconciliation", _get(event, "ts"), identity=_get(event, "identity"),
+                identity_kind=str(_get(event, "identity_kind") or "reconciliation"),
+                outcome=str(_get(event, "outcome") or "requested"),
+                reason_code=Fact.of(str(_get(event, "reason_code") or ""),
+                                    unknown_reason="no reason code attached"),
+                detail=str(_get(event, "detail") or ""),
+                unknown_reason="reconciliation event without timestamp")
+
+        # F-08：没有事实的 canonical 阶段必须**显式**出现（ABSENT + reason），不得静默跳过。
+        # `fill` 例外：`recent_fill_limit == 0` 表示"未暴露成交"（接线状态），不是"没有成交"。
+        explicit_absent = ("risk", "normalization", "order", "ack", "execution_event", "cancel",
+                           "unknown", "reconciliation")
+        present = {entry.stage for entry in entries}
+        for stage in explicit_absent:
+            if stage in present:
+                continue
+            entries.append(TraceEntry(
+                stage=stage, ts=Fact.unknown(f"no {stage} fact recorded yet"),
+                identity=Fact.unknown(f"no {stage} identity recorded yet"), identity_kind="",
+                outcome="absent",
+                reason_code=Fact.unknown(f"no {stage} fact recorded yet (explicit ABSENT, not skipped)"),
+                detail="", latency_ms=Fact.unknown("no latency fact at this stage")))
+
         return EvidenceView(
-            trace=tuple(trace),
-            readiness_blockers=blockers,
+            trace=self._order_trace(entries),
+            readiness_blockers=reasons,
             risk_rejects=tuple(self.risk_rejects()),
-            notes=("product layer only composes existing owner facts",),
+            notes=("product layer only composes existing owner facts (single evidence view)",),
         )
+
+    @staticmethod
+    def _order_trace(entries: list[TraceEntry]) -> tuple[TraceEntry, ...]:
+        """按时间排序；带时间的事实按 ts，缺时间的按因果阶段顺序（carry-forward）。"""
+        stage_order = ("market_state", "prediction", "maker_decision", "risk", "readiness",
+                       "normalization", "order", "ack", "execution_event", "cancel", "fill",
+                       "unknown", "reconciliation")
+        carried: int | None = None
+        keyed: list[tuple[tuple[int, int, int], TraceEntry]] = []
+        for index, entry in enumerate(entries):
+            if entry.ts.known:
+                carried = int(entry.ts.value)  # type: ignore[arg-type]
+            resolved = carried if carried is not None else -1
+            rank = stage_order.index(entry.stage) if entry.stage in stage_order else len(stage_order)
+            keyed.append(((resolved, rank, index), entry))
+        keyed.sort(key=lambda item: item[0])
+        return tuple(entry for _, entry in keyed)

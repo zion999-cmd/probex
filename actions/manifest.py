@@ -40,7 +40,7 @@ ACTION_CATALOG: tuple[ActionSpec, ...] = (
                result_schema="{blockers}", availability=ActionAvailability.AVAILABLE),
     # ------------------------------------------------------------- L1 PRODUCT
     ActionSpec(action_id="navigate.surface", name="Navigate to a surface", level=ActionLevel.PRODUCT,
-               parameters=("surface", "identity"), side_effect="ui_navigation",
+               parameters=("surface", "detail", "identity"), side_effect="ui_navigation",
                result_schema="{target}", availability=ActionAvailability.AVAILABLE),
     ActionSpec(action_id="select.entity", name="Select a run/order/decision", level=ActionLevel.PRODUCT,
                parameters=("kind", "identity"), side_effect="ui_selection",

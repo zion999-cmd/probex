@@ -51,7 +51,8 @@ from readiness.authority import (
     ExecutionReadinessAuthority,
     ExecutionReadinessAuthorityValidator,
 )
-from execution.normalization import OrderNormalizer
+from execution.normalization import BoundedNormalizationEvidenceLog, OrderNormalizationError, \
+    OrderNormalizer, normalize_with_evidence
 
 
 def normalizer_from_rules(rules: TradingRules, *, price_rounding: str, quantity_rounding: str) -> OrderNormalizer:
@@ -212,6 +213,8 @@ class BinanceExecutionAdapter:
     #: 为 None 时 adapter 不做任何隐式 round（D-048 不变）；启用后 REST 请求只使用
     #: Decimal 精确字符串，不经过 float 往返。
     normalizer: OrderNormalizer | None = None
+    #: F-08：真实写边界的归一化只读证据（None ⇒ 不采集；不改归一化逻辑）
+    normalization_log: BoundedNormalizationEvidenceLog | None = None
     _queue: list[ExecutionEvent] = field(default_factory=list)
     _submitted: dict[str, tuple[str, str]] = field(default_factory=dict)  # client_id -> (symbol, exchange_id)
     _skipped_transitions: int = 0
@@ -262,7 +265,12 @@ class BinanceExecutionAdapter:
         quantity: float | Decimal = order.quantity
         validation_order = order
         if self.normalizer is not None:
-            normalized = self.normalizer.normalize(price=order.price, quantity=order.quantity)
+            normalized, evidence = normalize_with_evidence(
+                self.normalizer, price=order.price, quantity=order.quantity,
+                ts=int(order.updated_at), client_order_id=order.client_order_id,
+                log=self.normalization_log)
+            if normalized is None:  # 归一化失败仍然 fail closed（与既有行为一致）
+                raise OrderNormalizationError(evidence.reject_reason or "order normalization rejected")
             price = normalized.price
             quantity = normalized.quantity
             # 本地规则校验必须使用**归一后**的值（float 仅用于校验，REST 仍用 Decimal 精确值）

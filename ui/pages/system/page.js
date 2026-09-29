@@ -1,6 +1,6 @@
 /** System：为什么能/不能运行（§5）。二级：Health / Risk / Readiness / Execution / Configuration / Capabilities。 */
-import { ENDPOINTS, fetchJson, fetchOrUnavailable, fetchSnapshot } from "/ui/client/api.js";
-import { escapeHtml, fact, factRows, rows, section, table } from "/ui/client/render.js";
+import { ENDPOINTS, fetchJson, fetchOrUnavailable, fetchSnapshot, reasonCatalog } from "/ui/client/api.js";
+import { escapeHtml, fact, factRows, reasonCell, rows, section, table } from "/ui/client/render.js";
 
 export const title = "System";
 export const slug = "system";
@@ -42,6 +42,7 @@ async function executionSections() {
 export async function render(rest = []) {
   const active = SECTIONS.includes(rest[0]) ? rest[0] : "health";
   const snapshot = await fetchSnapshot();
+  const catalog = await reasonCatalog();
   const nav = SECTIONS.map((name) =>
     `<a href="#/system/${name}" class="${name === active ? "active" : ""}">${escapeHtml(name)}</a>`).join(" · ");
   const header = section("System surfaces", nav);
@@ -64,20 +65,34 @@ export async function render(rest = []) {
         ["private stream", fact(snapshot.health.private_stream_state)],
         ["clock offset (ms)", fact(snapshot.health.clock_offset_ms)],
         ["uptime (ms)", fact(snapshot.health.uptime_ms)],
-      ]));
+      ])) +
+      section("Blockers (reason codes + explanation)", table(["owner", "reason code", "severity", "message"],
+        (snapshot.blockers || []).map((b) => [escapeHtml(b.owner), reasonCell(b.reason_code, catalog),
+          escapeHtml(b.severity), escapeHtml(b.message)])));
   }
-  if (active === "risk") return header + section("Risk", factRows(snapshot.risk)) +
-      section("Rejects (reason codes)", rows((snapshot.risk.rejects || []).map((r, i) => [`reject ${i + 1}`,
-        `<span class="bad">${escapeHtml(r)}</span>`])) || rows([["rejects", "none"]]));
-  if (active === "readiness") return header + section("Authority facts (G5)", rows([
+  if (active === "risk") {
+    const rejects = (snapshot.risk.rejects || []).length
+      ? table(["reason code (raw + human)"], snapshot.risk.rejects.map((r) => [reasonCell(r, catalog)]))
+      : rows([["rejects", "none"]]);
+    return header + section("Risk", factRows(snapshot.risk)) +
+      section("Rejects (reason codes)", rejects);
+  }
+  if (active === "readiness") {
+    const reasons = (snapshot.readiness.reasons || []).length
+      ? table(["reason code (raw + human)"], snapshot.readiness.reasons.map((r) => [reasonCell(r, catalog)]))
+      : rows([["reasons", "none"]]);
+    return header + section("Authority facts (G5)", rows([
       ["kind", fact(snapshot.readiness.authority_kind)],
       ["issued_at_ms", fact(snapshot.readiness.authority_issued_at_ms)],
       ["expires_at_ms", fact(snapshot.readiness.authority_expires_at_ms)],
       ["recovery generation", fact(snapshot.readiness.authority_recovery_generation)],
       ["market generation", fact(snapshot.readiness.authority_market_generation)],
     ])) + section("Readiness", factRows(snapshot.readiness)) +
-      section("Blockers", rows((snapshot.readiness.reasons || []).map((r, i) => [`reason ${i + 1}`,
-        `<span class="bad">${escapeHtml(r)}</span>`])) || rows([["reasons", "none"]]));
+      section("Blockers", reasons) +
+      section("Details", (snapshot.readiness.details || []).length
+        ? `<pre>${escapeHtml((snapshot.readiness.details || []).join("\n"))}</pre>`
+        : rows([["details", "none"]]));
+  }
   if (active === "execution") {
     const execution = snapshot.execution || {};
     return header + await executionSections() + section("Execution health (summary)", rows([
@@ -89,15 +104,14 @@ export async function render(rest = []) {
       ["unknown cancel count", fact(execution.unknown_cancel_count)],
     ]));
   }
-  }
   if (active === "configuration") {
     const config = snapshot.config || {};
     return header + section("Configuration (read-only)", rows([
       ["config_id", fact(config.config_id)],
       ["fingerprint", fact(config.fingerprint)],
       ["created_at", fact(config.created_at)],
-      ["sources", escapeHtml(JSON.stringify(config.sources || {}))],
-      ["secret references", escapeHtml((config.secret_refs || []).join(", ") || "none")],
+      ["sources (CLI > ENV > FILE > CONSTRUCTOR)", escapeHtml(JSON.stringify(config.sources || {}))],
+      ["secret references (names only)", escapeHtml((config.secret_refs || []).join(", ") || "none")],
     ])) + section("Resolved entries (non-sensitive only)", table(["name", "source", "value", "secret ref"],
       (config.entries || []).map((e) => [escapeHtml(e.name), escapeHtml(e.source), fact(e.value),
         escapeHtml(e.secret_ref || "")])));
@@ -108,11 +122,16 @@ export async function render(rest = []) {
       rows([["manifest", `<span class="unknown">UNKNOWN (${escapeHtml(capabilities.unavailable)})</span>`]]));
   }
   const api = capabilities.api || {};
+  const cli = capabilities.cli || {};
   return header +
     section("Capabilities", rows([
       ["api.write", `<span class="bad">${escapeHtml(String(api.write))}</span>`],
       ["simulation control", escapeHtml((api.simulation_control || []).join(", "))],
       ["unavailable actions", escapeHtml((capabilities.unavailable_actions || []).join(", "))],
     ])) +
-    section("Read endpoints", table(["path"], (api.read || []).map((p) => [escapeHtml(p)])));
+    section("Read endpoints", table(["path"], (api.read || []).map((p) => [escapeHtml(p)]))) +
+    section("CLI commands", table(["command", "endpoint"],
+      Object.entries(cli.commands || {}).map(([name, path]) => [escapeHtml(name), escapeHtml(path)]))) +
+    section("Exit codes", table(["code", "meaning"],
+      Object.entries(cli.exit_codes || {}).map(([code, meaning]) => [escapeHtml(code), escapeHtml(meaning)])));
 }

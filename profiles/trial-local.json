@@ -72,5 +72,7 @@
   "projection.history_capacity": 500,
   "projection.view_depth": 10,
   "venue.rules.min_price": 1.0,
-  "venue.rules.max_price": 1000000.0
+  "venue.rules.max_price": 1000000.0,
+  "venue.normalization.price_rounding": "ROUND_DOWN",
+  "venue.normalization.quantity_rounding": "ROUND_DOWN"
 }

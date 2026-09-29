@@ -112,7 +112,8 @@ class SurfaceArchitectureTest(unittest.TestCase):
         known = {"/api/v1/snapshot", "/api/v1/schema", REPORT_PATH, CAPABILITIES_PATH, METRICS_PATH,
                  RUNS_PATH, RUNS_COMPARE_PATH, REPLAY_PATH, MARKET_TIMELINE_PATH, MARKET_DEPTH_PATH,
                  MARKET_TRADES_PATH, MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH, FACTS_PATH,
-                 PORTFOLIO_TIMELINE_PATH, ACTIONS_PATH, ACTIONS_AUDIT_PATH, ASSISTANT_CONTEXT_PATH}
+                 PORTFOLIO_TIMELINE_PATH, ACTIONS_PATH, ACTIONS_AUDIT_PATH, ASSISTANT_CONTEXT_PATH,
+                 "/api/v1/reasons"}   # F-09 catalog
         known |= set(EXECUTION_SUB_PATHS)
         known |= set(ROUTES)
         known |= {"/api/v1/execution"}   # execution 路由别名（orders 的兼容路径）

@@ -113,8 +113,9 @@ class SurfaceCapabilityApiTest(unittest.TestCase):
         self.assertEqual(readiness["authority_market_generation"]["value"], 7)
         self.assertEqual(readiness["authority_recovery_generation"]["value"], "RecoveryGeneration(0, 1)")
 
-    def test_schema_version_is_three(self) -> None:
-        self.assertEqual(self.get("/api/v1/snapshot")["schema_version"], "3")
+    def test_schema_version_is_four(self) -> None:
+        # closure Slice 4：F-08 给 TraceEntry 增加 ts / identity_kind / latency_ms ⇒ 4
+        self.assertEqual(self.get("/api/v1/snapshot")["schema_version"], "4")
 
     def test_no_new_write_path_was_introduced(self) -> None:
         """G1–G5 全是只读：任何写尝试仍然 405（除 replay control）。"""

@@ -19,8 +19,11 @@ function nav(active) {
 export async function render(rest = []) {
   const active = VIEWS.includes(rest[0]) ? rest[0] : "live";
   const runId = rest[1] || null;
+  // F-16：Activity event → Market 对应时间点（canonical timestamp，不是字符串搜索）
+  const focusTs = active !== "run-review" && rest[1] && /^\d+$/.test(String(rest[1])) ? String(rest[1]) : null;
   const header = section("Market view", nav(active) + (runId
-    ? `<div class="row"><span class="k">run</span><span class="v">${escapeHtml(runId)}</span></div>` : ""));
+    ? `<div class="row"><span class="k">run</span><span class="v">${escapeHtml(runId)}</span></div>` : "")
+    + (focusTs ? `<div class="row"><span class="k">focused timestamp</span><span class="v">${escapeHtml(focusTs)}</span></div>` : ""));
 
   if (active === "run-review") {
     if (!runId) {

@@ -57,7 +57,23 @@ def snapshot_to_jsonable(snapshot: SystemSnapshot) -> dict[str, object]:
         raise SerializationError("snapshot_to_jsonable requires a SystemSnapshot")
     payload = to_jsonable(snapshot)
     assert isinstance(payload, dict)  # noqa: S101 - dataclass 必然映射成 dict
+    _annotate_reasons(payload)
     return payload
+
+
+def _annotate_reasons(payload: dict[str, object]) -> None:
+    """F-09：给已序列化的 blocker 附加人类解释（原始 reason_code 保留）。
+
+    presentation-only：不改变任何决策，不替换 code；未知 code 走 `explain_reason` 的兜底文案。
+    """
+    from product.reason_catalog import explain_reason
+
+    blockers = payload.get("blockers")
+    if not isinstance(blockers, list):
+        return
+    for entry in blockers:
+        if isinstance(entry, dict) and isinstance(entry.get("reason_code"), str):
+            entry["explanation"] = explain_reason(entry["reason_code"]).to_payload()
 
 
 def snapshot_to_json(snapshot: SystemSnapshot, *, indent: int | None = None) -> str:

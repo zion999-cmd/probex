@@ -21,11 +21,14 @@ Kill switch 语义（§16）：
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from execution.events import ExecutionEvent
 from execution.manager import OrderManager
+from execution.normalization import (BoundedNormalizationEvidenceLog, OrderNormalizationError,
+                                     OrderNormalizer, normalize_with_evidence)
 from execution.types import OrderStatus
 from execution.tracker import TrackerUpdate
 from execution.types import Order
@@ -48,6 +51,16 @@ class ExecutionRejected:
     @property
     def reason_code(self) -> object:
         return self.decision.reason_code
+
+
+@dataclass(frozen=True, slots=True)
+class RiskDecisionObservation:
+    """一次真实风险判定的只读观测（allow 与 reject 都记录；引用既有 RiskDecision，不复制）。"""
+
+    decision: RiskDecision
+    proposal: OrderProposal
+    timestamp: Milliseconds
+    client_order_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +96,31 @@ class ExecutionEngine:
     book_healthy: bool = True
     #: 旁路延迟观测（closure Slice 3 / F-05）：默认 None ⇒ 行为完全不变
     latency_observer: Callable[[str, int], None] | None = None
+    #: F-08：有界风险判定观测（allow + reject 都进 trace；默认仅保留最近 200 条）
+    decision_capacity: int = 200
+    #: F-08：执行边界的显式归一化（None ⇒ 不归一，行为与既有完全一致）
+    normalizer: OrderNormalizer | None = None
+    normalization_capacity: int = 200
     rejections: list[ExecutionRejected] = field(default_factory=list)
+    _decisions: deque = field(default_factory=deque, init=False)
+    _normalization: BoundedNormalizationEvidenceLog = field(init=False)
+
+    def __post_init__(self) -> None:
+        if isinstance(self.decision_capacity, bool) or not isinstance(self.decision_capacity, int) \
+                or self.decision_capacity <= 0:
+            raise ValueError("decision_capacity must be a positive int")
+        self._decisions = deque(self._decisions, maxlen=self.decision_capacity)
+        self._normalization = BoundedNormalizationEvidenceLog(capacity=self.normalization_capacity)
+
+    @property
+    def decision_log(self) -> tuple[RiskDecisionObservation, ...]:
+        """风险判定观测（allow 与 reject）；只读，供产品层组成 trace。"""
+        return tuple(self._decisions)
+
+    @property
+    def normalization_log(self) -> BoundedNormalizationEvidenceLog:
+        """执行边界归一化证据（未配置 normalizer 时为空 ⇒ 产品层如实 ABSENT）。"""
+        return self._normalization
 
     # ------------------------------------------------------------------ submit
 
@@ -104,10 +141,27 @@ class ExecutionEngine:
         if decision.rejected:
             rejection = ExecutionRejected(proposal=proposal, decision=decision, timestamp=now_ms)
             self.rejections.append(rejection)
+            self._decisions.append(RiskDecisionObservation(decision=decision, proposal=proposal,
+                                                           timestamp=now_ms, client_order_id=None))
             return ExecutionResult(timestamp=now_ms, snapshot=snapshot, decision=decision, rejection=rejection)
+
+        # F-08：执行边界归一化（只有显式配置时才发生；evidence 是只读事实）
+        if self.normalizer is not None:
+            normalized, evidence = normalize_with_evidence(
+                self.normalizer, price=proposal.price, quantity=proposal.quantity, ts=now_ms,
+                client_order_id=None, log=self._normalization)
+            if normalized is None:
+                raise OrderNormalizationError(evidence.reject_reason or "order normalization rejected")
+            proposal = replace(proposal, price=float(normalized.price),
+                               quantity=float(normalized.quantity))
 
         self._note_latency("submit_request", now_ms)
         order, updates = self.manager.submit(proposal, timestamp=now_ms)
+        # 归一化 evidence 在"建单前"产生，这里把 canonical identity 补上（顺序不可颠倒）
+        self._normalization.bind_client_order_id(order.client_order_id)
+        self._decisions.append(RiskDecisionObservation(decision=decision, proposal=proposal,
+                                                       timestamp=now_ms,
+                                                       client_order_id=order.client_order_id))
         if order.status in (OrderStatus.OPEN, OrderStatus.PARTIALLY_FILLED, OrderStatus.FILLED):
             self._note_latency("event:OrderAccepted", int(order.updated_at))
         return ExecutionResult(

@@ -118,6 +118,9 @@ class AssistantService:
             view = self.raw_facts_provider(kind, identity)
             facts = {"available": bool(getattr(view, "available", False)),
                      "names": [name for name, _ in getattr(view, "facts", ())]}
+        # F-09：同一 catalog 给 blocker 附加人类解释（原始 reason_code 保留）
+        from product.reason_catalog import explain_codes
+
         return {
             "kind": kind,
             "identity": identity,
@@ -129,6 +132,7 @@ class AssistantService:
             ],
             "raw_facts": facts,
             "blockers": [f"{b.owner.value}:{b.reason_code}" for b in snapshot.blockers],
+            "blocker_explanations": explain_codes(b.reason_code for b in snapshot.blockers),
             "note": "explanation is composed from existing product facts (no LLM, no new truth)",
         }
 

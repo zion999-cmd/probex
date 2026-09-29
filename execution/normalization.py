@@ -20,7 +20,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field, replace
 from decimal import ROUND_DOWN, ROUND_HALF_UP, ROUND_UP, Decimal, InvalidOperation, localcontext
 
 from execution.types import ExecutionError
@@ -143,9 +144,132 @@ def _plain(value: Decimal) -> str:
     return text or "0"
 
 
+# ---------------------------------------------------------------------- F-08 evidence
+#
+# 归一化在**执行边界**发生时，必须留下只读证据事实（输入值 / 归一值 / 舍入模式 / 拒绝原因）。
+# 本模块只负责"产生事实"，不决定是否重试、不改交易语义、不 import 产品层。
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizationEvidence:
+    """一次执行边界归一化的只读证据（`client_order_id` 为 canonical identity）。"""
+
+    ts: int
+    client_order_id: str | None
+    input_price: str
+    input_quantity: str
+    normalized_price: str | None
+    normalized_quantity: str | None
+    adjusted: bool | None
+    price_rounding: str
+    quantity_rounding: str
+    rejected: bool
+    reject_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.ts, bool) or not isinstance(self.ts, int) or self.ts < 0:
+            raise OrderNormalizationError("NormalizationEvidence.ts must be a non-negative int (ms)")
+        if not isinstance(self.price_rounding, str) or not isinstance(self.quantity_rounding, str):
+            raise OrderNormalizationError("NormalizationEvidence rounding modes must be strings")
+        if self.rejected and not self.reject_reason:
+            raise OrderNormalizationError("rejected normalization evidence must carry a reason")
+        if not self.rejected and (self.normalized_price is None or self.normalized_quantity is None):
+            raise OrderNormalizationError("accepted normalization evidence must carry normalized values")
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "ts": self.ts,
+            "client_order_id": self.client_order_id,
+            "input_price": self.input_price,
+            "input_quantity": self.input_quantity,
+            "normalized_price": self.normalized_price,
+            "normalized_quantity": self.normalized_quantity,
+            "adjusted": self.adjusted,
+            "price_rounding": self.price_rounding,
+            "quantity_rounding": self.quantity_rounding,
+            "rejected": self.rejected,
+            "reject_reason": self.reject_reason,
+        }
+
+
+@dataclass(slots=True)
+class BoundedNormalizationEvidenceLog:
+    """有界归一化证据日志（运行时内存；不是第二套交易事实）。"""
+
+    capacity: int = 200
+    _items: deque = field(default_factory=deque)
+
+    def __post_init__(self) -> None:
+        if isinstance(self.capacity, bool) or not isinstance(self.capacity, int) or self.capacity <= 0:
+            raise OrderNormalizationError("BoundedNormalizationEvidenceLog.capacity must be a positive int")
+        self._items = deque(self._items, maxlen=self.capacity)
+
+    def record(self, evidence: NormalizationEvidence) -> None:
+        if not isinstance(evidence, NormalizationEvidence):
+            raise OrderNormalizationError("record() requires a NormalizationEvidence")
+        self._items.append(evidence)
+
+    def evidence(self) -> tuple[NormalizationEvidence, ...]:
+        return tuple(self._items)
+
+    def bind_client_order_id(self, client_order_id: str) -> bool:
+        """把最近一条尚无 identity 的证据绑定到刚创建的订单（写边界顺序：归一化 → 建单）。"""
+        if not self._items:
+            return False
+        last = self._items[-1]
+        if last.client_order_id is not None:
+            return False
+        self._items[-1] = replace(last, client_order_id=str(client_order_id))
+        return True
+
+    @property
+    def counts(self) -> dict[str, int]:
+        return {"samples": len(self._items), "capacity": self.capacity}
+
+
+def normalize_with_evidence(
+    normalizer: "OrderNormalizer",
+    *,
+    price: object,
+    quantity: object,
+    ts: int,
+    client_order_id: str | None = None,
+    log: BoundedNormalizationEvidenceLog | None = None,
+) -> tuple[NormalizedOrderParams | None, NormalizationEvidence]:
+    """在真实边界归一化并产出证据（不改变 `OrderNormalizer.normalize` 的逻辑）。
+
+    失败（输入非法 / 量化后非正）**不抛出**：返回 `(None, evidence(rejected=True, reason=...))`，
+    由调用方决定如何拒绝（执行边界仍然 fail closed）。
+    """
+    if not isinstance(normalizer, OrderNormalizer):
+        raise OrderNormalizationError("normalize_with_evidence requires an OrderNormalizer")
+    try:
+        params = normalizer.normalize(price=price, quantity=quantity)
+    except OrderNormalizationError as exc:
+        evidence = NormalizationEvidence(
+            ts=int(ts), client_order_id=client_order_id, input_price=str(price),
+            input_quantity=str(quantity), normalized_price=None, normalized_quantity=None,
+            adjusted=None, price_rounding=normalizer.price_rounding,
+            quantity_rounding=normalizer.quantity_rounding, rejected=True,
+            reject_reason=str(exc) or type(exc).__name__)
+    else:
+        evidence = NormalizationEvidence(
+            ts=int(ts), client_order_id=client_order_id, input_price=str(price),
+            input_quantity=str(quantity), normalized_price=params.price_text,
+            normalized_quantity=params.quantity_text, adjusted=params.adjusted,
+            price_rounding=normalizer.price_rounding,
+            quantity_rounding=normalizer.quantity_rounding, rejected=False)
+    if log is not None:
+        log.record(evidence)
+    return (None if evidence.rejected else params), evidence
+
+
 __all__ = [
     "ALLOWED_ROUNDING",
+    "BoundedNormalizationEvidenceLog",
+    "NormalizationEvidence",
     "NormalizedOrderParams",
     "OrderNormalizationError",
     "OrderNormalizer",
+    "normalize_with_evidence",
 ]

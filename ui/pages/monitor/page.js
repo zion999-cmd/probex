@@ -1,7 +1,7 @@
 /** Monitor：30 秒理解当前系统状态（P0001.12.1 §1）。 */
-import { ENDPOINTS, fetchJson, fetchOrUnavailable, fetchSnapshot } from "/ui/client/api.js";
-import { escapeHtml, fact, rows, section } from "/ui/client/render.js";
-import { SURFACES } from "/ui/app/surfaces.js";
+import { ENDPOINTS, fetchJson, fetchOrUnavailable, fetchSnapshot, reasonCatalog } from "/ui/client/api.js";
+import { escapeHtml, fact, reasonCell, rows, section } from "/ui/client/render.js";
+import { BLOCKER_SECTION, surfaceHash } from "/ui/app/navigation.js";
 
 export const title = "Monitor";
 export const slug = "monitor";
@@ -21,9 +21,11 @@ export async function render() {
     ["active orders", String(orders.length)],
     ["readiness", fact(snapshot.readiness.status)],
   ]);
+  const catalog = await reasonCatalog();
   const blockers = (snapshot.blockers || []).length
-    ? (snapshot.blockers || []).map((b, index) => [b.severity + " · " + b.owner,
-        `<span class="${b.severity === "BLOCKING" ? "bad" : "unknown"}">${escapeHtml(b.reason_code)}</span>`])
+    ? (snapshot.blockers || []).map((b) => [b.severity + " · " + b.owner,
+        // F-16：Blocker → System 对应 section；F-09：原始 code + 人类解释
+        `<a href="${surfaceHash("system", BLOCKER_SECTION[b.owner] || "execution")}">${reasonCell(b.reason_code, catalog)}</a>`])
     : [["blockers", "none"]];
   const market = rows([
     ["market health", fact(snapshot.market.healthy)],

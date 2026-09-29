@@ -1,38 +1,37 @@
-/** Runs（P0001.11 §2）：run 列表 + 单个 run 的 summary/metrics + 两个 run 对比（UNKNOWN 不填 0）。 */
+/** Runs detail view（P0001.10.2 / F-19）：有界分页读取 run 列表。 */
 import { ENDPOINTS, fetchOrUnavailable } from "/ui/client/api.js";
-import { escapeHtml, fact, factRows, rows, section, table } from "/ui/client/render.js";
+import { escapeHtml, fact, rows, section, table } from "/ui/client/render.js";
 
 export const title = "Runs";
 export const slug = "runs";
 
-export async function render() {
-  const runsPayload = await fetchOrUnavailable(ENDPOINTS.runs);
-  if (runsPayload.unavailable) {
-    return section("Run registry", rows([["registry",
-      `<span class="unknown">UNKNOWN (${escapeHtml(runsPayload.unavailable)})</span>`]]));
+const PAGE_LIMIT = 20;
+
+export async function render(rest = []) {
+  const requested = Number.parseInt(rest[0] ?? "0", 10);
+  const offset = Number.isFinite(requested) && requested >= 0 ? requested : 0;
+  const payload = await fetchOrUnavailable(`${ENDPOINTS.runs}?limit=${PAGE_LIMIT}&offset=${offset}`);
+  if (payload.unavailable) {
+    return section("Runs", rows([["run registry",
+      `<span class="unknown">UNKNOWN (${escapeHtml(payload.unavailable)})</span>`]]));
   }
-  const runs = runsPayload.runs || [];
-  const list = table(["run_id", "status", "started_at", "config_id", "fingerprint"],
-    runs.map((run) => [escapeHtml(run.run_id || ""), escapeHtml(run.status || ""),
-      String(run.started_at ?? ""), fact(run.config_id), fact(run.config_fingerprint)]));
-  const summary = await fetchOrUnavailable(ENDPOINTS.runSummary);
-  const summaryBlock = summary.unavailable
-    ? rows([["run summary", `<span class="unknown">UNKNOWN (${escapeHtml(summary.unavailable)})</span>`]])
-    : factRows(summary.run_summary || {});
-  const metrics = summary.unavailable ? "" : section("Metrics (from the run summary)",
-    factRows(summary.run_summary.metrics || {}));
-  let compare = rows([["compare", "provide two run ids via the API (left/right)"]]) ;
-  if (runs.length >= 2) {
-    const comparison = await fetchOrUnavailable(
-      `${ENDPOINTS.runCompare}?left=${encodeURIComponent(runs[0].run_id)}&right=${encodeURIComponent(runs[1].run_id)}`);
-    if (!comparison.unavailable) {
-      const data = comparison.comparison || {};
-      compare = table(["metric", "left", "right", "delta"],
-        (data.metrics || []).map((metric) => [escapeHtml(metric.name), fact(metric.left), fact(metric.right),
-          fact(metric.delta)]));
-    }
-  }
-  return section("Runs", list) + section("Latest run summary", summaryBlock) + metrics +
-    section(`Compare (${runs.length >= 2 ? escapeHtml(runs[0].run_id) + " vs " + escapeHtml(runs[1].run_id) : "n/a"})`,
-      compare);
+  const runs = payload.runs || [];
+  const pagination = payload.pagination || {};
+  const list = table(["run_id", "mode", "status", "started_at", "config fingerprint", "links"],
+    runs.map((run) => [escapeHtml(run.run_id || ""), escapeHtml((run.runtime || {}).mode || ""),
+      escapeHtml(run.status || ""), String(run.started_at ?? ""), fact(run.config_fingerprint),
+      `<a href="#/market/run-review/${encodeURIComponent(run.run_id)}">run review</a> · ` +
+      `<a href="#/activity">activity</a>`]));
+  const prev = offset - PAGE_LIMIT >= 0
+    ? `<a href="#/performance/runs/${offset - PAGE_LIMIT}">prev</a>` : "none";
+  const next = pagination.has_more && pagination.next_offset !== null && pagination.next_offset !== undefined
+    ? `<a href="#/performance/runs/${pagination.next_offset}">next</a>` : "none";
+  const meta = rows([
+    ["offset / limit", `${escapeHtml(String(pagination.offset ?? offset))} / ${escapeHtml(String(pagination.limit ?? PAGE_LIMIT))}`],
+    ["total", escapeHtml(String(pagination.total ?? runs.length))],
+    ["has_more", escapeHtml(String(Boolean(pagination.has_more)))],
+    ["previous", prev], ["next", next],
+    ["bounds", "the list is bounded by the Product API (limit has a safe maximum)"],
+  ]);
+  return section("Runs (bounded page)", list) + section("Pagination", meta);
 }

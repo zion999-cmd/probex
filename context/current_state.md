@@ -613,3 +613,35 @@ P0001.9.5 已作为 `a2ab8da`（1631 passed）、P0001.9.6 已作为 `afc0196`�
 - **detached 全量复核**：修复后**连续 3 次** `Ran 2186 tests ... OK (skipped=24)`（0 failed）。
 - `context/status.json.currentProposal = null`；closures Slice 1–3 全部收口；**不进入 Slice 4 之前的最后一个门槛已满足**。
 - 测试：全量 **2186 passed / 0 failed / 24 skipped**（detached worktree 复核 ×3）。
+
+### Closure Slice 4 — 真实 Product 链路（F-08/F-09/F-13/F-16/F-19，已完成）
+
+人类授权（本会话）：closure 继续，关闭 F-08/F-09/F-13/F-16/F-19，**不新建 Proposal 编号**；
+原则 = 把已有事实/配置/页面真正连成产品链路（**不新增交易能力**）。
+
+- **F-08 CLOSED（Activity 完整因果链）**：`evidence.trace` 成为按时间排序的统一 trace
+  （`market_state → prediction → maker_decision → risk → readiness → normalization → order(submit) → ack →
+  execution_event → cancel → fill → unknown → reconciliation`）。
+  `ExecutionEngine.decision_log`（allow+reject，引用既有 RiskDecision）；`execution/normalization.py` 新增
+  `NormalizationEvidence` + `BoundedNormalizationEvidenceLog` + `normalize_with_evidence()`（执行边界记录
+  输入/归一值/舍入/reject reason，`OrderNormalizer` 逻辑未改）；ack latency 只读 Slice 3 真实 observer；
+  受控 reconciliation 落 `_TraceEvent`。每条 `TraceEntry` 带 `ts` / `identity_kind` / `latency_ms`；
+  缺阶段显式 `absent` + reason（`fill` 例外：`recent_fill_limit=0` = 未暴露成交）。`schema_version` → **4**。
+- **F-09 CLOSED（Reason 解释层）**：`product/reason_catalog.py`（72 条，presentation-only，不参与决策）；
+  原始 code 永远保留，未收录 ⇒ `暂无解释`（不猜）。复用：`/api/v1/reasons`(+`/<code>`)、snapshot blocker `explanation`、
+  Assistant `blocker_explanations`、CLI `reasons`/`blockers`/`explain`、UI `reasonCell`。
+- **F-13 CLOSED（Config Resolver 真接线）**：`env_config_entries()`（`PROBEX_CONFIG_*` + `PROBEX_SECRET_*` 只存引用名）；
+  `build_profile_from_args` 收集 ENV+FILE+CLI，用同一 `resolve_config`（CLI > ENV > FILE > CONSTRUCTOR）；
+  assembly 解析一次（`_resolved_config`），System→Configuration 显示值/来源/fingerprint/secret 引用；fail-closed 未变。
+- **F-16 CLOSED（Navigation + Legacy）**：`product/navigation.py` 与 `ui/app/navigation.js` 单一契约（测试固定一致）；
+  Assistant `navigate.surface`/`select.entity` 与 UI 共用；Run→Run Review、Run→Activity、event→Market ts、
+  Blocker→System section、Order/Fill→Evidence/Raw Facts。`risk`/`readiness`/`capabilities` 旧页面已删除（被 System 覆盖），
+  其余降级为可到达 detail route ⇒ 无死页面；顺带修复 `system/page.js` 语法错误（整个 System Surface 曾无法加载）。
+- **F-19 CLOSED（Runs 有界化）**：`JsonRunRegistry.page(limit, offset)`（`MAX=200` / `DEFAULT=50`）+ `GET /api/v1/runs`
+  的 `limit/offset` 与 `pagination` 元数据；UI Performance 分页读取；CLI `runs --limit --offset`；compare/show 不受影响。
+- **产品级 E2E（真实启动，非 harness）**：A 因果 trace（含 risk/normalization/ack/cancel/reconciliation）；
+  B reason UX（catalog + 未知 code + blocker explanation）；C config provenance（CLI>ENV>FILE，secret 仅引用）；
+  D navigation targets；E runs 分页无重复/遗漏。真实 `python3 -m runtime.assembly` 启动 + HTTP 证据齐全；
+  SIGTERM ⇒ durable `COMPLETED` + active 清空。
+- 测试：全量 **2232 passed / 0 failed / 24 skipped**（+46 新测试）。
+- `context/status.json.currentProposal = null`。

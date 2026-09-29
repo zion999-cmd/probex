@@ -27,6 +27,10 @@ from reports.types import MetricComparison, RunComparison, RunRecord, RunStatus
 
 #: 仓库外默认目录；可由 env 覆盖（裁决 B）
 RUN_REGISTRY_ENV = "PROBEX_RUN_REGISTRY_DIR"
+#: F-19：/api/v1/runs 的**安全上限**（列表不得无界返回）
+MAX_RUN_PAGE_LIMIT = 200
+#: F-19：未显式给 limit 时的默认页大小（仍然有界）
+DEFAULT_RUN_PAGE_LIMIT = 50
 #: active marker 文件名（与 run 同一持久化域；原子更新）
 ACTIVE_FILE = "active.json"
 DEFAULT_RUN_REGISTRY_DIR = "~/.probex/runs"
@@ -50,6 +54,37 @@ def _fact_from_payload(payload: object, *, name: str) -> Fact:
     if not payload.get("known"):
         return Fact.unknown(str(payload.get("reason") or "unknown"))
     return Fact.of(payload.get("value"))
+
+
+@dataclass(frozen=True, slots=True)
+class RunPage:
+    """一页 run（F-19）：只描述**已读取的**条目与分页元数据，不做 retention。"""
+
+    items: tuple[RunRecord, ...]
+    offset: int
+    limit: int
+    total: int
+    has_more: bool
+    next_offset: int | None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.offset, bool) or not isinstance(self.offset, int) or self.offset < 0:
+            raise RunRegistryError("RunPage.offset must be a non-negative int")
+        if isinstance(self.limit, bool) or not isinstance(self.limit, int) or self.limit <= 0:
+            raise RunRegistryError("RunPage.limit must be a positive int")
+        if self.total < 0 or len(self.items) > self.limit:
+            raise RunRegistryError("RunPage metadata is inconsistent with its items")
+        if self.has_more != (self.offset + len(self.items) < self.total):
+            raise RunRegistryError("RunPage.has_more must match offset+len(items) < total")
+        if self.has_more and self.next_offset != self.offset + len(self.items):
+            raise RunRegistryError("RunPage.next_offset must be the next contiguous offset")
+        if not self.has_more and self.next_offset is not None:
+            raise RunRegistryError("RunPage.next_offset must be None on the last page")
+
+    def to_payload(self) -> dict[str, object]:
+        return {"offset": int(self.offset), "limit": int(self.limit), "total": int(self.total),
+                "count": len(self.items), "has_more": bool(self.has_more),
+                "next_offset": (None if self.next_offset is None else int(self.next_offset))}
 
 
 @dataclass(slots=True)
@@ -301,8 +336,34 @@ class JsonRunRegistry:
         status = RunStatus.RUNNING if self.active_run_id() == run_id else RunStatus.INCOMPLETE
         return self._record_from_payload(started, status=status)
 
+    def page(self, *, limit: int, offset: int = 0) -> RunPage:
+        """分页读取（F-19）：`limit` 必填且有安全上限；`offset` 为简单游标（复用现有排序）。
+
+        返回 `items` + `offset/limit/total/has_more/next_offset`；**不做 retention / 不删除**。
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise RunRegistryError("page() requires an integer limit")
+        if limit <= 0:
+            raise RunRegistryError("page() limit must be > 0")
+        if limit > MAX_RUN_PAGE_LIMIT:
+            raise RunRegistryError(
+                f"page() limit {limit} exceeds the safe maximum {MAX_RUN_PAGE_LIMIT}")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise RunRegistryError("page() offset must be a non-negative int")
+        everything = self.list()
+        total = len(everything)
+        items = everything[offset:offset + limit]
+        has_more = offset + len(items) < total
+        return RunPage(items=tuple(items), offset=offset, limit=limit, total=total,
+                       has_more=has_more,
+                       next_offset=(offset + len(items)) if has_more else None)
+
     def list(self, *, limit: int | None = None) -> tuple[RunRecord, ...]:
-        """列出 run（按 started_at 新的在前；只读，不删除任何东西）。"""
+        """列出 run（按 started_at 新的在前；只读，不删除任何东西）。
+
+        注意：本方法保留给**内部聚合**（compare / 报告）。窄口 `/api/v1/runs` 必须走 `page()`，
+        不得把本方法的无界结果直接返回给调用方（F-19）。
+        """
         seen: dict[str, RunRecord] = {}
         for event in self._read_index():
             payload = event.get("record")
@@ -355,10 +416,13 @@ def _delta(name: str, left: Fact, right: Fact) -> Fact:
 
 __all__ = [
     "DEFAULT_RUN_REGISTRY_DIR",
+    "DEFAULT_RUN_PAGE_LIMIT",
     "INDEX_FILE",
     "INDEX_SCHEMA_VERSION",
+    "MAX_RUN_PAGE_LIMIT",
     "RUNS_DIR",
     "RUN_REGISTRY_ENV",
     "JsonRunRegistry",
+    "RunPage",
     "RunRegistryError",
 ]

@@ -34,7 +34,21 @@ export const ENDPOINTS = {
   executionLatency: "/api/v1/execution/latency",
   executionAnomalies: "/api/v1/execution/anomalies",
   executionReconciliation: "/api/v1/execution/reconciliation",
+  reasons: "/api/v1/reasons",
 };
+
+/** F-09：reason catalog 只取一次（UI/Assistant/CLI 共用同一来源）。 */
+let _reasonCatalog = null;
+export async function reasonCatalog() {
+  if (_reasonCatalog === null) {
+    try {
+      _reasonCatalog = (await fetchJson(ENDPOINTS.reasons)).catalog || [];
+    } catch (error) {
+      _reasonCatalog = [];
+    }
+  }
+  return _reasonCatalog;
+}
 
 /** 唯一允许的 POST：local replay session control（只作用于 REPLAY runtime）。 */
 export async function postReplay(verb, payload = {}) {

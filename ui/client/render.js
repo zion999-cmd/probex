@@ -23,6 +23,17 @@ export function factRows(object) {
   return rows(Object.entries(object || {}).map(([k, v]) => [k, fact(v)]));
 }
 
+/** F-09：reason code 单元格——原始 code 永远保留，另附人类解释（未知 ⇒ 暂无解释）。 */
+export function reasonCell(code, catalog = []) {
+  const entry = (catalog || []).find((item) => item.reason_code === code);
+  const raw = `<span class="bad">${escapeHtml(String(code ?? "UNKNOWN"))}</span>`;
+  if (!entry) {
+    return `${raw} <span class="unknown">UNKNOWN (暂无解释 / not catalogued)</span>`;
+  }
+  return `${raw} <span class="known">${escapeHtml(entry.title)}</span>` +
+    `<div class="muted">${escapeHtml(entry.explanation)} — ${escapeHtml(entry.suggested_next_step)}</div>`;
+}
+
 export function table(headers, rowsData) {
   if (!rowsData.length) return '<div class="row"><span class="k">rows</span><span class="v known">0</span></div>';
   return `<table><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr>` +

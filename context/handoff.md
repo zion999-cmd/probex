@@ -1863,3 +1863,70 @@ AssertionError: 0 not greater than or equal to 1   # account_sampling_errors
   `profiles/trial-local.json`、`proposals/P0001.13-*.md`、`context/*`、以及 flaky 修复的测试文件。
 - detached 复核：**2186 OK / 0 failed / 24 skipped ×3**（修复后）。
 - 下一步仅在人类授权后进入 Slice 4（本轮不新增实现）。
+
+## 2026-09-29（续 29）：Closure Slice 4 —— F-08/F-09/F-13/F-16/F-19（全部 CLOSED）
+
+人类授权（本会话）：closure 继续，**不新建 Proposal 编号**，关闭 F-08/F-09/F-13/F-16/F-19；
+原则 = 把已有事实/配置/页面真正连成产品链路（不新增交易能力 / 策略 / Risk 规则 / Execution 状态机 / evidence store）。
+
+### F-08 Activity 完整因果链
+
+- `product/types.py`：`TraceEntry` 新增 `ts` / `identity_kind` / `latency_ms`（`SCHEMA_VERSION` 3 → **4**）；
+  `product/service.py::_evidence` 重写为**按时间排序的统一 trace**，含 `risk / normalization / order(submit) / ack /
+  execution_event / cancel / fill / unknown / reconciliation`；缺阶段显式 `absent` + reason（不静默跳过）。
+- `execution/engine.py`：新增有界 `decision_log`（allow + reject，引用既有 `RiskDecision`）、可选 `normalizer`
+  （默认 None ⇒ 行为不变）与 `normalization_log`；`execution/normalization.py` 新增 `NormalizationEvidence` /
+  `BoundedNormalizationEvidenceLog` / `normalize_with_evidence()`（`OrderNormalizer` 逻辑**未改**）。
+- `connectors/binance/execution/adapter.py`：真实写边界也记录归一化证据（`normalization_log`，可选）。
+- `runtime/assembly.py`：接线 `risk_decisions` / `normalization_evidence` / `reconciliation_events` / `ack_latency` /
+  `execution_events`（OrderTracker 终态）/ `fills`（AccountingCore FillLedger）/ `market_state_hash`
+  （既有 `prediction.schema.market_state_hash`）；PAPER 归一化仅在显式配置舍入时启用（trial profile 新增
+  `venue.normalization.*` = trial-only 值）。
+- 真实 E2E 证据：trace = `market_state(hash) · risk(allow) · normalization(59000.0→59000, ROUND_DOWN) ·
+  order(CANCELED) · ack(latency=0ms) · execution_event · cancel · reconciliation`；prediction/decision/readiness 显式 absent。
+
+### F-09 Reason Code 人类解释层
+
+- 新增 `product/reason_catalog.py`（72 条；`reason_code/title/explanation/severity/suggested_next_step/domain` + 英文）；
+  未知 code ⇒ `暂无解释`（`catalogued=False`），原始 code 保留；**不参与任何决策**（结构性测试）。
+- 复用：`GET /api/v1/reasons`(+`/<code>`)、snapshot blocker `explanation`（serialization annotation）、
+  Assistant `explain.entity → blocker_explanations`、CLI `reasons` / `blockers` / `explain`、UI `reasonCell` + 全局 blocker strip。
+
+### F-13 Config Resolver 真接线
+
+- `product/provenance.py`：`ENV_CONFIG_PREFIX=PROBEX_CONFIG_` / `ENV_SECRET_PREFIX=PROBEX_SECRET_` + `env_config_entries()`
+  （值可 JSON；secret **只存引用名**，值永远 UNKNOWN）。
+- `runtime/assembly.py::build_profile_from_args` 收集 ENV+FILE+CLI，**同一** `resolve_config`（CLI > ENV > FILE > CONSTRUCTOR）；
+  `ProductRuntime` 解析一次存 `_resolved_config`，`_config_values()` 只消费它。
+- 真实启动证据：`sources={CLI:1, ENV:2, FILE:33}`；`projection.max_points`=CLI；`venue.note`=ENV；
+  `binance.api_key` ⇒ `env:BINANCE_API_KEY` 且值 UNKNOWN；fingerprint `sha256:…`。
+
+### F-16 Navigation + Legacy
+
+- `product/navigation.py`（single source）+ `ui/app/navigation.js`（镜像，测试固定一致）；
+  Assistant `navigate.surface`（参数新增 `detail`）/ `select.entity` 与 UI 共用同一契约。
+- 跳转全部用 canonical id/timestamp：Run→Run Review / Run→Activity / event→`#/market/live/<ts>` /
+  Blocker→`#/system/<section>`（owner 映射）/ Order·Fill→`#/activity/evidence/<kind>/<id>`（Evidence detail 可查 `/api/v1/facts`）。
+- legacy 审查：`risk` / `readiness` / `capabilities` 被 System section 完全覆盖 ⇒ **删除**；其余降级为可到达 detail route
+  （`DETAIL_PAGE_MODULES`）⇒ 无死页面（测试固定）。
+- 顺带修 `ui/pages/system/page.js` 多余 `}`（JS 语法错误，整个 System Surface 之前无法加载）。
+
+### F-19 Runs 有界化
+
+- `storage/run_registry.py`：`RunPage` + `page(limit, offset)`（`MAX_RUN_PAGE_LIMIT=200` / `DEFAULT_RUN_PAGE_LIMIT=50`）；
+  `GET /api/v1/runs` 返回 `pagination`（`offset/limit/total/count/has_more/next_offset`），超限 ⇒ 400，缺参数 ⇒ 有界默认。
+- UI Performance 分页读取 + `#/performance/runs/<offset>`；CLI `runs --limit --offset`。
+
+### 其它修正
+
+- `api/server.py::_serve_action_invoke`：invoke 前先 `_wire_execution_actions`（否则从未调用过 `/actions` 时先 invoke 得到 `NO_HANDLER`）。
+- 测试：新增 46 条（unit：reason catalog / config resolver / run pagination / navigation contract / evidence trace；
+  integration：`test_slice4_product_e2e.py` A–E）。全量 **2232 passed / 0 failed / 24 skipped**。
+- 真实 `python3 -m runtime.assembly`（PAPER + trial profile + EVENT/FILE/CLI）启动 + HTTP 验证 + SIGTERM
+  ⇒ durable `COMPLETED`、active 清空。
+
+### 边界与下一步
+
+未新增交易能力 / 策略 / Risk 规则 / Execution 状态机 / evidence store / 第二套 config system / LLM / CAPITAL action；
+未改 `OrderNormalizer` 逻辑、未放松任何 fail-closed。`context/status.json.currentProposal = null`；
+**不自动进入 Slice 5**（retention / logging 等留待授权）。

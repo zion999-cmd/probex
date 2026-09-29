@@ -43,7 +43,8 @@ from actions import (
 )
 from api.server import create_server
 from assistant import AssistantService
-from product.provenance import ConfigEntry, ConfigSource, build_config_snapshot
+from product.provenance import (ConfigEntry, ConfigSource, build_config_snapshot,
+                                env_config_entries, resolve_config)
 from product.service import ProductService
 from market.events.types import Venue
 from product.types import Fact, RuntimeIdentity, RuntimeMode
@@ -65,6 +66,40 @@ class _ReconciliationFact:
     actions: tuple[object, ...]
     corrective: tuple[object, ...]
     converged: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _TraceEvent:
+    """F-08：受控入口产生的只读 trace 事实（不是第二套证据库，只是每次调用的记录）。"""
+
+    ts: int
+    identity: str
+    identity_kind: str
+    outcome: str
+    reason_code: str = ""
+    detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class _LifecycleFact:
+    """F-08：订单生命周期事实（字段搬运自 OrderTracker，不新建 event store）。"""
+
+    client_order_id: str
+    timestamp: int
+    event_name: str
+    reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class _FillFact:
+    """F-08：成交事实（字段搬运自 FillLedger；`order_id` 即 client_order_id）。"""
+
+    client_order_id: str
+    ts: int
+    price: float
+    quantity: float
+    fee: float
+    trade_id: str
 #: 允许的启动模式（默认 REPLAY；TESTNET/LIVE 必须显式指定）
 ALLOWED_MODES = (RuntimeMode.REPLAY, RuntimeMode.PAPER, RuntimeMode.TESTNET, RuntimeMode.LIVE)
 
@@ -165,17 +200,22 @@ class ProductRuntime:
     _account_timeline: object | None = field(default=None, init=False)
     _accounting_provider: object | None = field(default=None, init=False)
     _usage_collector: object | None = field(default=None, init=False)
+    #: F-13：**唯一**解析结果（CLI > ENV > FILE > CONSTRUCTOR）；装配只消费它
+    _resolved_config: tuple[ConfigEntry, ...] = field(default_factory=tuple, init=False)
     _prediction_runtime: object | None = field(default=None, init=False)
     _private_runtime: object | None = field(default=None, init=False)
     _latency_observer: object | None = field(default=None, init=False)
     _execution: object | None = field(default=None, init=False)
+    _reconciliation_events: list[object] = field(default_factory=list, init=False)
     _feed_error: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         now = int(self.profile.clock())
         self._registry = JsonRunRegistry(pathlib_path(self.profile.run_registry_dir))
+        # F-13：唯一次解析（provenance resolver）；后续所有消费方只读这个结果
+        self._resolved_config = resolve_config(self.profile.config_entries)
         self._cfg = build_config_snapshot(config_id=f"runtime-{self.profile.mode.value.lower()}",
-                                         entries=self.profile.config_entries, created_at=now)
+                                         entries=self._resolved_config, created_at=now)
         self._tracker = RuntimeStatusTracker(mode=self.profile.mode)
         self._identity = RuntimeIdentity(
             mode=self.profile.mode, environment=self.profile.environment, venue=self.profile.venue,
@@ -228,11 +268,9 @@ class ProductRuntime:
         return self._facts
 
     def _config_values(self) -> dict[str, object]:
-        """已解析的非敏感配置值（CLI 覆盖 FILE，沿用 provenance 优先级）。"""
-        from product.provenance import resolve_config
-
+        """已解析的非敏感配置值（**只消费 resolver 输出**，不重新解析一套配置）。"""
         return {entry.name: entry.value.value
-                for entry in resolve_config(self.profile.config_entries) if entry.value.known}
+                for entry in self._resolved_config if entry.value.known}
 
     def _reconciliation_state(self) -> object | None:
         """既有 reconciliation 事实的只读投影；未运行过 ⇒ None（UNKNOWN）。"""
@@ -434,6 +472,12 @@ class ProductRuntime:
             started = int(self.profile.clock())
             self._reconciled_count += 1
             self._latency_observer.note_reconciliation_duration(started)
+            # F-08：reconciliation 进入同一 trace（真实受控入口的调用事实）
+            self._reconciliation_events.append(_TraceEvent(
+                ts=started, identity=f"reconciliation:{self._reconciled_count}",
+                identity_kind="reconciliation_id", outcome="requested",
+                reason_code="RECONCILIATION_REQUIRED",
+                detail="controlled reconciliation entry point invoked"))
             return {"requested": True, "count": self._reconciled_count}
 
         # F-05：真实边界的延迟观测（旁路；不改交易语义）
@@ -451,6 +495,20 @@ class ProductRuntime:
 
             paper = PaperBroker()
             manager = OrderManager(tracker=self._tracker_owner, adapter=paper)
+            # F-08：执行边界归一化**只在显式配置舍入模式时**启用（不发明业务值）
+            normalizer = None
+            price_rounding = values.get("venue.normalization.price_rounding")
+            quantity_rounding = values.get("venue.normalization.quantity_rounding")
+            if (self._trading_rules is not None and isinstance(price_rounding, str)
+                    and isinstance(quantity_rounding, str)):
+                from decimal import Decimal as _Decimal
+
+                from execution.normalization import OrderNormalizer
+
+                normalizer = OrderNormalizer(
+                    tick_size=_Decimal(str(values["venue.rules.tick_size"])),
+                    step_size=_Decimal(str(values["venue.rules.step_size"])),
+                    price_rounding=price_rounding, quantity_rounding=quantity_rounding)
             limit_values: dict[str, float] = {}
             for key, field in (("risk.max_position_qty", "max_position_qty"),
                                ("risk.max_open_order_exposure", "max_open_order_exposure"),
@@ -465,6 +523,7 @@ class ProductRuntime:
                 # 只启用显式配置的限额：未配置的限额不强制对应事实存在（不是 bypass；配置了的仍严格判定）
                 gate=RiskGate(RiskLimits(**limit_values)),                    # type: ignore[arg-type]
                 manager=manager, book_healthy=True,
+                normalizer=normalizer,
                 latency_observer=lambda kind, ts: self._latency_note(kind, ts))
 
         self._safety_projection = ExecutionSafetyProjection(
@@ -501,6 +560,15 @@ class ProductRuntime:
             accounting_facts=(lambda: (self._accounting_provider.facts()
                                        if self._accounting_provider is not None else None)),
             prediction_provider_status=self._prediction_provider_status,
+            # F-08：真实边界事实 → trace（缺则产品层如实 ABSENT）
+            risk_decisions=self._risk_decision_views,
+            normalization_evidence=self._normalization_views,
+            reconciliation_events=lambda: tuple(self._reconciliation_events),
+            ack_latency=lambda: self._latency_log,
+            execution_events=self._execution_event_views,
+            fills=self._fill_views,
+            recent_fill_limit=(20 if self._accounting is not None else 0),
+            market_state_hash=self._market_identity,
             readiness=lambda: None,
             health=lambda: {"notes": (f"mode={self.profile.mode.value}",)},
             clock=self.profile.clock,
@@ -566,17 +634,32 @@ class ProductRuntime:
             return HandlerResult(result=explanation, fact_refs=(f"explain:{kind}:{identity}",))
 
         def navigate_handler(request: ActionRequest, context: ActionContext) -> HandlerResult:
+            # F-16：与 UI 共用 product.navigation 契约
+            from product.navigation import NavigationError, surface_route
+
             surface = str(request.parameters.get("surface") or "monitor")
+            detail = request.parameters.get("detail")
             identity = request.parameters.get("identity")
-            target = f"#/{surface}" + (f"/{identity}" if identity else "")
-            return HandlerResult(result={"target": target, "surface": surface})
+            try:
+                target = surface_route(surface, detail=(str(detail) if detail else None),
+                                       identity=(str(identity) if identity else None))
+            except NavigationError as exc:
+                raise ValueError(str(exc)) from None
+            return HandlerResult(result=target.to_payload())
 
         def select_handler(request: ActionRequest, context: ActionContext) -> HandlerResult:
+            from product.navigation import NavigationError, entity_route
+
             kind = str(request.parameters.get("kind") or "order")
             identity = str(request.parameters.get("identity") or "")
             if not identity:
                 raise ValueError("select.entity requires an identity")
-            return HandlerResult(result={"selected": {kind: identity}})
+            try:
+                target = entity_route(kind, identity)
+            except NavigationError as exc:
+                raise ValueError(str(exc)) from None
+            return HandlerResult(result={"selected": {kind: identity},
+                                         "navigation": target.to_payload()})
 
         def view_configure_handler(request: ActionRequest, context: ActionContext) -> HandlerResult:
             return HandlerResult(result={"bounds": {k: request.parameters.get(k)
@@ -648,6 +731,60 @@ class ProductRuntime:
             provider.account_provider = self._accounting_provider.sample   # type: ignore[attr-defined]
             provider.history_account = self._account_timeline              # type: ignore[attr-defined]
         provider.start()
+
+    def _market_identity(self) -> object | None:
+        """F-08：MarketState 的既有 canonical 指纹（只读；未接线/无状态 ⇒ None）。"""
+        provider = getattr(self, "_feed_provider", None)
+        state = getattr(provider, "last_state", None) if provider is not None else None
+        if state is None:
+            return None
+        from prediction.schema import market_state_hash
+
+        return market_state_hash(state)
+
+    def _execution_event_views(self) -> tuple[object, ...]:
+        """F-08：订单生命周期事实（终态 / LOST）；来自既有 OrderTracker，不新建事件存储。"""
+        tracker = self._tracker_owner
+        if tracker is None:
+            return ()
+        views: list[_LifecycleFact] = []
+        for order in getattr(tracker, "orders", ()):
+            status = getattr(order, "status", None)
+            terminal = bool(getattr(status, "is_terminal", False))
+            lost = bool(getattr(status, "is_lost", False))
+            if not (terminal or lost):
+                continue
+            name = getattr(status, "value", status)
+            views.append(_LifecycleFact(
+                client_order_id=str(order.client_order_id), timestamp=int(order.updated_at),
+                event_name=f"OrderStatus:{name}",
+                reason=("local uncertainty is not a terminal fact; converge via reconciliation"
+                        if lost else "")))
+        return tuple(views)
+
+    def _fill_views(self) -> tuple[object, ...]:
+        """F-08：成交事实（来自既有 AccountingCore FillLedger；`order_id` = client_order_id）。"""
+        accounting = getattr(self, "_accounting", None)
+        ledger = getattr(accounting, "fills", None) if accounting is not None else None
+        fills = getattr(ledger, "fills", None) if ledger is not None else None
+        if not fills:
+            return ()
+        return tuple(_FillFact(client_order_id=str(fill.order_id), ts=int(fill.exchange_ts),
+                               price=float(fill.price), quantity=float(fill.quantity),
+                               fee=float(fill.fee), trade_id=str(fill.trade_id)) for fill in fills)
+
+    def _risk_decision_views(self) -> tuple[object, ...]:
+        """F-08：engine 的风险判定观测（allow + reject）；未接线 ⇒ 空元组（如实 ABSENT）。"""
+        execution = getattr(self, "_execution", None)
+        log = getattr(execution, "decision_log", None) if execution is not None else None
+        return tuple(log) if log is not None else ()
+
+    def _normalization_views(self) -> tuple[object, ...]:
+        """F-08：执行边界归一化证据；未配置 normalizer ⇒ 空元组（如实 ABSENT，不伪造）。"""
+        execution = getattr(self, "_execution", None)
+        log = getattr(execution, "normalization_log", None) if execution is not None else None
+        evidence = getattr(log, "evidence", None) if log is not None else None
+        return tuple(evidence()) if callable(evidence) else ()
 
     def note_data_timestamp(self, ts_ms: int) -> None:
         """运行时推进 data timestamp（由真实 market/runtime event 驱动；不等 stop）。"""
@@ -746,23 +883,28 @@ def build_profile_from_args(argv: Sequence[str] | None = None) -> RuntimeProfile
     parser.add_argument("--event-store", default=None,
                         help="event store path; required for replay/paper real runs")
     args = parser.parse_args(list(argv) if argv is not None else None)
-    entries = tuple(ConfigEntry(name=name, source=ConfigSource.CLI, value=Fact.of(value))
-                    for item in args.config for name, _, value in [str(item).partition("=")])
+    cli_entries = tuple(ConfigEntry(name=name, source=ConfigSource.CLI, value=Fact.of(value))
+                        for item in args.config for name, _, value in [str(item).partition("=")])
+    file_entries: tuple[ConfigEntry, ...] = ()
     if args.config_file:
         import pathlib as _pathlib
 
         file_values = json.loads(_pathlib.Path(args.config_file).read_text(encoding="utf-8"))
         if not isinstance(file_values, dict):
             raise AssemblyError("--config-file must contain a JSON object")
-        entries = tuple(ConfigEntry(name=str(name), source=ConfigSource.FILE, value=Fact.of(value))
-                        for name, value in file_values.items()) + entries
+        file_entries = tuple(ConfigEntry(name=str(name), source=ConfigSource.FILE, value=Fact.of(value))
+                             for name, value in file_values.items())
+    # F-13：ENV 层（真实进程环境；只把实际存在的变量变成候选项）；优先级由 resolver 固定
+    env_entries = env_config_entries(os.environ)
+    entries = env_entries + file_entries + cli_entries
     if not entries:
         # 显式给出最小可审计输入（不是业务默认值：它只是"本次运行的身份描述"）
         entries = (ConfigEntry(name="symbol", source=ConfigSource.CLI, value=Fact.of(args.symbol)),
                    ConfigEntry(name="mode", source=ConfigSource.CLI,
                                value=Fact.of(str(args.mode).upper())))
     mode = RuntimeMode(str(args.mode).upper())
-    resolved = {entry.name: entry.value.value for entry in entries
+    # 只消费 resolver 输出（不在装配里自己实现一套优先级）
+    resolved = {entry.name: entry.value.value for entry in resolve_config(entries)
                 if entry.value.known}
     feed = None
     if args.event_store:

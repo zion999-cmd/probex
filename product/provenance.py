@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
@@ -49,6 +50,12 @@ SOURCE_PRECEDENCE: tuple[ConfigSource, ...] = (
     ConfigSource.FILE,
     ConfigSource.CONSTRUCTOR,
 )
+
+#: F-13：ENV 层命名约定（只读环境变量，不读取文件、不含默认值）
+#: `PROBEX_CONFIG_PROJECTION__WINDOW_MS=600000` -> `projection.window_ms`
+ENV_CONFIG_PREFIX = "PROBEX_CONFIG_"
+#: `PROBEX_SECRET_BINANCE_API_KEY=BINANCE_API_KEY` -> entry `binance.api.key`，ref `env:BINANCE_API_KEY`
+ENV_SECRET_PREFIX = "PROBEX_SECRET_"
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +172,46 @@ def build_config_snapshot(
                           fingerprint=config_fingerprint(resolved), created_at=int(created_at))
 
 
+def _env_name(suffix: str) -> str:
+    """`PROJECTION__WINDOW_MS` -> `projection.window_ms`（确定性映射，不做猜测）。"""
+    return suffix.lower().replace("__", ".")
+
+
+def _env_value(raw: str) -> object:
+    """ENV 值先尝试 JSON 解析（支持 dict / 数值 / bool），否则保留原字符串。"""
+    text = str(raw)
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return text
+
+
+def env_config_entries(environ: Mapping[str, str]) -> tuple[ConfigEntry, ...]:
+    """F-13：从环境变量构造 **ENV 层**候选项（不读取任何文件、不提供默认值）。
+
+    - `PROBEX_CONFIG_<NAME>`：非敏感配置值（值可为 JSON）；
+    - `PROBEX_SECRET_<NAME>`：只声明 secret **引用名**（值永远是 UNKNOWN）。
+    只把**实际存在**的变量变成候选项；缺失即没有该层输入（由 `resolve_config` 决定优先级）。
+    """
+    entries: list[ConfigEntry] = []
+    for key in sorted(str(name) for name in environ):
+        if key.startswith(ENV_CONFIG_PREFIX):
+            suffix = key[len(ENV_CONFIG_PREFIX):]
+            if not suffix:
+                continue
+            entries.append(ConfigEntry(name=_env_name(suffix), source=ConfigSource.ENV,
+                                       value=Fact.of(_env_value(environ[key]))))
+        elif key.startswith(ENV_SECRET_PREFIX):
+            suffix = key[len(ENV_SECRET_PREFIX):]
+            if not suffix:
+                continue
+            declared = str(environ[key] or "").strip()
+            ref_var = declared or suffix
+            entries.append(secret_entry(_env_name(suffix), source=ConfigSource.ENV,
+                                        secret_ref=f"env:{ref_var}"))
+    return tuple(entries)
+
+
 def secret_entry(name: str, *, source: ConfigSource, secret_ref: str) -> ConfigEntry:
     """构造一个**只带引用名**的 secret 配置项（值永远是 UNKNOWN）。"""
     return ConfigEntry(name=name, source=source, value=Fact.unknown(_SECRET_VALUE_REASON),
@@ -174,6 +221,8 @@ def secret_entry(name: str, *, source: ConfigSource, secret_ref: str) -> ConfigE
 __all__ = [
     "PROVENANCE_SCHEMA_VERSION",
     "SECRET_REF_PATTERN",
+    "ENV_CONFIG_PREFIX",
+    "ENV_SECRET_PREFIX",
     "SOURCE_PRECEDENCE",
     "ConfigEntry",
     "ConfigProvenanceError",
@@ -181,6 +230,7 @@ __all__ = [
     "ConfigSource",
     "build_config_snapshot",
     "config_fingerprint",
+    "env_config_entries",
     "resolve_config",
     "secret_entry",
 ]

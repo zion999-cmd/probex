@@ -10,9 +10,10 @@ import unittest
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 UI_ROOT = PROJECT_ROOT / "ui"
 #: P0001.12.1：一级导航 = 5 个 Surface；旧页面降为 detail view（能力不删除）
+#: F-16：risk / readiness / capabilities 已被 System section 完全覆盖 ⇒ 删除（不再是页面）。
 SURFACES = ("monitor", "market", "activity", "performance", "system")
-LEGACY_PAGES = ("overview", "prediction", "strategy", "risk", "orders", "portfolio",
-                "readiness", "evidence", "runs", "metrics", "capabilities")
+LEGACY_PAGES = ("overview", "prediction", "strategy", "orders", "portfolio", "evidence",
+                "runs", "metrics")
 PAGES = SURFACES + LEGACY_PAGES
 
 
