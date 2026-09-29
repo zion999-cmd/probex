@@ -508,3 +508,12 @@ P0001.9.5 已作为 `a2ab8da`（1631 passed）、P0001.9.6 已作为 `afc0196`�
   四模式共用一条路径；本层不含任何交易能力（不 import strategy/risk/execution/connectors，测试固定）。
 - 测试：全量 **1955 passed / 0 failed / 24 skipped**（+18）。真实 replay run 经 API/CLI 可直接看到（COMPLETED / INCOMPLETE）。
 - 未接线的部分：现有 runner 与 `live/orchestrator.py` 尚未调用 `RuntimeSession`（后续阶段显式接线）。
+
+### P0001.11.2 RuntimeSession Production Wiring（已完成）
+
+- `runtime/wiring.py`：`SessionHost`（start / run_feed / finish / terminate / ctx-manager）+ 四个模式入口；
+  `finish()` 先调用原始 Owner 的 stop（live = `orchestrator.stop`），成功后才 finalize `COMPLETED`；
+  stop 失败 ⇒ `INCOMPLETE` + 重抛；runtime 层 duck-typed、无交易 import、无 daemon/线程。
+- 真实证据：REPLAY / PAPER 自动登记 `COMPLETED`（真实 ReplaySource / PaperBroker）；TESTNET stop 失败 ⇒ `INCOMPLETE`；
+  LIVE wiring 以 `orchestrator.stop` 为原 Owner，结束状态 `STOPPED`；四者经 `/api/v1/runs` 可见。
+- 测试：全量 **1973 passed / 0 failed / 24 skipped**（+18）。提交 `2085d2d` / `c89e516` 已 push；本阶段改动未 commit。

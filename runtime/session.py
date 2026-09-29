@@ -145,7 +145,8 @@ class RuntimeSession:
                     "config fingerprint changed during the run; refusing to finalize with a different config"
                 )
         resolved = facts if facts is not None else (self.facts_provider() if self.facts_provider else None)
-        summary = None if resolved is None or status is not RunStatus.COMPLETED else self._summary_payload(resolved)
+        # 有事实就写进 summary（`status` 才是真相：INCOMPLETE 也可以携带"为什么结束"的事实）
+        summary = None if resolved is None else self._summary_payload(resolved)
         record = self.registry.finalize(run_id=self._record.run_id, ended_at=int(self.clock()),
                                         summary=summary, status=status)
         self._record = record

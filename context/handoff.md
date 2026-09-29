@@ -1633,3 +1633,23 @@ config fingerprint 建立时绑定、结束时不一致即拒绝；run_id 复用
 
 边界：未改 orchestrator 决策顺序 / MakerPolicy / RiskGate / ExecutionEngine；无 daemon、无 crash recovery manager、
 无多进程 writer、未扩 RunCompare。未 commit / 未 push（本轮未授权 commit）。
+
+## 2026-09-29（续 17）：先提交/推送 P0001.11 与 11.1，再实施 P0001.11.2 Production Wiring
+
+**提交与推送**：`2085d2d`（P0001.11，detached worktree 复验 1937 passed）、`c89e516`（P0001.11.1，复验 1955 passed），
+已 push 到 `origin/master`（`080bfab..c89e516`）。两个阶段的 code boundary 干净（11.1 只含 `runtime/` + 两个测试 + 提案 + context）。
+
+**P0001.11.2 RuntimeSession Production Wiring（已完成）**：新增 `runtime/wiring.py`：
+- `SessionHost`：`start()` / `run_feed(feed, step=)` / `finish()` / `terminate(reason)` / context manager；
+- `finish()` **先**执行原始 Owner 的 `stop_hook`（live 即 `orchestrator.stop`），成功后才 `finalize(COMPLETED)`；
+  `stop_hook` 抛错 ⇒ `finalize(INCOMPLETE)` 并**重抛**（绝不 COMPLETED）；`terminate()` 记 INCOMPLETE + reason anomaly；
+- 四个显式入口 `open_replay_session` / `open_paper_session` / `open_testnet_session` / `open_live_session`（共用同一生命周期）；
+- 依赖纪律：`runtime/wiring.py` 不 import strategy/risk/execution/connectors/live（全 duck-typed）⇒ 结构上无下单能力；无 daemon/无线程。
+
+真实证据：REPLAY `COMPLETED`（真实 ReplaySource+MarketBook，11 事件）、PAPER `COMPLETED`（真实 PaperBroker，OrderAccepted）、
+TESTNET `INCOMPLETE`（stop 失败 ⇒ 绝不 COMPLETED）、LIVE `COMPLETED`（stop owner = orchestrator.stop，最终 `STOPPED`）、
+四者均可从 `GET /api/v1/runs` 直接看到。全量 **1973 passed / 0 failed / 24 skipped**（+18）。
+
+**遗留（未授权，仅记录）**：① 正在运行的实例在 registry 读侧显示 `INCOMPLETE`（建议后续引入 `CREATED/RUNNING/...` 或 active overlay）；
+② `proposals/.P0001.11.2-runtime-session-production-wiring.md.swp` 是编辑器 swap 文件（未提交，建议关闭编辑器后删除）。
+**未 commit / 未 push**（本阶段尚未获得 commit 授权）。
