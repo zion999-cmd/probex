@@ -1567,3 +1567,16 @@ harness（仓库外）新增：private 心跳（pump + 每 20 s `refresh_snapsho
 - 阶段提交：`1822be7`（P0001.9.7 + P0001.9.7.1）与本次 P0001.9.7.2 提交；未 push。
 - `context/status.json.currentProposal = null`（两个 Proposal 均已完成，无切换授权）。
 - 未跑 30 分钟策略表现测试。
+
+## 2026-09-29（续 12）：P0001.9.7 开发阶段验收正式收口（纯文档）
+
+人类裁决：**P0001.9.7 = Completed for development scope**；原 **≥30 min Phase B = DEFERRED / REMOVED FROM DEVELOPMENT ACCEPTANCE**
+（理由：该项主要验证自然市场条件下的持续策略行为，不属于当前执行工程闭环的必要开发验收）。
+替代开发验收证据：real Testnet `CONFIRMED_ACCEPTED`、Decimal tick normalization、cancel lifecycle、
+zero orphan、zero residual open orders、zero position、Mainnet write = 0、1790 tests pass（详见提案 §1.8.1）。
+
+同时保持诚实：`BOOTSTRAP` 的 `accepted → private latency → supersede → NORMAL authority` **live happy path 仍 deferred**
+（§1.8.2），cold-start verdict 维持 **C**；未因收口而宣称该路径已完成。
+
+历史记录（§1.2 Phase B NOT ACHIEVED 等）**保留**为历史，不改写；仅新增 §1.8 作为正式收口。
+本次为**纯文档 commit**；随后按人类指令 push `1822be7`、`215b9ce` 与本 docs-close commit。未跑策略窗口。

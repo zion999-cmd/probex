@@ -469,3 +469,10 @@ P0001.9.5 已作为 `a2ab8da`（1631 passed）、P0001.9.6 已作为 `afc0196`�
 - P0001.9.7.2：**已完成**（price/quantity Decimal normalization ownership = 执行边界显式配置的归一化步骤）。
 - 短 Testnet execution smoke：**PASS**（一笔 post-only 被接受 → cancel → 0 挂单 / 0 持仓）。
 - 全量测试 1790 passed / 0 failed / 24 skipped；`currentProposal = null`；未 push；未跑 30 分钟策略表现测试。
+
+### P0001.9.7 收口（2026-09-29）
+
+- P0001.9.7 = **Completed for development scope**；原 **≥30 min Phase B deferred / 从开发验收移除**（提案 §1.8）。
+- 替代开发验收：real Testnet `CONFIRMED_ACCEPTED` + Decimal tick normalization + cancel lifecycle +
+  zero orphan + zero residual open orders + zero position + Mainnet write 0 + 1790 tests pass。
+- 仍 deferred（不宣称完成）：BOOTSTRAP live happy path（accepted → latency → supersede → NORMAL）；cold-start verdict = C。
