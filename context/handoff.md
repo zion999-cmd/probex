@@ -1996,3 +1996,39 @@ run `replay-1790694780015` 早已 COMPLETED）HTTP 无响应、SIGTERM/SIGINT �
 
 未引入第三方 logging / backup / archival / cloud / Docker / Prometheus；未改 HWM/RunRecord/Risk 语义；
 未设置隐式 retention 数值。`currentProposal = null`；**不自动进入任何新阶段**。
+
+## 2026-10-02：Read-model / UI wiring polish（F1/F2/F3/F4/F5/F7 CLOSED）
+
+来源：真实产品验收运行暴露的读模型/UI wiring 缺陷。**closure 修复，不新建 Proposal**；F6（prediction→strategy
+runtime 回路）**未动**。边界：无新策略 / 无新 metric 算法 / 无第二套 raw fact 或 accounting owner / 无 UI 大改版。
+
+### 修复与证据
+
+| Finding | 修复 | 真实证据 |
+| --- | --- | --- |
+| **F1** Monitor position | `AccountingFactsProvider` 暴露 `position_known` + `position_qty`（0.0 是 known flat；取不到 ⇒ 两者 UNKNOWN 不伪造 0）；`ProductService._portfolio` 只读 typed facts | REPLAY/PAPER snapshot：`position_qty={known:true,value:0.0}` / 真实 fill 后 `0.001`；Monitor 渲染 `flat (0)` |
+| **F2** Market health | `_market` 读真实 `DataQuality.book_health`；`healthy` 只由 `book_health==healthy` 推导；新增 `book_health`/`book_age_ms`；`HealthView.market_healthy` 与 Monitor 同一 projection | REPLAY：`market.healthy=true, book_health=healthy, tradeable=false`；System `health.market_healthy=true, book_health=healthy` |
+| **F3** Ops `[object Object]` | `render.js` 新增 `valueView`/`jsonDetail`，`factRows` 改用 `valueView`；System→Ops 与 System→Configuration 改为摘要 + raw detail | Node 全页面扫描：24 个页面/子页 `[object Object]=False`；System→Ops 含 bind_host/loopback/auth_required/sink/bounded/policy，3 个 raw detail + 8 个 nested detail |
+| **F4** RunSummary 未接线 | assembly `_build_summary_facts()`（既有 Owner 汇总，不重算 metric）+ `_durable_run_summary(run_id)`（既有 RunRegistry + report builder）；端点支持 `?run=<id>` | REPLAY：`realized_pnl=0, fees=0, run_mdd=0, final_position=0`；PAPER：`order_counts={FILLED:1}, fills=1, final_position=0.001`；`?run=nope` ⇒ 404；Compare 两个 COMPLETED run ⇒ `fees/realized_pnl/run_mdd` 有 known 值 + delta |
+| **F5** Raw Facts 未接线 | assembly `_raw_fact_lookup` 接既有 Owner；`RawFactProviderUnavailable`（未接线⇒503）与 404 区分；无第二套 store、无 secret | PAPER 真实 order+fill：`facts/order/<cid>` 200（status=FILLED, filled=0.001），`facts/fill/<cid>` 200（trade_id/price/qty），missing ⇒ 404，未接线 ⇒ 503 |
+| **F7** 缺阶段文案 | `reasonCell(null)` 不再输出 UNKNOWN；Activity `stageReason()` ⇒ ABSENT + 「本次运行未产生该阶段事实」（unavailable 单独标注），raw reason 保留 | Node Activity 渲染：`ABSENT=True`、`本次运行未产生该阶段事实=True`、`UNKNOWN UNKNOWN=False` |
+
+### 文件
+
+- backend：`runtime/accounting_facts.py`（position facts）、`product/service.py`（`_market`/`_health`/`_portfolio`、
+  `run_summary_view(run_id)`、`raw_fact_lookup` Optional）、`product/types.py`（`MarketView.book_health/book_age_ms`、
+  `HealthView.book_health/market_tradeable`）、`product/facts.py`（`RawFactProviderUnavailable`）、
+  `runtime/assembly.py`（`_build_summary_facts` / `_durable_run_summary` / `_raw_fact_lookup` / wiring）、
+  `api/server.py`（`?run=` report、facts 503/404）。
+- frontend：`ui/client/render.js`（`valueView`/`jsonDetail`/`factRows`/`positionFact`/`reasonCell`）、
+  `ui/pages/system/page.js`、`ui/pages/activity/page.js`、`ui/pages/performance/page.js`（run selector + `?run=`）、
+  `ui/pages/monitor/page.js`、`ui/app/navigation.js` + `product/navigation.py`（`performance/run` detail）、`ui/app/console.css`。
+- 测试：`tests/unit/test_read_model_polish.py`、`tests/integration/test_read_model_polish_e2e.py`、`tests/ui/render_page.mjs`；
+  更新 `test_blockers_projection`（book_health）、`test_runtime_assembly_startup`（position 语义）、
+  `test_surface_capabilities`（facts 未接线语义）。
+
+### 测试与遗留
+
+- 全量 **2286 passed / 0 failed / 24 skipped**。
+- 遗留（F6 范畴，未动）：`MarketFeedProvider` 自建了未被使用的 `PaperBroker`，真实执行边界用的是 engine 的 adapter；
+  两者并存属架构噪音。F6（把 prediction→strategy 回路接进产品 runtime）留待后续单独处理。

@@ -92,6 +92,11 @@ class _LifecycleFact:
     event_name: str
     reason: str = ""
 
+    @property
+    def event_type(self) -> str:
+        """F5：raw-fact schema 使用 `event_type`（与 trace 的 `event_name` 同一事实）。"""
+        return self.event_name
+
 
 @dataclass(frozen=True, slots=True)
 class _FillFact:
@@ -347,7 +352,81 @@ class ProductRuntime:
     # ------------------------------------------------------------------ assembly
 
     def _facts_provider(self) -> SessionSummaryFacts:
-        return self._facts
+        return self._build_summary_facts()
+
+    def _build_summary_facts(self) -> SessionSummaryFacts:
+        """F4：从**既有 Owner** 汇总 run summary 输入（不重算指标、不新建 accounting/risk owner）。
+
+        - equity 采样 ⇒ `BoundedAccountTimeline`（真实采样）；
+        - fees / realized / unrealized / 成交数 / 最终仓位 ⇒ 既有 `AccountingCore`；
+        - orders ⇒ 既有 `OrderTracker`；risk rejects ⇒ 既有 `ExecutionEngine.rejections`。
+        取不到的字段保持 None（⇒ 指标 UNKNOWN，**绝不伪造**）。
+        """
+        from reports.metrics import EquitySample
+
+        def scalar(target: object, name: str) -> float | None:
+            value = getattr(target, name, None)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return None
+            return float(value)
+
+        samples: tuple[EquitySample, ...] = ()
+        if self._account_timeline is not None:
+            samples = tuple(
+                EquitySample(ts=int(sample.ts), equity=float(sample.equity))
+                for sample in self._account_timeline.samples()
+                if getattr(sample, "equity", None) is not None)
+        accounting = self._accounting
+        fees = realized = unrealized = final_position = fills = None
+        if accounting is not None:
+            fees = scalar(accounting, "trading_fees")
+            realized = scalar(accounting, "realized_trade_pnl")
+            unrealized = scalar(accounting, "unrealized_pnl")
+            try:
+                final_position = scalar(accounting.position(self.profile.symbol), "qty")
+            except Exception:  # noqa: BLE001 - 取不到 ⇒ UNKNOWN
+                final_position = None
+            ledger = getattr(accounting, "fills", None)
+            count = getattr(ledger, "count", None)
+            fills = int(count) if isinstance(count, int) and not isinstance(count, bool) else None
+        orders = (tuple(getattr(self._tracker_owner, "orders", ()))
+                  if self._tracker_owner is not None else ())
+        risk_rejects: tuple[str, ...] = ()
+        if self._execution is not None:
+            risk_rejects = tuple(
+                str(getattr(getattr(rejection, "reason_code", None), "value", ""))
+                for rejection in self._execution.rejections)
+        anomalies = (() if self._feed_error is None else (f"feed:{self._feed_error}",))
+        facts = SessionSummaryFacts(orders=orders, fills=fills, fees=fees, realized_pnl=realized,
+                                    unrealized_pnl=unrealized, final_position=final_position,
+                                    equity_samples=samples, risk_rejects=risk_rejects,
+                                    anomalies=anomalies)
+        self._facts = facts
+        return facts
+
+    def _durable_run_summary(self, run_id: str | None) -> dict[str, object] | None:
+        """F4：从 durable run record 构建 RunSummary payload（既有 report builder，不重算指标）。
+
+        unknown run ⇒ None（API 映射 404）；已知 run 但缺 facts ⇒ 由 builder 产出全 UNKNOWN 字段
+        （**不**把整端点变成 503）。
+        """
+        from reports.json import summary_to_jsonable
+
+        if not run_id:
+            runs = self._registry.list()
+            if not runs:
+                return None
+            run_id = runs[0].run_id
+        record = self._registry.load(str(run_id))
+        if record is None:
+            return None
+        if isinstance(record.summary, dict):
+            return record.summary
+        summary = build_run_summary(
+            identity=record.runtime, run_id=record.run_id, started_at=record.started_at,
+            ended_at=(int(record.ended_at.value) if record.ended_at.known else None),
+            config_id=(str(record.config_id.value) if record.config_id.known else None))
+        return summary_to_jsonable(summary)
 
     def _build_retention_policy(self) -> RetentionPolicy:
         """从 `retention.*` 构造显式 policy（没有任何隐式生产数值）。"""
@@ -759,6 +838,9 @@ class ProductRuntime:
             recent_fill_limit=(20 if self._accounting is not None else 0),
             market_state_hash=self._market_identity,
             ops=self.ops_posture,
+            run_summary=lambda: self._durable_run_summary(None),
+            durable_run_summary=self._durable_run_summary,
+            raw_fact_lookup=self._raw_fact_lookup,
             readiness=lambda: None,
             health=lambda: {"notes": (f"mode={self.profile.mode.value}",)},
             clock=self.profile.clock,
@@ -928,6 +1010,39 @@ class ProductRuntime:
             provider.history_account = self._account_timeline              # type: ignore[attr-defined]
         provider.start()
 
+    def _raw_fact_lookup(self, kind: str, identity: str) -> object | None:
+        """F5：把已批准的 raw-fact kind 接到**既有 Owner**（canonical identity 直接查找）。
+
+        - order          ⇒ OrderTracker（含终态订单）
+        - fill           ⇒ 既有 FillLedger 视图（按 client_order_id / trade_id）
+        - decision       ⇒ 既有 maker_decision provider
+        - execution_event ⇒ 既有订单生命周期事实（按 client_order_id）
+        - prediction     ⇒ 既有 prediction record provider（按 request_id）
+        找不到 ⇒ None（API ⇒ 404）；**不新建第二套事实存储**。
+        """
+        if kind == "order":
+            tracker = self._tracker_owner
+            return tracker.order(identity) if tracker is not None else None
+        if kind == "fill":
+            for fill in self._fill_views():
+                if identity in (getattr(fill, "client_order_id", None),
+                                getattr(fill, "trade_id", None)):
+                    return fill
+            return None
+        if kind == "decision":
+            return self._service.maker_decision()
+        if kind == "execution_event":
+            for event in self._execution_event_views():
+                if getattr(event, "client_order_id", None) == identity:
+                    return event
+            return None
+        if kind == "prediction":
+            record = self._service.prediction()
+            if record is not None and str(getattr(record, "request_id", "")) == identity:
+                return record
+            return None
+        return None
+
     def _market_identity(self) -> object | None:
         """F-08：MarketState 的既有 canonical 指纹（只读；未接线/无状态 ⇒ None）。"""
         provider = getattr(self, "_feed_provider", None)
@@ -1010,7 +1125,7 @@ class ProductRuntime:
         self._tracker.mark_stopping(now_ms=now)
         self._stop_feed()
         if self._session.record.status.value == "RUNNING":
-            self._host.finish(facts=self._facts)
+            self._host.finish(facts=self._build_summary_facts())
         status = self._tracker.mark_stopped(now_ms=now, detail="graceful stop completed")
         log_event("runtime", "runtime_stop", runtime_id=self._identity.runtime_id,
                   run_id=self._session.run_id, mode=self.profile.mode.value,
@@ -1021,7 +1136,7 @@ class ProductRuntime:
         """异常终止：run 记 INCOMPLETE（不伪造 COMPLETED），runtime 置 FAILED。"""
         now = int(self.profile.clock())
         if self._session.record.status.value == "RUNNING":
-            self._session.stop(status=RunStatus.INCOMPLETE, facts=self._facts)
+            self._session.stop(status=RunStatus.INCOMPLETE, facts=self._build_summary_facts())
         status = self._tracker.mark_failed(now_ms=now, error=error)
         log_event("runtime", "runtime_failure", level=40, runtime_id=self._identity.runtime_id,
                   run_id=self._session.run_id, mode=self.profile.mode.value,

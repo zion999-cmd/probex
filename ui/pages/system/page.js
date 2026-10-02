@@ -1,15 +1,26 @@
 /** System：为什么能/不能运行（§5）。二级：Health / Risk / Readiness / Execution / Configuration / Capabilities。 */
 import { ENDPOINTS, fetchJson, fetchOrUnavailable, fetchSnapshot, reasonCatalog } from "/ui/client/api.js";
-import { escapeHtml, fact, factRows, reasonCell, rows, section, table } from "/ui/client/render.js";
+import { escapeHtml, fact, factRows, jsonDetail, reasonCell, rows, section, table, valueView } from "/ui/client/render.js";
 
 export const title = "System";
 export const slug = "system";
 
 export const SECTIONS = ["health", "risk", "readiness", "execution", "configuration", "capabilities", "ops"];
 
-/** F-12/F-15：operational posture（network / auth / logging / retention / liveness）。 */
+/** F3/F-12/F-15：operational posture。
+ *
+ * 默认渲染"人看得懂的摘要"（标量表格 + 嵌套折叠）；raw JSON 只在 detail 里，
+ * 绝不再出现 `[object Object]`。
+ */
+function postureSection(title, factValue, label) {
+  if (!factValue || factValue.known === false) {
+    return section(title, rows([[label, fact(factValue)]]));
+  }
+  const raw = factValue.value;
+  return section(title, valueView(raw) + (raw && typeof raw === "object" ? jsonDetail(raw, `${label} raw`) : ""));
+}
+
 function opsSection(ops) {
-  const nested = (label, factValue) => rows([[label, fact(factValue)]]);
   return section("Process liveness / health split", rows([
     ["process live", fact(ops.process_live)],
     ["runtime state", fact(ops.runtime_state)],
@@ -19,9 +30,9 @@ function opsSection(ops) {
     ["execution health", fact(ops.execution_health)],
     ["operational warning", fact(ops.operational_warning)],
   ])) +
-    section("Network / auth posture", nested("network", ops.network)) +
-    section("Logging posture", nested("logging", ops.logging)) +
-    section("Retention posture", nested("retention", ops.retention));
+    postureSection("Network / auth posture", ops.network, "network") +
+    postureSection("Logging posture", ops.logging, "logging") +
+    postureSection("Retention posture", ops.retention, "retention");
 }
 
 async function executionSections() {
@@ -77,8 +88,9 @@ export async function render(rest = []) {
         ["since (ms)", fact(snapshot.health.runtime_since_ms)],
       ])) +
       section("Market / stream", rows([
-        ["market healthy", fact(snapshot.market.healthy)],
-        ["market tradeable", fact(snapshot.market.tradeable)],
+        ["book health", fact(snapshot.health.book_health)],
+        ["market healthy", fact(snapshot.health.market_healthy)],
+        ["market tradeable", fact(snapshot.health.market_tradeable)],
         ["private stream", fact(snapshot.health.private_stream_state)],
         ["clock offset (ms)", fact(snapshot.health.clock_offset_ms)],
         ["uptime (ms)", fact(snapshot.health.uptime_ms)],
@@ -133,7 +145,7 @@ export async function render(rest = []) {
       ["sources (CLI > ENV > FILE > CONSTRUCTOR)", escapeHtml(JSON.stringify(config.sources || {}))],
       ["secret references (names only)", escapeHtml((config.secret_refs || []).join(", ") || "none")],
     ])) + section("Resolved entries (non-sensitive only)", table(["name", "source", "value", "secret ref"],
-      (config.entries || []).map((e) => [escapeHtml(e.name), escapeHtml(e.source), fact(e.value),
+      (config.entries || []).map((e) => [escapeHtml(e.name), escapeHtml(e.source), valueView(e.value),
         escapeHtml(e.secret_ref || "")])));
   }
   const capabilities = await fetchOrUnavailable(ENDPOINTS.capabilities);

@@ -29,3 +29,10 @@ pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-size: 12px;
 #assistant-drawer button { background: #232936; color: #d7dae0; border: 1px solid #39404e; border-radius: 4px;
   padding: 3px 6px; margin: 2px 2px 2px 0; cursor: pointer; font: inherit; }
 main { padding-right: 340px; }
+
+/* F3/F7：typed value 渲染与折叠 detail（不再出现 [object Object]） */
+.muted { color: #6b7280; font-size: 11px; }
+details.nested, details.raw { margin: 4px 0 4px 2px; }
+details summary { cursor: pointer; color: #9aa4b2; }
+details.nested > table { margin-left: 8px; }
+details.raw pre { max-height: 240px; overflow: auto; background: #10131a; padding: 6px; border-radius: 4px; }

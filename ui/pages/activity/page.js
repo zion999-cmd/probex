@@ -1,6 +1,6 @@
 /** Activity：F-08 完整因果链（按时间排序的单一 trace；缺阶段显式 ABSENT + reason）。 */
 import { ENDPOINTS, fetchJson, fetchSnapshot, reasonCatalog } from "/ui/client/api.js";
-import { escapeHtml, fact, reasonCell, rows, section, table } from "/ui/client/render.js";
+import { escapeHtml, fact, reasonCell, rows, section, table, valueView } from "/ui/client/render.js";
 import { entityHash, marketPointHash } from "/ui/app/navigation.js";
 
 export const title = "Activity";
@@ -10,6 +10,27 @@ export const slug = "activity";
 export const CHAIN = ["market_state", "prediction", "maker_decision", "risk", "readiness",
                       "normalization", "order", "ack", "execution_event", "cancel", "fill",
                       "unknown", "reconciliation"];
+
+/** F7：阶段 reason 单元格。
+ *
+ * - 该阶段在本链路**未产生事实** ⇒ ABSENT（"本次运行未产生该阶段事实"）；
+ * - provider/能力不可用 ⇒ UNAVAILABLE；
+ * - 有事实但值未知 ⇒ UNKNOWN（保留原始 reason 供高级用户查看）；
+ * - 有 reason code ⇒ 走 catalog 解释。
+ */
+function stageReason(entry, catalog) {
+  if (entry.outcome === "absent") {
+    const raw = entry.reason_code && !entry.reason_code.known ? String(entry.reason_code.reason || "") : "";
+    const unavailable = /not wired|unavailable/i.test(raw);
+    const label = unavailable ? "UNAVAILABLE" : "ABSENT";
+    const note = unavailable ? "该阶段能力当前不可用" : "本次运行未产生该阶段事实";
+    return `<span class="unknown">${label}</span> <span class="muted">${note}</span>` +
+      (raw ? `<div class="muted">raw: ${escapeHtml(raw)}</div>` : "");
+  }
+  if (entry.outcome === "unavailable") return '<span class="unknown">UNAVAILABLE</span>';
+  const code = entry.reason_code && entry.reason_code.known ? entry.reason_code.value : null;
+  return reasonCell(code, catalog);
+}
 
 function identityCell(entry) {
   const kind = entry.identity_kind || "";
@@ -50,13 +71,13 @@ export async function render(rest = []) {
       const latency = entry.latency_ms && entry.latency_ms.known
         ? ` <span class="muted">latency=${escapeHtml(String(entry.latency_ms.value))}ms</span>` : "";
       return [ts, escapeHtml(entry.stage), escapeHtml(entry.outcome),
-        identityCell(entry), reasonCell(entry.reason_code && entry.reason_code.known
-          ? entry.reason_code.value : null, catalog),
+        identityCell(entry), stageReason(entry, catalog),
         `${escapeHtml(entry.detail || "")}${latency}`, market];
     }));
   const missingBlock = missing.length
-    ? rows(missing.map((stage) => [stage, '<span class="unknown">ABSENT (no fact at this stage)</span>']))
-    : rows([["stages", "all canonical stages have a fact or an explicit absent entry"]]);
+    ? rows(missing.map((stage) => [stage,
+        '<span class="unknown">ABSENT</span> <span class="muted">本次运行未产生该阶段事实</span>']))
+    : rows([["stages", "每个 canonical 阶段都有事实或显式 ABSENT entry"]]);
 
   const decisions = ((overlays.overlays || {}).decisions || []).slice(-10).reverse();
   const executions = ((overlays.overlays || {}).executions || []).slice(-10).reverse();
@@ -91,8 +112,8 @@ export async function render(rest = []) {
     section("Execution drill-down (P0001.13)", rows([
       ["chain", "market → prediction → decision → risk → readiness → normalization → submit → ack → events → fill/cancel/unknown → reconciliation"],
       ["normalization", "execution-boundary evidence (input → normalized, rounding, reject reason)"],
-      ["execution health", fact(snapshot.execution_safety.health_status)],
-      ["reconciliation", fact(snapshot.execution_safety.reconciliation)],
+      ["execution health", valueView(snapshot.execution_safety.health_status)],
+      ["reconciliation", valueView(snapshot.execution_safety.reconciliation)],
     ])) +
     section("Raw facts drill-down (G2)", rows([
       ["order / fill", "click an identity above → Evidence → raw facts"],

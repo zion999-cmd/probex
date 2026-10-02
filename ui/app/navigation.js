@@ -13,7 +13,7 @@ export const DETAIL_ROUTES = {
   market: { live: "market", replay: "market", "run-review": "market" },
   activity: { prediction: "prediction", strategy: "strategy", orders: "orders", evidence: "evidence",
     run: "activity" },
-  performance: { runs: "runs", metrics: "metrics" },
+  performance: { runs: "runs", metrics: "metrics", run: "performance" },
   system: {
     health: "system", risk: "system", readiness: "system",
     execution: "system", configuration: "system", capabilities: "system",
@@ -31,6 +31,7 @@ export const DETAIL_PAGE_MODULES = {
   "activity/evidence": "/ui/pages/evidence/page.js",
   "performance/runs": "/ui/pages/runs/page.js",
   "performance/metrics": "/ui/pages/metrics/page.js",
+  "performance/run": "/ui/pages/performance/page.js",
 };
 
 /** blocker owner -> System section（Blocker → System 跳转）。 */

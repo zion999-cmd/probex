@@ -1,6 +1,6 @@
 /** Monitor：30 秒理解当前系统状态（P0001.12.1 §1）。 */
 import { ENDPOINTS, fetchJson, fetchOrUnavailable, fetchSnapshot, reasonCatalog } from "/ui/client/api.js";
-import { escapeHtml, fact, reasonCell, rows, section } from "/ui/client/render.js";
+import { escapeHtml, fact, positionFact, reasonCell, rows, section } from "/ui/client/render.js";
 import { BLOCKER_SECTION, surfaceHash } from "/ui/app/navigation.js";
 import { SURFACES } from "/ui/app/surfaces.js";
 
@@ -16,7 +16,7 @@ export async function render() {
     ["equity", fact(snapshot.portfolio.equity)],
     ["realized pnl", fact(snapshot.portfolio.realized_pnl)],
     ["unrealized pnl", fact(snapshot.portfolio.unrealized_pnl)],
-    ["position", fact(snapshot.portfolio.position_qty)],
+    ["position", positionFact(snapshot.portfolio.position_qty)],
     ["open order exposure", fact(snapshot.execution.open_order_exposure)],
     ["uncertain exposure", fact(snapshot.execution.uncertain_exposure)],
     ["active orders", String(orders.length)],

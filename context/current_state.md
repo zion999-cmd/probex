@@ -672,3 +672,37 @@ retention/growth policy、process liveness、crash/restart 最小闭环（**不�
   （Slice 4 引入），新增 UI 模块静态守卫测试。
 - 测试：全量 **2271 passed / 0 failed / 24 skipped**（+38 新测试）。
 - `context/status.json.currentProposal = null`。
+
+### Read-model / UI wiring polish（F1/F2/F3/F4/F5/F7 全部 CLOSED；F6 不动）
+
+来源：一次真实产品验收运行暴露的读模型/UI wiring 缺陷（closure 修复，**不新建 Proposal**）。边界：无新策略、
+无 F6 prediction→strategy 回路、无新 metric 算法、无第二套 raw fact / accounting owner、无 UI 大改版。
+
+- **F1 CLOSED（Monitor position 映射）**：`AccountingFactsProvider` 正式暴露 `position_known` + `position_qty`
+  （qty 标量含 0.0 ⇒ known；取不到 ⇒ 两者 UNKNOWN，**不伪造 0**）；`ProductService._portfolio` 只消费 typed facts
+  （删掉 `is True` 的 Fact 内部结构猜测）。Monitor 用 `positionFact()` 区分 `flat (0)` / known qty / UNKNOWN。
+- **F2 CLOSED（Market health 字段映射）**：`_market` 从真实 `DataQuality.book_health`（`BookHealth` 枚举）映射，
+  `healthy` **只**由 `book_health == healthy` 推导；`tradeable` 独立；新增 `book_health` / `book_age_ms`；
+  `HealthView.market_healthy` 与 Monitor **同一 projection**（不再各自判断，也不从 tradeable 反推）。
+- **F3 CLOSED（Ops `[object Object]`）**：`render.js` 新增通用 `valueView`（Fact 解包 / 标量表格 / 嵌套 `<details>`）
+  与 `jsonDetail`；`factRows` 改用 `valueView`；`System → Ops` 的 network/auth/logging/retention 与
+  `System → Configuration` 的 entries 都改为可读摘要 + raw JSON detail。全页面扫描证明无 `[object Object]`。
+- **F4 CLOSED（RunSummary provider 未接线）**：assembly 新增 `_build_summary_facts()`（从既有 `AccountingCore` /
+  `BoundedAccountTimeline` / `OrderTracker` / `ExecutionEngine.rejections` 汇总，**不重算 metric**）与
+  `_durable_run_summary(run_id)`（既有 `RunRegistry` + `build_run_summary`）；`RunSummary` 端点支持 `?run=<id>`
+  （known ⇒ 200、unknown ⇒ 404、缺 facts ⇒ UNKNOWN 字段而非 503）。真实证据：REPLAY `realized_pnl=0 / fees=0 /
+  run_mdd=0 / final_position=0`；PAPER `order_counts={FILLED:1} / fills=1 / final_position=0.001`；
+  Compare 对两个 COMPLETED run 产出 known `fees/realized_pnl/run_mdd`（其余诚实 UNKNOWN）。
+- **F5 CLOSED（Raw Facts provider 未接线）**：assembly `_raw_fact_lookup` 接既有 Owner（order⇒OrderTracker、
+  fill⇒FillLedger 视图、decision⇒maker_decision、execution_event⇒订单生命周期事实、prediction⇒record provider），
+  canonical identity 直接查找；`RawFactProviderUnavailable` 区分「provider 未接线 ⇒ 503」与「事实不存在 ⇒ 404」；
+  不新建第二套事实存储、payload 无 secret/signature。真实证据：PAPER 真实 order+fill ⇒ `facts/order/<cid>` 与
+  `facts/fill/<cid>` 均 200（FILLED / trade_id 真实），missing ⇒ 404。
+- **F7 CLOSED（Activity 缺阶段文案）**：`reasonCell(null)` 不再输出 `UNKNOWN`；Activity `stageReason()` 把
+  `outcome=absent` 渲染为 **ABSENT + 「本次运行未产生该阶段事实」**（`unavailable` 语义单独标注），
+  原始 reason 仍以 muted raw 保留；`UNKNOWN UNKNOWN` 不再出现。
+- 守卫测试：`tests/unit/test_read_model_polish.py`（12）+ `tests/integration/test_read_model_polish_e2e.py`（3，含
+  全页面 `[object Object]` 扫描）+ `tests/ui/render_page.mjs`；同步修正 3 个编码旧语义的旧测试 + 1 个 facts 未接线语义。
+- 测试：全量 **2286 passed / 0 failed / 24 skipped**。
+- **遗留（本轮未改，F6 范畴）**：`MarketFeedProvider` 自建了一个**未被使用**的 `PaperBroker`，真实执行边界用的是
+  `ExecutionEngine.manager.adapter` 上的另一个实例；两个实例并存是架构噪音（不影响本次修复的读模型）。

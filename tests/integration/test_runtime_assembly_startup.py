@@ -444,8 +444,8 @@ class AccountSamplingStep4bTest(ProductRuntimeTest):
             self.assertEqual(runtime.service.snapshot().portfolio.equity.value,
                              runtime._accounting_provider.facts().equity.value)  # noqa: SLF001
             self.assertEqual(samples[-1].equity, 10_000.0)
-            # 未知字段不得变成 0
-            self.assertIsNone(samples[-1].position_qty)
+            # F1：已知空仓 ⇒ position_qty = 0（事实，不是伪造）；真正未知的是 exposure
+            self.assertEqual(samples[-1].position_qty, 0.0)
             self.assertIsNone(samples[-1].exposure_total)
         finally:
             runtime.stop()
@@ -465,8 +465,11 @@ class AccountSamplingStep4bTest(ProductRuntimeTest):
             self.assertTrue(timeline.points)
             point = timeline.points[-1]
             self.assertTrue(point.equity.known)
-            self.assertFalse(point.position_qty.known)
-            self.assertIsNone(point.position_qty.value)          # 不是 0
+            # F1：position_qty 是已知 flat(0)；未知字段（exposure）继续保持 UNKNOWN
+            self.assertTrue(point.position_qty.known)
+            self.assertEqual(point.position_qty.value, 0.0)
+            self.assertFalse(point.exposure_total.known)
+            self.assertIsNone(point.exposure_total.value)
         finally:
             runtime.stop()
 

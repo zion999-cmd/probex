@@ -75,9 +75,12 @@ class G2RawFactsTest(unittest.TestCase):
             raw_facts_for("order", "", None)
         self.assertIn("order", SUPPORTED_KINDS)
 
-    def test_service_lookup_returns_unavailable_when_not_wired(self) -> None:
-        view = service().raw_facts_view("order", "probex-s1-1")
-        self.assertFalse(view.available)
+    def test_service_lookup_is_explicitly_unavailable_when_not_wired(self) -> None:
+        # F5：provider 未接线 ⇒ 明确 unavailable（≠ “事实不存在”）
+        from product.facts import RawFactProviderUnavailable
+
+        with self.assertRaises(RawFactProviderUnavailable):
+            service().raw_facts_view("order", "probex-s1-1")
 
 
 class G3AccountTimelineTest(unittest.TestCase):

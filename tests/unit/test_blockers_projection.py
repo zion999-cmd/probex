@@ -44,10 +44,15 @@ class BlockerProjectionTest(unittest.TestCase):
     def test_market_and_prediction_facts_produce_blockers_only_when_known(self) -> None:
         healthy = project_blockers(snapshot=service().snapshot())
         self.assertFalse([b for b in healthy if b.owner is BlockerOwner.MARKET])
+        # F2：health 来自真实 `book_health` 字段（不是不存在的 `healthy`）
+        from market.health.state import BookHealth
+
         unhealthy = project_blockers(snapshot=service(
             market_state=lambda: __import__("types").SimpleNamespace(
                 identity=__import__("types").SimpleNamespace(state_hash="m"),
-                quality=__import__("types").SimpleNamespace(healthy=False, tradeable=False, window_coverage_ms=1),
+                quality=__import__("types").SimpleNamespace(book_health=BookHealth.STALE,
+                                                            tradeable=False,
+                                                            window_coverage_ms=1),
                 price=__import__("types").SimpleNamespace(best_bid=1.0, best_ask=2.0, spread_bps=1.0),
             )).snapshot())
         reasons = {b.reason_code for b in unhealthy if b.owner is BlockerOwner.MARKET}

@@ -556,8 +556,14 @@ class ProductApiHandler(BaseHTTPRequestHandler):
             self._error(400, "invalid_fact_reference", "expected /api/v1/facts/<kind>/<identity>")
             return
         kind, identity = parts
+        from product.facts import RawFactProviderUnavailable
+
         try:
             view = self.service.raw_facts_view(kind, identity)
+        except RawFactProviderUnavailable as exc:
+            # F5：provider 未接线 ⇒ 503（不得冒充 404"事实不存在"）
+            self._error(503, "raw_fact_provider_unavailable", str(exc))
+            return
         except ValueError as exc:
             self._error(400, "unsupported_fact_kind", str(exc))
             return
@@ -589,9 +595,20 @@ class ProductApiHandler(BaseHTTPRequestHandler):
                               "bounds": self._bounds(config), "run_id": buffer.run_id})
 
     def _serve_report(self, query: str) -> None:
-        """只读 Run Summary（json 默认 / markdown）。"""
+        """只读 Run Summary（json 默认 / markdown）；F4：`?run=<id>` 读 durable run。"""
+        params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
+        run_id = params.get("run") or None
+        fmt = str(params.get("format") or "").lower()
+        if run_id:
+            registry = self.service.run_registry_view()
+            if registry is None:
+                self._error(503, "report_unavailable", "run registry is not wired (UNKNOWN, not empty)")
+                return
+            if registry.load(run_id) is None:
+                self._error(NOT_FOUND, "unknown_run", run_id)
+                return
         try:
-            summary = self.service.run_summary_view()
+            summary = self.service.run_summary_view(run_id)
         except Exception as exc:  # noqa: BLE001
             self._error(503, "report_unavailable", type(exc).__name__)
             return
@@ -599,14 +616,15 @@ class ProductApiHandler(BaseHTTPRequestHandler):
             self._error(503, "report_unavailable",
                         "no run summary provider is wired (report is UNKNOWN, not empty)")
             return
+        if isinstance(summary, dict):
+            # durable run payload（已是既有 report builder 的 Product 形态；不再重算指标）
+            self._send_json(200, {
+                "schema_version": summary.get("schema_version", SCHEMA_VERSION_VALUE),
+                "run_summary": summary, "json": summary})
+            return
         from reports.json import summary_to_json, summary_to_jsonable
         from reports.markdown import summary_to_markdown
 
-        fmt = ""
-        if query:
-            for part in query.split("&"):
-                if part.startswith("format="):
-                    fmt = part.split("=", 1)[1].lower()
         if fmt == REPORT_MARKDOWN:
             self._send_text(200, summary_to_markdown(summary), content_type="text/markdown; charset=utf-8")
             return

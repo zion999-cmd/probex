@@ -69,6 +69,8 @@ class ProductService:
     prediction_fresh: Callable[[], bool | None] = lambda: None
     #: Run Summary provider（P0001.10.2 §4）：由已记录事实构造；未接线 ⇒ None（不是空报告）
     run_summary: Callable[[], object | None] = lambda: None
+    #: F4：按 run_id 读取 **durable** run summary（由既有 RunRegistry + report builder 构建）
+    durable_run_summary: Callable[[str], object | None] = lambda run_id: None
     #: Config Provenance（P0001.11 §1）：已解析的 provenance metadata（**不含 secret 值**）
     config_snapshot: Callable[[], object | None] = lambda: None
     #: Run Registry（P0001.11 §2）：产品数据（与 governance 完全分离）
@@ -84,8 +86,8 @@ class ProductService:
     #: G1：成交事实（只读，由 FillLedger / execution 提供）；`recent_fill_limit=0` 表示不暴露成交
     fills: Callable[[], tuple[object, ...]] = tuple
     recent_fill_limit: int = 0
-    #: G2：原始事实查找（kind, identity) -> object | None
-    raw_fact_lookup: Callable[[str, str], object | None] = lambda kind, identity: None
+    #: G2/F5：原始事实查找（kind, identity) -> object | None；**None = 未接线**（区别于"找不到"）
+    raw_fact_lookup: Callable[[str, str], object | None] | None = None
     #: G3：账户/敞口时间线缓冲（只读；不是新的 accounting Owner）
     account_timeline: Callable[[], object | None] = lambda: None
     #: G4：prediction provider 状态 / accounting 健康
@@ -115,8 +117,13 @@ class ProductService:
     #: F-12/F-15：operational posture（network/auth/logging/retention + 四层健康拆分）
     ops: Callable[[], Mapping[str, object] | None] = lambda: None
 
-    def run_summary_view(self) -> object | None:
-        """取当前 Run Summary；未接线 ⇒ None（调用方须按 UNKNOWN/503 处理，不得伪造空报告）。"""
+    def run_summary_view(self, run_id: str | None = None) -> object | None:
+        """取 Run Summary：`run_id` 给定时走 durable 记录；否则走当前 session provider。
+
+        未接线 ⇒ None（调用方须按 UNKNOWN/503 处理，不得伪造空报告）。
+        """
+        if run_id:
+            return self.durable_run_summary(str(run_id))
         return self.run_summary()
 
     def market_history_view(self) -> object | None:
@@ -148,11 +155,18 @@ class ProductService:
         return self.account_timeline()
 
     def raw_facts_view(self, kind: str, identity: str):
-        """G2：取一条原始事实（缺失 ⇒ available=False）。"""
-        from product.facts import raw_facts_for
+        """G2/F5：取一条原始事实。
+
+        - provider **未接线** ⇒ 抛 `RawFactProviderUnavailable`（API ⇒ 503，不冒充 404）；
+        - provider 已接线但找不到 ⇒ `available=False`（API ⇒ 404）；
+        - 非法 kind/identity ⇒ `ValueError`（API ⇒ 400）。
+        """
+        from product.facts import RawFactProviderUnavailable, raw_facts_for
 
         if not isinstance(kind, str) or not isinstance(identity, str):
             raise ValueError("raw_facts_view requires (kind, identity) strings")
+        if self.raw_fact_lookup is None:
+            raise RawFactProviderUnavailable(kind)
         return raw_facts_for(kind, identity, self.raw_fact_lookup(kind, identity))
 
     def run_registry_view(self) -> object | None:
@@ -172,18 +186,19 @@ class ProductService:
         accounting = self.accounting()
         readiness = self.readiness()
         health = dict(self.health())
+        market = self._market(market_state)   # 单一 Market projection（Monitor / System 共用）
 
         snapshot = SystemSnapshot(
             generated_at=generated_at,
             runtime=self.identity,
-            market=self._market(market_state),
+            market=market,
             prediction=self._prediction(prediction),
             strategy=self._strategy(decision),
             risk=self._risk(risk, limits),
             execution=self._execution(tracker, decision),
             portfolio=self._portfolio(accounting),
             readiness=self._readiness(readiness),
-            health=self._health(health),
+            health=self._health(health, market),
             evidence=self._evidence(market_state, prediction, decision, readiness, tracker),
             config=self._config(),
             execution_safety=self._execution_safety(),
@@ -196,11 +211,24 @@ class ProductService:
     # ------------------------------------------------------------------ 各段（纯搬运）
 
     def _market(self, state: object | None) -> MarketView:
+        """F2：从既有 `DataQuality` 正式字段映射，**不新增第二套 health 判断**。
+
+        - `book_health`：真实字段（`BookHealth` 枚举，如 healthy/stale/resyncing/awaiting_snapshot）；
+        - `healthy`：**只**由 `book_health == healthy` 推导（known 才推导；UNKNOWN 保持 UNKNOWN）；
+        - `tradeable`：独立事实，**不用它反推 health**；
+        - `freshness`：直接搬运 `book_age_ms`（未知 ⇒ UNKNOWN），不编造阈值。
+        """
         quality = _get(state, "quality")
         price = _get(state, "price")
         identity = _get(state, "identity")
+        raw_health = _get(quality, "book_health")
+        book_health = getattr(raw_health, "value", raw_health)
+        healthy = (str(book_health).lower() == "healthy") if book_health is not None else None
         return MarketView(
-            healthy=Fact.of(_get(quality, "healthy")),
+            healthy=Fact.of(healthy, unknown_reason="book_health is not available"),
+            book_health=Fact.of(book_health, unknown_reason="book_health is not available"),
+            book_age_ms=Fact.of(_get(quality, "book_age_ms"),
+                                unknown_reason="book age is not available"),
             tradeable=Fact.of(_get(quality, "tradeable")),
             window_coverage_ms=Fact.of(_get(quality, "window_coverage_ms")),
             best_bid=Fact.of(_get(price, "best_bid")),
@@ -323,8 +351,10 @@ class ProductService:
     def _portfolio(self, accounting: object | None) -> PortfolioView:
         facts = self.accounting_facts()
         if facts is not None:
+            # F1：只消费 provider 的 typed facts；不再猜 Fact 内部结构（不写 `is True`）
             return PortfolioView(
-                position_qty=Fact.of(getattr(facts, "position_known", None) is True and None),
+                position_qty=getattr(facts, "position_qty",
+                                      Fact.unknown("position quantity not provided")),
                 average_entry_price=Fact.unknown("not provided by accounting facts"),
                 mark_price=Fact.unknown("not provided by accounting facts"),
                 unrealized_pnl=getattr(facts, "unrealized_pnl", Fact.unknown("not provided")),
@@ -383,7 +413,7 @@ class ProductService:
             authority_id=Fact.of(self.authority_id(), unknown_reason="no authority issued"),
         )
 
-    def _health(self, health: Mapping[str, object]) -> HealthView:
+    def _health(self, health: Mapping[str, object], market: MarketView) -> HealthView:
         prediction_status = self.prediction_provider_status()
         facts = self.accounting_facts()
         accounting_status = (facts.health() if facts is not None and hasattr(facts, "health")
@@ -408,7 +438,12 @@ class ProductService:
             accounting=Fact.of(accounting_status if not hasattr(accounting_status, "value")
                                else accounting_status.value,
                                unknown_reason="accounting health not wired"),
-            market_healthy=Fact.of(health.get("market_healthy")),
+            # F2：System 与 Monitor 使用**同一** Market projection（book_health 推导），
+            # provider 显式给出 market_healthy 时才覆盖。
+            market_healthy=(Fact.of(health.get("market_healthy"))
+                            if health.get("market_healthy") is not None else market.healthy),
+            book_health=market.book_health,
+            market_tradeable=market.tradeable,
             private_stream_state=Fact.of(health.get("private_stream_state"),
                                          unknown_reason=UNKNOWN_NOT_AVAILABLE),
             clock_offset_ms=Fact.of(health.get("clock_offset_ms")),

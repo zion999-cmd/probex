@@ -20,6 +20,17 @@ MAX_TEXT_CHARS = 4_000
 SUPPORTED_KINDS: tuple[str, ...] = ("order", "fill", "decision", "execution_event", "prediction")
 
 
+class RawFactProviderUnavailable(RuntimeError):
+    """F5：某个 kind 的 provider **未接线**（≠ 该事实不存在）。
+
+    调用方必须映射成 503/不可用；绝不能冒充 404「事实不存在」。
+    """
+
+    def __init__(self, kind: str) -> None:
+        super().__init__(f"raw-fact provider for kind {kind!r} is not wired")
+        self.kind = kind
+
+
 @dataclass(frozen=True, slots=True)
 class RawFactView:
     """一条原始事实（有界）。"""
@@ -111,4 +122,5 @@ def raw_facts_for(kind: str, identity: str, obj: object | None) -> RawFactView:
                        truncated_fields=tuple(truncated))
 
 
-__all__ = ["MAX_TEXT_CHARS", "SUPPORTED_KINDS", "RawFactView", "raw_facts_for"]
+__all__ = ["MAX_TEXT_CHARS", "SUPPORTED_KINDS", "RawFactProviderUnavailable", "RawFactView",
+           "raw_facts_for"]

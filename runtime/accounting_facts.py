@@ -29,7 +29,9 @@ class AccountingFacts:
     available_balance: Fact
     realized_pnl: Fact
     unrealized_pnl: Fact
+    #: F1：仓位语义三元组 —— known qty(>0) / known qty(==0, flat) / unknown
     position_known: Fact
+    position_qty: Fact
     baseline_state: Fact
     last_update_at: Fact
     anomalies: tuple[str, ...] = ()
@@ -55,6 +57,7 @@ class AccountingFactsProvider:
         realized = self._scalar(self.accounting, "realized_trade_pnl", anomalies)
         unrealized = self._scalar(self.accounting, "unrealized_pnl", anomalies)
         position = self._position(anomalies)
+        position_known, position_qty = self._position_facts(position)
         baseline = self._scalar(self.accounting, "baseline_applied", anomalies)
         mark_ts = None
         try:
@@ -66,7 +69,8 @@ class AccountingFactsProvider:
             available_balance=self._available_balance(anomalies, fallback=balance),
             realized_pnl=realized,
             unrealized_pnl=unrealized,
-            position_known=Fact.of(getattr(position, "qty", None) is not None),
+            position_known=position_known,
+            position_qty=position_qty,
             baseline_state=(Fact.unknown("baseline state unavailable") if baseline is None
                             else Fact.of("APPLIED" if baseline else "NOT_APPLIED")),
             last_update_at=Fact.of(None if mark_ts is None else int(mark_ts),
@@ -82,7 +86,9 @@ class AccountingFactsProvider:
                              equity=(float(facts.equity.value) if facts.equity.known else None),
                              balance=(float(facts.available_balance.value)
                                       if facts.available_balance.known else None),
-                             position_qty=None, exposure_total=None, exposure_confirmed=None)
+                             position_qty=(float(facts.position_qty.value)
+                                           if facts.position_qty.known else None),
+                             exposure_total=None, exposure_confirmed=None)
 
     # ------------------------------------------------------------------ 内部（显式、受守卫）
 
@@ -106,6 +112,22 @@ class AccountingFactsProvider:
         # callable / 对象实例 / 内部引用一律不得进入产品事实
         anomalies.append(f"{name}:unsupported_type={type(value).__name__}")
         return Fact.unknown(f"{name} returned unsupported type {type(value).__name__}")
+
+    def _position_facts(self, position: object | None) -> tuple[Fact, Fact]:
+        """把 position 对象映射成 typed facts；**已知无仓位** 与 **未知** 必须区分。
+
+        - qty 是标量（含 0.0）⇒ `position_known=known True`，`position_qty=known <qty>`；
+        - 取不到 position / qty ⇒ 两者都是 UNKNOWN + reason（**绝不伪造 0**）。
+        """
+        if position is None:
+            reason = "position is unavailable (no accounting position owner result)"
+            return Fact.unknown(reason), Fact.unknown(reason)
+        qty = getattr(position, "qty", None)
+        if isinstance(qty, bool) or not isinstance(qty, _SCALARS):
+            reason = ("position quantity is unknown" if qty is None
+                      else f"position qty has unsupported type {type(qty).__name__}")
+            return Fact.unknown(reason), Fact.unknown(reason)
+        return Fact.of(True), Fact.of(float(qty))
 
     def _position(self, anomalies: list[str]) -> object | None:
         try:

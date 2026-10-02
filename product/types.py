@@ -200,6 +200,10 @@ class MarketView:
     best_ask: Fact
     spread_bps: Fact
     market_state_hash: Fact
+    #: F2：盘口可信度（既有 `BookHealth` 原始值）与数据新鲜度（`book_age_ms`）；
+    #: `healthy` 只由 `book_health == healthy` 推导，`tradeable` 是独立事实。
+    book_health: Fact = field(default_factory=lambda: Fact.unknown("book_health is not available"))
+    book_age_ms: Fact = field(default_factory=lambda: Fact.unknown("book age is not available"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,6 +329,9 @@ class HealthView:
     #: G4：prediction provider 状态（HEALTHY / DEGRADED / BACKING_OFF）与 accounting 健康
     prediction_provider: Fact = field(default_factory=lambda: Fact.unknown("not_provided"))
     accounting: Fact = field(default_factory=lambda: Fact.unknown("not_provided"))
+    #: F2：与 Monitor 同一 Market projection（System → Health 不再另外判健康）
+    book_health: Fact = field(default_factory=lambda: Fact.unknown("book_health is not available"))
+    market_tradeable: Fact = field(default_factory=lambda: Fact.unknown("tradeable is not available"))
     #: closure Slice 1 / F-11：runtime / loop 状态（STARTING/RUNNING/STOPPING/STOPPED/FAILED）
     runtime_state: Fact = field(default_factory=lambda: Fact.unknown("runtime state not provided"))
     runtime_detail: Fact = field(default_factory=lambda: Fact.unknown("runtime state not provided"))
