@@ -15,6 +15,13 @@ from product.snapshot import SystemSnapshot
 from product.types import Fact, RuntimeMode
 
 
+def _coerce_int(value: object) -> int | None:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass(slots=True)
 class AssistantService:
     """产品助手（read-only + manifest 建议；不拥有交易能力）。"""
@@ -29,7 +36,9 @@ class AssistantService:
     # ------------------------------------------------------------------ context
 
     def context(self, *, surface: str = "monitor", selected: Mapping[str, str] | None = None,
-                replay_position: int | None = None) -> AssistantContext:
+                replay_position: int | None = None, timestamp: object | None = None,
+                timeframe: object | None = None, candle: object | None = None,
+                drawing: object | None = None) -> AssistantContext:
         snapshot = self.snapshot_provider()
         selection = dict(selected or {})
         projection = self.execution_safety()
@@ -73,6 +82,11 @@ class AssistantService:
                              if replay_position is None else Fact.of(int(replay_position))),
             active_blockers=tuple(f"{b.owner.value}:{b.reason_code}" for b in snapshot.blockers),
             selection=selection,
+            selected_timestamp=(Fact.unknown("no chart selection") if timestamp in (None, "")
+                                else Fact.of(_coerce_int(timestamp))),
+            timeframe=(Fact.unknown("no chart selection") if not timeframe else Fact.of(str(timeframe))),
+            selected_candle=(Fact.unknown("no candle selected") if not candle else Fact.of(str(candle))),
+            selected_drawing=(Fact.unknown("no drawing selected") if not drawing else Fact.of(str(drawing))),
             **execution_facts,
         )
 

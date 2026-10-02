@@ -32,7 +32,7 @@ class UiApiContractTest(unittest.TestCase):
 
     def test_ui_only_talks_to_the_product_api(self) -> None:
         """SC-1：UI 只通过 Product API 取事实，不 import 领域模块、不直连交易所。"""
-        allowed_hosts = {"/api/v1/"}
+        allowed_hosts = {"/api/v1/", "/vendor/"}   # /vendor = 白名单 npm dist（chart 依赖，非事实源）
         for path in sorted(UI_ROOT.rglob("*.js")):
             source = path.read_text(encoding="utf-8")
             with self.subTest(module=str(path.relative_to(PROJECT_ROOT))):

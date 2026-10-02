@@ -706,3 +706,36 @@ retention/growth policy、process liveness、crash/restart 最小闭环（**不�
 - 测试：全量 **2286 passed / 0 failed / 24 skipped**。
 - **遗留（本轮未改，F6 范畴）**：`MarketFeedProvider` 自建了一个**未被使用**的 `PaperBroker`，真实执行边界用的是
   `ExecutionEngine.manager.adapter` 上的另一个实例；两个实例并存是架构噪音（不影响本次修复的读模型）。
+
+### 图表 / UI 产品化（Chart Workbench，已实施并真实浏览器验收）
+
+人类批准范围；技术选型固定 `klinecharts@10.0.3` + `@klinecharts/extension@0.1.0` + `echarts@6.1.0`
+（**不使用** `@klinecharts/pro`）。记录见 `THIRD_PARTY.md`；`package.json` + `package-lock.json` 入库，
+`node_modules/` 不入库（`/vendor/*` 白名单直接提供 npm dist，无 build step、不复制/不改三方源码）。
+
+- **后端只读 candle 聚合**：`product/candles.py`（1m/5m/15m/1h；trades 优先，无成交的桶用盘口 mid 补足且
+  `volume=0`；`source` 显式；有界 + `truncated`）；端点 `GET /api/v1/market/candles?interval=&limit=`（非法参数 400）。
+- **Market K 线工作台**（`ui/pages/market/workbench.js`）：klinecharts candlestick/volume/zoom/pan/crosshair/
+  tooltip/axes/last-price；timeframe 切换；指标 **MA/EMA/VOL**（库内建）+ **VWAP/ATR**（`indicators.js` 纯函数，
+  renderer-independent，注册为库 indicator）；drawing toolbar 复用库/扩展 overlays（horizontalStraightLine / segment /
+  `rect` / `arrow` / `measure` / `fibonacciSegment` / `fibonacciExtension`）+ 清空；**Probex semantic overlays** 由 F-08
+  `evidence.trace`（canonical id + ts）生成，点击跳到 Activity/Evidence/Raw Facts；replay play/pause/step/speed/seek
+  与图表时间同步；**保留原 L2 heatmap**（微观结构）与 order book / recent trades。
+- **Prediction 可视化**：`PredictionView.horizons`（既有 `Prediction.future_return` 事实）+ ECharts 多 horizon 面板
+  （Market + Activity）；无预测记录 ⇒ 明确 UNKNOWN，不显示中性 50%。
+- **Performance**：ECharts equity / drawdown(可视化解、合同口径仍 `run_mdd`) / exposure / run metrics / compare；
+  Run selector。**Monitor**：equity/PnL/exposure sparklines。**System**：latency / rate-limit / anomaly 轻量图。
+- **Assistant 图表上下文**：`AssistantContext` 新增 `selected_timestamp/timeframe/candle/drawing`；UI 通过
+  `ui/client/selection.js` + `/api/v1/assistant/context?timestamp=&timeframe=&candle=&drawing=` 传入。
+- **真实浏览器验收**（Chrome headless + CDP，`tests/ui/verify_chart.mjs` / `capture.mjs`）：
+  REPLAY 与 PAPER 均为 chartMounted/candles=181/indicators=[MA,VOL]/drawingCreated=3/drawingMoved/drawingDeleted/
+  drawingRendered/zoomPan/timeframeSwitched/replaySync/assistantSelection/assistantContext PASS；
+  截图 10 张在 `artifacts/ui/`（Monitor / Market K线 / drawings / semantic markers / L2 heatmap / Activity /
+  prediction / Performance / System-Ops / Assistant）。
+- **过程中修复的两个真实产品缺陷**：① feed provider 对 **TRADE** 事件误调 `book.on_market_event` ⇒ 任何含成交的
+  event store 会直接杀死 feed（现按事件类型路由：trades 只进成交历史）；② UI 的 `queueMicrotask` 挂载早于
+  `view.innerHTML` ⇒ chart/canvas/ECharts 从未真正挂载（现 console 提供 `mount()` 后置钩子）；③ 并行只读请求
+  超过默认 listen backlog(5) 触发 ECONNRESET（HTTP/1.1 + `request_queue_size=128`）。
+- 测试：全量 **2303 passed / 0 failed / 24 skipped**（新增 candles 单测、indicator Node 单测、candles API 集成）。
+- 遗留 UX 缺口：历史 run 的 equity/candle 序列未持久化（只有当前已接线 run 有曲线/K 线）；
+  prediction 面板在无预测源时显示 UNKNOWN（F6 回路未接，属后续阶段）。

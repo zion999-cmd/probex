@@ -31,6 +31,7 @@ from api.routes import (
     FACTS_PATH,
     PORTFOLIO_TIMELINE_PATH,
     MARKET_DEPTH_PATH,
+    MARKET_CANDLES_PATH,
     MARKET_HEALTH_PATH,
     MARKET_OVERLAYS_PATH,
     MARKET_TIMELINE_PATH,
@@ -47,6 +48,10 @@ from product.service import ProductService
 from product.types import SCHEMA_VERSION
 
 UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
+#: chart 依赖直接从 node_modules 提供（不复制/不改三方源码；无 build step）
+VENDOR_ROOT = Path(__file__).resolve().parent.parent / "node_modules"
+VENDOR_PREFIX = "/vendor/"
+VENDOR_PACKAGES = ("klinecharts", "@klinecharts/extension", "echarts")
 SCHEMA_VERSION_VALUE = SCHEMA_VERSION
 UI_PATH = UI_ROOT / "app" / "index.html"
 REPORT_MARKDOWN = "markdown"
@@ -76,6 +81,8 @@ class ProductApiHandler(BaseHTTPRequestHandler):
     service: ProductService
     #: F-12：非 loopback 部署的 bearer token；None ⇒ 不强制（loopback）
     auth_token: str | None = None
+    #: HTTP/1.1 + 显式 Content-Length（每个响应都设置）⇒ 支持 keep-alive，避免并行 UI 请求被 RST
+    protocol_version = "HTTP/1.1"
     server_version = "probex-product-api/1"
     sys_version = ""
 
@@ -90,7 +97,8 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         token = type(self).auth_token
         if not token:
             return True
-        if path == HEALTH_LIVE_PATH or path in UNAUTHENTICATED_PATHS or path.startswith("/ui/"):
+        if (path == HEALTH_LIVE_PATH or path in UNAUTHENTICATED_PATHS or path.startswith("/ui/")
+                or path.startswith(VENDOR_PREFIX)):
             return True
         header = self.headers.get("Authorization") or ""
         provided = header[7:].strip() if header.lower().startswith("bearer ") else ""
@@ -167,6 +175,35 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         self._send_text(200, target.read_text(encoding="utf-8"), content_type=content_type)
         return True
 
+    def _serve_vendor(self, path: str) -> bool:
+        """只读提供白名单 npm 包的 dist 文件（`/vendor/<pkg>/...`）；无路径穿越。"""
+        relative = path[len(VENDOR_PREFIX):]
+        parts = Path(relative).parts
+        if not parts or ".." in parts:
+            self._error(NOT_FOUND, "invalid_vendor_path", path)
+            return True
+        package = "/".join(parts[:2]) if parts[0].startswith("@") else parts[0]
+        if package not in VENDOR_PACKAGES:
+            self._error(NOT_FOUND, "unknown_vendor_package", package)
+            return True
+        target = VENDOR_ROOT / relative
+        try:
+            resolved = target.resolve()
+            root = VENDOR_ROOT.resolve()
+            if root not in resolved.parents or not resolved.is_file():
+                raise FileNotFoundError(relative)
+        except (OSError, FileNotFoundError):
+            self._error(NOT_FOUND, "vendor_asset_not_found", relative)
+            return True
+        suffix = resolved.suffix.lower()
+        content_type = {".js": "application/javascript; charset=utf-8",
+                        ".mjs": "application/javascript; charset=utf-8",
+                        ".css": "text/css; charset=utf-8",
+                        ".json": "application/json; charset=utf-8",
+                        ".map": "application/json; charset=utf-8"}.get(suffix, "text/plain; charset=utf-8")
+        self._send_text(200, resolved.read_text(encoding="utf-8"), content_type=content_type)
+        return True
+
     def _serve_capabilities(self, query: str) -> None:
         """能力清单：从路由表 + CLI 注册表生成（避免手写漂移）。"""
         from cli.main import COMMAND_SPEC, EXIT_CODES
@@ -179,7 +216,7 @@ class ProductApiHandler(BaseHTTPRequestHandler):
                                    ASSISTANT_EXPLAIN_PATH, REASONS_PATH, OPS_PATH,
                                    *sorted(EXECUTION_SUB_PATHS),
                                    MARKET_TIMELINE_PATH, MARKET_DEPTH_PATH, MARKET_TRADES_PATH,
-                                   MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH])),
+                                   MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH, MARKET_CANDLES_PATH])),
             cli_commands=COMMAND_SPEC,
             exit_codes=EXIT_CODES,
         )
@@ -316,6 +353,25 @@ class ProductApiHandler(BaseHTTPRequestHandler):
             health = project_health(history.health(), max_segments=config.max_points)
             payload = {"health": to_jsonable(health), "counts": history.counts,
                        "bounds": self._bounds(config)}
+        elif path == MARKET_CANDLES_PATH:
+            from product.candles import (DEFAULT_CANDLE_LIMIT, MAX_CANDLE_LIMIT, CandleError,
+                                         aggregate_candles)
+
+            params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
+            interval = params.get("interval") or "1m"
+            try:
+                limit = int(params.get("limit", DEFAULT_CANDLE_LIMIT))
+            except (TypeError, ValueError):
+                self._error(400, "invalid_candle_params", "limit must be an integer")
+                return
+            try:
+                series = aggregate_candles(trades=history.trades(), snapshots=history.snapshots(),
+                                           interval=interval, limit=limit)
+            except CandleError as exc:
+                self._error(400, "invalid_candle_params", str(exc))
+                return
+            payload = {"candles": to_jsonable(series), "counts": history.counts,
+                       "bounds": self._bounds(config), "max_limit": MAX_CANDLE_LIMIT}
         else:
             overlays = project_overlays(history.decisions(), history.executions(),
                                         max_points=config.max_points)
@@ -495,8 +551,13 @@ class ProductApiHandler(BaseHTTPRequestHandler):
             self._wire_execution_actions(gateway)
         params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
         surface = params.get("surface", "monitor")
-        selection = {key: params[key] for key in ("run", "decision", "order", "fill") if params.get(key)}
-        context = assistant.context(surface=surface, selected=selection)
+        selection = {key: params[key] for key in ("run", "decision", "order", "fill", "drawing")
+                     if params.get(key)}
+        context = assistant.context(surface=surface, selected=selection,
+                                    timestamp=params.get("timestamp"),
+                                    timeframe=params.get("timeframe"),
+                                    candle=params.get("candle"),
+                                    drawing=params.get("drawing"))
         self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE,
                               "context": context.as_payload(),
                               "suggested_actions": list(assistant.suggested_actions(context))})
@@ -641,13 +702,16 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         if path == HEALTH_LIVE_PATH:
             self._serve_health_live()
             return
+        if path.startswith(VENDOR_PREFIX):
+            self._serve_vendor(path)
+            return
         if self._serve_ui(path):
             return
         if path == REPORT_PATH:
             self._serve_report(query)
             return
         if path in (MARKET_TIMELINE_PATH, MARKET_DEPTH_PATH, MARKET_TRADES_PATH, MARKET_HEALTH_PATH,
-                    MARKET_OVERLAYS_PATH):
+                    MARKET_OVERLAYS_PATH, MARKET_CANDLES_PATH):
             self._serve_market_workbench(path, query)
             return
         if path.startswith(f"{RUNS_PATH}/") and path.endswith("/market"):
@@ -707,6 +771,7 @@ class ProductApiHandler(BaseHTTPRequestHandler):
                                                        RUNS_PATH, RUNS_COMPARE_PATH, MARKET_TIMELINE_PATH,
                                                        MARKET_DEPTH_PATH, MARKET_TRADES_PATH,
                                                        MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH,
+                                                       MARKET_CANDLES_PATH,
                                                        FACTS_PATH, PORTFOLIO_TIMELINE_PATH,
                                                        ACTIONS_PATH, ACTIONS_AUDIT_PATH,
                                                        ASSISTANT_CONTEXT_PATH,
@@ -779,10 +844,18 @@ def create_handler(service: ProductService, *, auth_token: str | None = None):
                 {"service": service, "auth_token": auth_token})
 
 
+class ProductApiServer(ThreadingHTTPServer):
+    """产品 API server：UI 会并行发起多条只读请求，因此提高 backlog 并守护工作线程。"""
+
+    daemon_threads = True
+    allow_reuse_address = True
+    request_queue_size = 128          # 默认 5 会在并行 UI 请求下产生 ECONNRESET
+
+
 def create_server(service: ProductService, *, host: str = "127.0.0.1", port: int = 0,
                   auth_token: str | None = None) -> ThreadingHTTPServer:
     """创建（未启动的）HTTP server；`port=0` 时由系统分配（便于测试）。"""
-    return ThreadingHTTPServer((host, port), create_handler(service, auth_token=auth_token))
+    return ProductApiServer((host, port), create_handler(service, auth_token=auth_token))
 
 
 def serve(service: ProductService, *, host: str = "127.0.0.1", port: int = 0) -> None:

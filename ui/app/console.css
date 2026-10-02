@@ -36,3 +36,18 @@ details.nested, details.raw { margin: 4px 0 4px 2px; }
 details summary { cursor: pointer; color: #9aa4b2; }
 details.nested > table { margin-left: 8px; }
 details.raw pre { max-height: 240px; overflow: auto; background: #10131a; padding: 6px; border-radius: 4px; }
+
+/* chart workbench / charts layout */
+main { grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); }
+section.wide { grid-column: 1 / -1; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; }
+.wb-group { display: inline-flex; align-items: center; gap: 4px; }
+.wb-label { color: #6b7280; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; margin-right: 2px; }
+.toolbar button { background: #1c212b; color: #cbd5e1; border: 1px solid #39404e; border-radius: 4px;
+  padding: 2px 7px; cursor: pointer; font: inherit; font-size: 11px; }
+.toolbar button.active { background: #2d3a52; border-color: #7aa2f7; color: #dbe7ff; }
+.chart-host { width: 100%; background: #141821; border: 1px solid #20242e; border-radius: 4px; }
+.spark-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.spark { background: #141821; border: 1px solid #20242e; border-radius: 4px; padding: 4px 6px; }
+.spark-title { color: #6b7280; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.spark-host { height: 72px; }

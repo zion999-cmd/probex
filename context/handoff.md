@@ -2032,3 +2032,47 @@ runtime 回路）**未动**。边界：无新策略 / 无新 metric 算法 / 无
 - 全量 **2286 passed / 0 failed / 24 skipped**。
 - 遗留（F6 范畴，未动）：`MarketFeedProvider` 自建了未被使用的 `PaperBroker`，真实执行边界用的是 engine 的 adapter；
   两者并存属架构噪音。F6（把 prediction→strategy 回路接进产品 runtime）留待后续单独处理。
+
+## 2026-10-02：图表 / UI 产品化（Chart Workbench）实施 + 真实浏览器验收
+
+人类批准范围；选型固定 klinecharts@10.0.3 + @klinecharts/extension@0.1.0 + echarts@6.1.0（不使用 @klinecharts/pro）。
+依赖记录 `THIRD_PARTY.md`；`package.json` + `package-lock.json` 入库（lock 需 `git add -f`，因用户全局 gitignore 忽略它），
+`node_modules/` 已 gitignore；`/vendor/<pkg>/...` 白名单直供 npm dist（无 build step、不复制/不改源码、不打补丁）。
+
+### 落地
+
+| 项 | 文件 |
+| --- | --- |
+| candle 聚合（只读、有界、显式 source） | `product/candles.py`、`api/routes/market_candles.py`、`api/server.py` |
+| K 线工作台（库/扩展复用 + Probex semantic） | `ui/pages/market/workbench.js`、`ui/pages/market/semantic_overlays.js`、`ui/pages/market/indicators.js`、`ui/vendor/klinecharts-shim.js`、`ui/app/index.html`（UMD + importmap） |
+| Market 页面（K线 + L2 heatmap + order book + trades + prediction） | `ui/pages/market/page.js` |
+| Prediction 多 horizon（ECharts） | `ui/pages/market/prediction_panel.js`、`ui/client/charts.js`、`product/service.py`（`horizons`） |
+| Performance 图 / Monitor sparkline / System 轻量图 | `ui/pages/performance/charts.js`、`ui/monitor/sparklines.js`、`ui/system/ops_charts.js` |
+| Assistant 图表上下文 | `assistant/context.py`、`assistant/service.py`、`api/server.py`、`ui/assistant/context.js`、`ui/client/selection.js` |
+| console 挂载钩子 | `ui/client/console.js`（`module.mount()` 在 innerHTML 之后） |
+
+### 真实浏览器验收（Chrome headless + CDP）
+
+- `tests/ui/verify_chart.mjs`：**REPLAY 与 PAPER** 均通过
+  chartMounted / candles=181 / indicators=[MA,VOL] / semanticMarkers(PAPER=6, REPLAY=0 正确) / drawingCreated=3 /
+  drawingMoved / drawingDeleted / drawingRendered / zoomPan / timeframeSwitched / replaySync / assistantSelection /
+  assistantContext=5m。
+- `tests/ui/capture.mjs` → `artifacts/ui/*.png`（10 张，10 个不同 hash）：Monitor、Market K 线、drawing tools、semantic markers、
+  L2 heatmap、Activity causal chain、prediction panel、Performance charts、System Ops、Assistant drawer。
+- demo runtime（测试资产）：`tests/ui/demo_runtime.py`（真实 ProductRuntime，PAPER 下单+成交；REPLAY 纯回放），
+  `tests/ui/market_fixture.py`（3h 确定性行情：2160 快照 + 2160 成交 ⇒ 1m 181 / 5m 37 / 15m 13 / 1h 4 根 K 线）。
+
+### 过程中修复的真实产品缺陷（非新功能）
+
+1. `runtime/provider.py`：TRADE 事件被误喂给 `MarketBook`（`unsupported event type: trade`）⇒ 含成交的 event store
+   会直接杀死 feed。现按事件类型路由（trades 只进 `history.feed_trade`，不喂 book/engine）。
+2. `ui/client/console.js`：页面的 `queueMicrotask` 挂载早于 `view.innerHTML` 赋值 ⇒ chart/canvas/ECharts 从未挂载
+   （L2 heatmap 也一直空白）。现提供 `mount()` 后置钩子，由 console 在插入 DOM 后调用。
+3. `api/server.py`：并行只读请求（Market 页面 8 个 Promise.all）超过默认 listen backlog(5) ⇒ ECONNRESET；
+   改为 HTTP/1.1 + `request_queue_size=128`（8/8 复跑稳定）。
+
+### 测试 / 遗留
+
+- 全量 **2303 passed / 0 failed / 24 skipped**（+17：candles 单测、indicator Node 单测、candles API 集成）。
+- 遗留 UX：历史 run 的 equity/K 线序列未持久化；prediction 面板在无预测源时为 UNKNOWN（F6 未接，按指令未动）；
+  `getConvertPictureUrl` 不能作为渲染证据（已改用 chart 区域 clipped screenshot diff）。

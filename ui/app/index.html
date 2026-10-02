@@ -5,6 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Probex · Automated Trading Operations Console</title>
 <link rel="stylesheet" href="/ui/app/console.css" />
+<!-- chart deps: klinecharts UMD (browser build) + import-map shim for the ESM/extension graph -->
+<script src="/vendor/klinecharts/dist/umd/klinecharts.min.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "klinecharts": "/ui/vendor/klinecharts-shim.js"
+  }
+}
+</script>
 </head>
 <body>
 <header>

@@ -1,0 +1,12 @@
+{
+  "name": "probex-ui",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Probex product UI chart dependencies (klinecharts + echarts), served from node_modules via /vendor; no build step",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@klinecharts/extension": "0.1.0",
+    "echarts": "6.1.0",
+    "klinecharts": "10.0.3"
+  }
+}

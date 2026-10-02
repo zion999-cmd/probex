@@ -26,6 +26,9 @@ class AccountSample:
     position_qty: float | None = None
     exposure_total: float | None = None
     exposure_confirmed: float | None = None
+    #: closure slice：既有 accounting 事实（Monitor/Performance 的 PnL 趋势）
+    unrealized_pnl: float | None = None
+    realized_pnl: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +39,8 @@ class AccountTimelinePoint:
     position_qty: Fact
     exposure_total: Fact
     exposure_confirmed: Fact
+    unrealized_pnl: Fact = field(default_factory=lambda: Fact.unknown("unrealized pnl not recorded"))
+    realized_pnl: Fact = field(default_factory=lambda: Fact.unknown("realized pnl not recorded"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +105,8 @@ def project_account_timeline(samples: Sequence[AccountSample], *,
             position_qty=Fact.of(buckets[key].position_qty),
             exposure_total=Fact.of(buckets[key].exposure_total),
             exposure_confirmed=Fact.of(buckets[key].exposure_confirmed),
+            unrealized_pnl=Fact.of(buckets[key].unrealized_pnl),
+            realized_pnl=Fact.of(buckets[key].realized_pnl),
         )
         for key in keys
     )

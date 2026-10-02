@@ -20,7 +20,8 @@ class MarketWorkbenchUiContractTest(unittest.TestCase):
                 self.assertIn("export", path.read_text(encoding="utf-8"))
 
     def test_ui_only_talks_to_the_product_api(self) -> None:
-        allowed = ("/api/v1/", "/ui/")
+        # /vendor = 白名单 npm dist（klinecharts / extension / echarts；非事实源）
+        allowed = ("/api/v1/", "/ui/", "/vendor/")
         for path in sorted((UI_ROOT / "pages" / "market").rglob("*.js")):
             source = path.read_text(encoding="utf-8")
             with self.subTest(module=path.name):

@@ -3,6 +3,9 @@ import { ENDPOINTS, fetchJson, fetchOrUnavailable, fetchSnapshot, reasonCatalog 
 import { escapeHtml, fact, positionFact, reasonCell, rows, section } from "/ui/client/render.js";
 import { BLOCKER_SECTION, surfaceHash } from "/ui/app/navigation.js";
 import { SURFACES } from "/ui/app/surfaces.js";
+import { mountSparklines, sparklinesSection } from "/ui/monitor/sparklines.js";
+
+let lastTimeline = null;
 
 export const title = "Monitor";
 export const slug = "monitor";
@@ -46,10 +49,11 @@ export async function render() {
     ? orders.map((o) => `<div class="row"><span class="k">${escapeHtml(o.client_order_id)}</span>` +
         `<span class="v">${escapeHtml(o.side)} ${escapeHtml(o.status)} @ ${fact(o.price)}</span></div>`).join("")
     : '<div class="row"><span class="k">orders</span><span class="v known">0</span></div>';
-  const [execHealth, execRate, execReconciliation] = await Promise.all([
+  const [execHealth, execRate, execReconciliation, timeline] = await Promise.all([
     fetchOrUnavailable(ENDPOINTS.executionHealth), fetchOrUnavailable(ENDPOINTS.executionRateLimits),
-    fetchOrUnavailable(ENDPOINTS.executionReconciliation),
+    fetchOrUnavailable(ENDPOINTS.executionReconciliation), fetchOrUnavailable(ENDPOINTS.portfolioTimeline),
   ]);
+  lastTimeline = timeline;
   const runtimeRow = rows([
     ["runtime state", fact(snapshot.health.runtime_state)],
     ["runtime detail", fact(snapshot.health.runtime_detail)],
@@ -84,10 +88,15 @@ export async function render() {
   ]);
   return section("Process / runtime / readiness / execution", opsRow) +
     section("Runtime / loop", runtimeRow) + section("System now", metrics) +
+    `<section class="wide"><h2>Trends (equity / PnL / exposure)</h2>${sparklinesSection()}</section>` +
     section("Execution safety", execSummary) +
     section("Blockers / warnings", rows(blockers)) +
     section("Market / current quotes", market + quotes) +
     section("Position / active orders", orderRows) +
     section("Recent activity", recent) +
     section("Surfaces", surfaceNav);
+}
+
+export function mount() {
+  mountSparklines(lastTimeline);
 }

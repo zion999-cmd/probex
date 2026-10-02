@@ -24,6 +24,11 @@ class AssistantContext:
     replay_position: Fact
     active_blockers: tuple[str, ...] = ()
     selection: dict[str, str] = field(default_factory=dict)
+    #: closure slice：图表选中上下文（canonical ts / timeframe / candle / drawing）
+    selected_timestamp: Fact = field(default_factory=lambda: _unknown("no chart selection"))
+    timeframe: Fact = field(default_factory=lambda: _unknown("no chart selection"))
+    selected_candle: Fact = field(default_factory=lambda: _unknown("no chart selection"))
+    selected_drawing: Fact = field(default_factory=lambda: _unknown("no drawing selected"))
     #: P0001.13：执行安全事实（未接线 ⇒ UNKNOWN）
     execution_health: Fact = field(default_factory=lambda: _unknown("execution safety not wired"))
     rate_limit_state: Fact = field(default_factory=lambda: _unknown("execution safety not wired"))
@@ -45,6 +50,10 @@ class AssistantContext:
             "replay_position": to_jsonable(self.replay_position),
             "active_blockers": list(self.active_blockers),
             "selection": dict(self.selection),
+            "selected_timestamp": to_jsonable(self.selected_timestamp),
+            "timeframe": to_jsonable(self.timeframe),
+            "selected_candle": to_jsonable(self.selected_candle),
+            "selected_drawing": to_jsonable(self.selected_drawing),
             "execution_health": to_jsonable(self.execution_health),
             "rate_limit_state": to_jsonable(self.rate_limit_state),
             "venue_facts_state": to_jsonable(self.venue_facts_state),

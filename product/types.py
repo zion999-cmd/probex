@@ -218,6 +218,8 @@ class PredictionView:
     derived_confidence: Fact
     market_state_hash: Fact
     freshest: Fact
+    #: closure Slice：多 horizon 未来收益分布（既有 `Prediction.future_return` 事实；无记录 ⇒ UNKNOWN）
+    horizons: Fact = field(default_factory=lambda: Fact.unknown("no prediction record yet"))
 
 
 @dataclass(frozen=True, slots=True)

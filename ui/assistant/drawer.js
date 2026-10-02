@@ -22,6 +22,12 @@ export function mountAssistant(container) {
   });
   refreshAssistant();
   window.addEventListener("hashchange", refreshAssistant);
+  // closure slice：图表选中变化（crosshair）时刷新 Assistant 上下文（去抖）
+  let timer = null;
+  window.addEventListener("probex:selection", () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(refreshAssistant, 350);
+  });
   return drawer;
 }
 

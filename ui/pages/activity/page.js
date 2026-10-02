@@ -2,6 +2,10 @@
 import { ENDPOINTS, fetchJson, fetchSnapshot, reasonCatalog } from "/ui/client/api.js";
 import { escapeHtml, fact, reasonCell, rows, section, table, valueView } from "/ui/client/render.js";
 import { entityHash, marketPointHash } from "/ui/app/navigation.js";
+import { mountPredictionPanel, predictionSection } from "/ui/pages/market/prediction_panel.js";
+import { updateSelection } from "/ui/client/selection.js";
+
+let lastActivity = null;
 
 export const title = "Activity";
 export const slug = "activity";
@@ -95,6 +99,23 @@ export async function render(rest = []) {
   const executionTable = table(["ts", "order", "event", "detail"],
     executions.map((e) => [String(e.ts), escapeHtml(e.client_order_id), escapeHtml(e.event),
       escapeHtml(e.detail || "")]));
+  const strategy = snapshot.strategy || {};
+  const bid = rows([["bid action", fact(strategy.bid_action)], ["bid price", fact(strategy.bid_price)],
+                    ["bid qty", fact(strategy.bid_quantity)]]);
+  const ask = rows([["ask action", fact(strategy.ask_action)], ["ask price", fact(strategy.ask_price)],
+                    ["ask qty", fact(strategy.ask_quantity)]]);
+  const strategyPanel = section("Strategy / Decision（为什么交易 / 为什么不交易 / 为什么取消）", rows([
+    ["strategy identity", "MakerPolicy"] ,
+    ["decision at_ms", fact(strategy.at_ms)],
+    ["mode", fact(strategy.mode)],
+    ["signal / blocked_by", fact(strategy.blocked_by)],
+    ["detail", fact(strategy.detail)],
+    ["risk result", escapeHtml((snapshot.risk.rejects || []).join(", ") || "no rejects")],
+    ["readiness result", `${fact(snapshot.readiness.status)} ${escapeHtml((snapshot.readiness.reasons || []).join(", "))}`],
+    ["prediction linkage", fact(snapshot.prediction.request_id)],
+  ])) + section("MakerPolicy bid / ask", bid + ask) +
+    `<section class="wide"><div id="activity-prediction"></div></section>`;
+  lastActivity = snapshot;
   const runLinks = rows([
     ["selected run", selectedRun
       ? `<code>${escapeHtml(selectedRun)}</code> · ` +
@@ -105,6 +126,7 @@ export async function render(rest = []) {
   ]);
   return section("Causal chain (time-ordered, F-08)", timeline) +
     section("Stages without a fact (explicit, not skipped)", missingBlock) +
+    strategyPanel +
     section("Inputs / gates", flow) +
     section("Decisions", decisionTable) +
     section("Exchange events", executionTable) +
@@ -120,4 +142,14 @@ export async function render(rest = []) {
       ["raw facts endpoint", "<code>/api/v1/facts/&lt;kind&gt;/&lt;identity&gt;</code> " +
         "(kind: order | fill | decision | execution_event | prediction)"],
     ]));
+}
+
+export function mount() {
+  updateSelection({ surface: "activity" });
+  const snapshot = lastActivity;
+  const host = document.getElementById("activity-prediction");
+  if (host && snapshot) {
+    host.innerHTML = predictionSection(snapshot.prediction, { id: "activity-prediction-chart" });
+    mountPredictionPanel(document.getElementById("activity-prediction-chart"), snapshot.prediction);
+  }
 }

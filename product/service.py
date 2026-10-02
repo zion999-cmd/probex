@@ -243,10 +243,18 @@ class ProductService:
             return PredictionView(
                 request_id=unknown, sequence=unknown, provider=unknown, model=unknown, as_of=unknown,
                 expires_at=unknown, latency_ms=unknown, derived_confidence=unknown,
-                market_state_hash=unknown, freshest=unknown,
+                market_state_hash=unknown, freshest=unknown, horizons=unknown,
             )
         prediction = _get(record, "prediction")
         fresh = self.prediction_fresh()
+        raw_horizons = getattr(prediction, "future_return", None)
+        horizons = None
+        if raw_horizons:
+            horizons = tuple(
+                {"horizon_ms": int(distribution.horizon_ms),
+                 **{category: float(probability)
+                    for category, probability in distribution.as_mapping()}}
+                for distribution in raw_horizons)
         return PredictionView(
             request_id=Fact.of(_get(record, "request_id")),
             sequence=Fact.of(_get(record, "sequence")),
@@ -258,6 +266,7 @@ class ProductService:
             derived_confidence=Fact.of(_get(prediction, "derived_confidence")),
             market_state_hash=Fact.of(_get(record, "market_state_hash")),
             freshest=(Fact.unknown("freshness not evaluated") if fresh is None else Fact.of(fresh)),
+            horizons=Fact.of(horizons, unknown_reason="prediction has no horizon distributions"),
         )
 
     def _strategy(self, decision: object | None) -> StrategyView:

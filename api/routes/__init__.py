@@ -8,6 +8,7 @@ from api.routes import (
     blockers,
     capabilities,
     evidence,
+    market_candles,
     market_depth,
     market_health,
     market_overlays,
@@ -40,6 +41,7 @@ METRICS_PATH = metrics.PATH
 RUNS_PATH = runs.PATH
 RUNS_COMPARE_PATH = runs.PATH + runs.COMPARE_SUFFIX
 MARKET_TIMELINE_PATH = market_timeline.PATH
+MARKET_CANDLES_PATH = market_candles.PATH
 MARKET_DEPTH_PATH = market_depth.PATH
 MARKET_TRADES_PATH = market_trades.PATH
 MARKET_HEALTH_PATH = market_health.PATH

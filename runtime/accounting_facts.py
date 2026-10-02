@@ -49,6 +49,8 @@ class AccountingFactsProvider:
     accounting: object
     symbol: str
     clock: Callable[[], int]
+    #: 可选：既有 OrderTracker 的暴露事实（total, confirmed）；不是新的 risk owner
+    exposure_provider: Callable[[], tuple[float | None, float | None]] | None = None
 
     def facts(self) -> AccountingFacts:
         anomalies: list[str] = []
@@ -82,13 +84,24 @@ class AccountingFactsProvider:
         facts = self.facts()
         if not facts.equity.known and not facts.available_balance.known:
             return None
+        total = confirmed = None
+        if self.exposure_provider is not None:
+            try:
+                total, confirmed = self.exposure_provider()
+            except Exception:  # noqa: BLE001 - 取不到就是 UNKNOWN
+                total = confirmed = None
         return AccountSample(ts=int(now_ms),
                              equity=(float(facts.equity.value) if facts.equity.known else None),
                              balance=(float(facts.available_balance.value)
                                       if facts.available_balance.known else None),
                              position_qty=(float(facts.position_qty.value)
                                            if facts.position_qty.known else None),
-                             exposure_total=None, exposure_confirmed=None)
+                             exposure_total=(float(total) if total is not None else None),
+                             exposure_confirmed=(float(confirmed) if confirmed is not None else None),
+                             unrealized_pnl=(float(facts.unrealized_pnl.value)
+                                             if facts.unrealized_pnl.known else None),
+                             realized_pnl=(float(facts.realized_pnl.value)
+                                           if facts.realized_pnl.known else None))
 
     # ------------------------------------------------------------------ 内部（显式、受守卫）
 

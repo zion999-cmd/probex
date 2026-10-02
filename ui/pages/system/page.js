@@ -1,6 +1,9 @@
 /** System：为什么能/不能运行（§5）。二级：Health / Risk / Readiness / Execution / Configuration / Capabilities。 */
 import { ENDPOINTS, fetchJson, fetchOrUnavailable, fetchSnapshot, reasonCatalog } from "/ui/client/api.js";
 import { escapeHtml, fact, factRows, jsonDetail, reasonCell, rows, section, table, valueView } from "/ui/client/render.js";
+import { mountOpsCharts, opsChartsSection } from "/ui/system/ops_charts.js";
+
+let lastExecution = null;
 
 export const title = "System";
 export const slug = "system";
@@ -62,9 +65,11 @@ async function executionSections() {
     : table(["owner", "reason", "severity", "source"],
         anomalies.blockers.map((b) => [escapeHtml(b.owner), escapeHtml(b.reason_code),
           escapeHtml(b.severity), escapeHtml(b.source_ref)]));
+  lastExecution = { latency, rateLimits, anomalies };
   return section("Venue Limits", limitsRows) + section("Rate Limits", rateRows) +
     section("Latency", latencyRows) + section("Reconciliation", reconciliationRows) +
-    section("Execution anomalies", anomalyRows);
+    section("Execution anomalies", anomalyRows) +
+    `<section class="wide"><h2>Execution charts</h2>${opsChartsSection()}</section>`;
 }
 
 export async function render(rest = []) {
@@ -166,4 +171,10 @@ export async function render(rest = []) {
       Object.entries(cli.commands || {}).map(([name, path]) => [escapeHtml(name), escapeHtml(path)]))) +
     section("Exit codes", table(["code", "meaning"],
       Object.entries(cli.exit_codes || {}).map(([code, meaning]) => [escapeHtml(code), escapeHtml(meaning)])));
+}
+
+export function mount(rest = []) {
+  if (SECTIONS.includes(rest[0]) ? rest[0] === "execution" : true) {
+    if (lastExecution) mountOpsCharts(lastExecution);
+  }
 }

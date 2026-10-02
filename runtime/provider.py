@@ -25,7 +25,7 @@ from execution.tracker import OrderTracker
 from market.book.market_book import MarketBook
 from market.book.order_book import BookSide
 from market.events.payloads import TradePayload
-from market.events.types import Venue
+from market.events.types import EventType, Venue
 from market.features.engine import FeatureEngine
 from market.replay.source import ReplaySource
 from product.market_projection import BoundedMarketHistory, MarketProjectionConfig
@@ -169,10 +169,14 @@ class MarketFeedProvider:
                 if self._stop.is_set():
                     self._stats["stopped_early"] = True
                     return
-                self.book.on_market_event(event)
-                state = self.engine.on_market_event(event)
-                self.history.feed_snapshot(self._book_snapshot(event.exchange_ts))
-                self.history.feed_state(state)
+                # TRADE 不是盘口 mutation（MarketBook 会拒绝）；只进成交历史，不喂 book/engine。
+                is_trade = event.event_type is EventType.TRADE
+                state = self._stats.get("last_state")
+                if not is_trade:
+                    self.book.on_market_event(event)
+                    state = self.engine.on_market_event(event)
+                    self.history.feed_snapshot(self._book_snapshot(event.exchange_ts))
+                    self.history.feed_state(state)
                 # 账户采样：只转发既有 AccountingFactsProvider 的事实（不重算、不伪造 0、失败不打断 feed）
                 if self.account_provider is not None and self.history_account is not None:
                     try:
@@ -185,11 +189,12 @@ class MarketFeedProvider:
                     if sample is not None:
                         self.history_account.feed(sample)
                 transition = self.book.last_transition
-                if transition is not None:
+                if not is_trade and transition is not None:
                     self.history.feed_health(self._health_segment(transition, event.exchange_ts))
                 payload = event.payload
                 if isinstance(payload, TradePayload):
                     self.history.feed_trade(self._trade_print(payload, event.exchange_ts))
+                    self._stats["trade_events"] = int(self._stats.get("trade_events", 0)) + 1
                 if self.on_data_timestamp is not None:
                     try:
                         self.on_data_timestamp(int(event.exchange_ts))
@@ -200,7 +205,8 @@ class MarketFeedProvider:
                 self._stats.update({"events": int(self._stats.get("events", 0)) + 1,
                                    "last_ts": int(event.exchange_ts),
                                    "last_state": state,
-                                   "last_health": self.book.health.value})
+                                   "last_health": self.book.health.value,
+                                   "last_event_type": event.event_type.value})
             self._stats["completed"] = True
         except Exception as exc:  # noqa: BLE001 - feed 失败必须显式可见（不静默）
             self._error = f"{type(exc).__name__}: {exc}"

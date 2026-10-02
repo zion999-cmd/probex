@@ -1,6 +1,9 @@
 /** Performance：以 Run 为第一组织单位（§4）。F-19：run 列表按分页读取。 */
 import { ENDPOINTS, fetchJson, fetchOrUnavailable } from "/ui/client/api.js";
 import { escapeHtml, fact, factRows, rows, section, table } from "/ui/client/render.js";
+import { mountPerformanceCharts, performanceChartsSection } from "/ui/pages/performance/charts.js";
+
+let lastPerformance = null;
 
 export const title = "Performance";
 export const slug = "performance";
@@ -48,9 +51,11 @@ export async function render(rest = []) {
     (definitions.definitions || []).map((d) => [escapeHtml(d.name), escapeHtml(d.formula),
       escapeHtml(d.unknown_condition)]));
   let compare = rows([["compare", "requires two runs"]]);
+  let comparisonPayload = null;
   if (runs.length >= 2) {
     const comparison = await fetchOrUnavailable(
       `${ENDPOINTS.runCompare}?left=${encodeURIComponent(runs[0].run_id)}&right=${encodeURIComponent(runs[1].run_id)}`);
+    comparisonPayload = comparison.unavailable ? null : comparison;
     compare = comparison.unavailable
       ? rows([["compare", `<span class="unknown">UNKNOWN (${escapeHtml(comparison.unavailable)})</span>`]])
       : table(["metric", "left", "right", "delta"],
@@ -63,15 +68,22 @@ export async function render(rest = []) {
     : table(["ts", "equity", "balance", "position", "exposure (total)"],
         (timeline.timeline.points || []).map((p) => [String(p.ts), fact(p.equity), fact(p.balance),
           fact(p.position_qty), fact(p.exposure_total)]));
+  lastPerformance = { timeline, summary, comparison: comparisonPayload };
   return section("Runs (run is the unit)", runList) +
     section("Run selector", rows([
       ["selected run", selected ? `<code>${escapeHtml(selected)}</code>` : "none"],
       ["select", runs.map((run) => `<a href="#/performance/run/${encodeURIComponent(run.run_id)}">${escapeHtml(run.run_id)}</a>`).join(" · ") || "none"],
+      ["run → review / activity", runs.slice(0, 3).map((run) =>
+        `<a href="#/market/run-review/${encodeURIComponent(run.run_id)}">review</a>`).join(" · ") || "none"],
     ])) +
     section("Pagination (F-19: bounded list)", paginationBlock) +
-    section("Equity / exposure timeline (G3)", timelineBlock) +
+    `<section class="wide">${performanceChartsSection({ timeline, summary, comparison: comparisonPayload, selectedRun: selected })}</section>` +
     section(`Latest run metrics${selected ? ` · ${escapeHtml(selected)}` : ""}`, metrics) +
     section("Compare", compare) +
     section("Metric contract (definitions)", definitionTable) +
     section("Run identity", factRows(((summary.run_summary || {}).run) || {}));
+}
+
+export function mount() {
+  mountPerformanceCharts(lastPerformance || {});
 }

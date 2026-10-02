@@ -725,8 +725,10 @@ class ProductRuntime:
         if accounting is not None:
             from runtime.accounting_facts import AccountingFactsProvider
 
-            provider = AccountingFactsProvider(accounting=accounting, symbol=self.profile.symbol,
-                                               clock=self.profile.clock)
+            provider = AccountingFactsProvider(
+                accounting=accounting, symbol=self.profile.symbol, clock=self.profile.clock,
+                exposure_provider=lambda: (float(self._tracker_owner.total_pending_exposure()),
+                                           float(self._tracker_owner.confirmed_open_exposure)))
         self._accounting = accounting
         self._accounting_provider = provider
         self._account_timeline = timeline

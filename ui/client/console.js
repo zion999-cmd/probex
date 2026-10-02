@@ -60,6 +60,8 @@ async function renderSurface() {
     const route = resolveRoute(surface, rest);
     const module = await import(route.module);
     view.innerHTML = await module.render(route.args);
+    // 真实挂载钩子：页面在 DOM 插入**之后**再挂 chart / canvas / ECharts（queueMicrotask 会早于 innerHTML）
+    if (typeof module.mount === "function") await module.mount(route.args);
   } catch (error) {
     view.innerHTML = `<section><h2>error</h2><div class="row"><span class="k">page</span><span class="v bad">${escapeHtml(String(error))}</span></div></section>`;
   }
