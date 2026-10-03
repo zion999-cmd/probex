@@ -2134,7 +2134,8 @@ P0001.14（`proposals/P0001.14-runtime-decision-loop-integration.md`，状态 **
 
 ### 测试结果
 
-- 全量：**2347 passed / 0 failed / 24 skipped**（新增 44）。
+- 全量：**2347 passed / 0 failed / 24 skipped**（新增 44）；commit `7987cd5` 已 push 到 `origin/master`，
+  detached worktree（无 `node_modules`）复核同样 2347 passed / 0 failed / 24 skipped。
 - 真实装配 E2E：`tests/integration/test_runtime_decision_loop_e2e.py` 10/10 PASS（PAPER 闭环、readiness 方案 A、
   无 mark price fail closed、provider 未接线、无 maker 配置、providers 真实事实、唯一 broker、无 venue 耦合、
   REPLAY observe-only、graceful stop）。

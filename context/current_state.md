@@ -419,6 +419,8 @@ Git 仓库已初始化；P0001.1 – P0001.9.2.1 均已提交并推送（每个 
 | `1fa7dcc` | docs: 版本表补记 P0001.9.4.1.1 / P0001.9.4.2 | 1584 passed |
 | `a2ab8da` | **P0001.9.5** Execution Readiness Evidence Binding | 1631 passed（detached worktree 复核） |
 | `afc0196` | **P0001.9.6** Binance USDⓈ-M ExecutionAdapter（含 UNKNOWN≠EMPTY correction） | 1693 passed（detached worktree 复核） |
+| `d4939a4` | **图表 / UI 产品化**（Chart Workbench：K 线 / 指标 / 画线 / semantic overlays / ECharts 面板） | 2303 passed（detached worktree 复核） |
+| `7987cd5` | **P0001.14** Runtime Decision Loop Integration | 2347 passed（detached worktree 复核） |
 
 `CLAUDE.md` 与 `.gitignore` 被使用者全局 gitignore（`~/.gitignore_global`）排除，未纳入版本控制。
 P0001.9.3（`1be451a`）与 P0001.9.3.1（`4b69a73`）均已提交并 **push 到 `origin/master`**；
@@ -779,7 +781,8 @@ retention/growth policy、process liveness、crash/restart 最小闭环（**不�
 
 ### 测试
 
-全量 **2347 passed / 0 failed / 24 skipped**（+44：决策 loop 编排、risk budget、真实装配 PAPER/REPLAY 闭环）。
+全量 **2347 passed / 0 failed / 24 skipped**（+44：决策 loop 编排、risk budget、真实装配 PAPER/REPLAY 闭环）；
+detached worktree（`7987cd5`，无 `node_modules` / 无未跟踪文件）复核同样 **2347 passed / 0 failed / 24 skipped**。
 
 ### Blocker / 待人类决定（不阻塞本阶段完成，但阻塞"产品级真实下单"）
 
