@@ -59,6 +59,9 @@ def project_blockers(
                                         severity=BlockerSeverity.BLOCKING,
                                         message=status.reason or "readiness not evaluated",
                                         source_ref="readiness.status"))
+        elif getattr(readiness, "applicable", None) is not None and readiness.applicable.known \
+                and readiness.applicable.value is False:
+            pass                                            # PAPER/REPLAY：记录但**不是** blocker
         else:
             for index, reason in enumerate(readiness.reasons):
                 detail = readiness.details[index] if index < len(readiness.details) else reason
@@ -72,10 +75,11 @@ def project_blockers(
                                         source_ref=f"risk.rejects[{index}]"))
         blocked_by = snapshot.strategy.blocked_by
         if blocked_by.known and blocked_by.value not in (None, ""):
+            detail = snapshot.strategy.detail.value if snapshot.strategy.detail.known else None
             blockers.append(BlockerView(owner=BlockerOwner.STRATEGY, reason_code=str(blocked_by.value),
                                         severity=BlockerSeverity.BLOCKING,
-                                        message=snapshot.strategy.detail.value if snapshot.strategy.detail.known
-                                        else "maker policy gate",
+                                        # decision 的 detail 可能为空 ⇒ 用稳定说明，不伪造原因
+                                        message=(detail or "maker policy is not quoting"),
                                         source_ref="strategy.blocked_by"))
         market = snapshot.market
         if market.healthy.known and market.healthy.value is False:

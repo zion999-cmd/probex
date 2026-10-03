@@ -5,7 +5,7 @@
 - 时间推进仍由 `market/replay/source.py`（`ReplayClock` / `ReplaySource`）拥有；
 - 事件进入既有 `MarketBook` 与 `FeatureEngine`；
 - 展示事实写入既有 `BoundedMarketHistory`（只接收已有事实）；
-- PAPER 的 execution 使用既有 `PaperBroker` / `OrderManager`（本 provider 不驱动策略、不产生订单）；
+- PAPER 的 execution 由 `ExecutionEngine` + 唯一 `PaperBroker` 拥有（P0001.14 §6：feed 不拥有 broker）；
 - 三个最小 adapter（book snapshot / health segment / trade print）仅做**字段搬运**，
   放在本边界而不放进 composition root（assembly）。
 
@@ -19,9 +19,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from execution.adapters.paper import PaperBroker
-from execution.manager import OrderManager
-from execution.tracker import OrderTracker
 from market.book.market_book import MarketBook
 from market.book.order_book import BookSide
 from market.events.payloads import TradePayload
@@ -95,8 +92,7 @@ class MarketFeedProvider:
     history: BoundedMarketHistory = field(init=False)
     book: MarketBook = field(init=False)
     engine: FeatureEngine = field(init=False)
-    paper_broker: PaperBroker | None = field(default=None, init=False)
-    paper_manager: OrderManager | None = field(default=None, init=False)
+    #: P0001.14 §6：feed **不拥有** execution adapter/broker（唯一 PaperBroker 在 ExecutionEngine.manager）。
     #: composition root 注入：真实账户采样（复用既有 accounting 事实）
     account_provider: Callable[[int], object | None] | None = None
     history_account: object | None = None
@@ -113,11 +109,6 @@ class MarketFeedProvider:
         self.history = BoundedMarketHistory(capacity=self.config.history_capacity, run_id=self.run_id)
         self.book = MarketBook(self.venue, self.symbol)
         self.engine = FeatureEngine(self.venue, self.symbol)
-        if self.mode is RuntimeMode.PAPER:
-            # 真实纸面执行链路就位（无策略触发时不会产生任何订单）
-            self.paper_broker = PaperBroker()
-            self.paper_manager = OrderManager(tracker=OrderTracker(session_id=self.run_id),
-                                              adapter=self.paper_broker)
 
     # ------------------------------------------------------------------ 事实（只读）
 

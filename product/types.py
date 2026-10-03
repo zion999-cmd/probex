@@ -312,6 +312,8 @@ class ReadinessView:
     scope: Fact
     reasons: tuple[str, ...] = ()
     details: tuple[str, ...] = ()
+    #: live readiness 是否适用于当前 mode（PAPER/REPLAY ⇒ False：只记录，不作为 submit authority）
+    applicable: Fact = field(default_factory=lambda: Fact.unknown("not_provided"))
     authority_id: Fact = field(default_factory=lambda: Fact.unknown("not_provided"))
     #: G5：完整 authority 事实（kind / TTL / generation）
     authority_kind: Fact = field(default_factory=lambda: Fact.unknown("not_provided"))

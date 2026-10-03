@@ -878,3 +878,32 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
     已定位的阻塞之一为 `history_ready` 需要 **5 分钟**窗口覆盖（`HISTORY_WINDOW_MS=300_000`），
     并已补上 mark price 更新；**其余根因未定位**（不猜）⇒ 下一步是 harness 增加**逐轮 telemetry 落盘**后短诊断。
     在 SC-24 – SC-28 达成前，提案不得标记完成。
+
+## D-050 Runtime Decision Loop：编排边界 / Risk 预算 Owner / PAPER readiness 适用性（P0001.14）
+
+**日期**：2026-10-03
+**状态**：生效（P0001.14 已完成）
+
+1. **唯一编排 Owner**：`runtime/decision_loop.py::RuntimeDecisionLoop` 只做编排与生命周期（驱动
+   `PredictionRuntime` → `MakerPolicy` → `ExecutionEngine`，节流、计数、graceful stop），**不做**价格/规模/风险/
+   预测解释；所有业务语义仍归既有 Owner（`PredictionRuntime` / `MakerPolicy` / `RiskGate` / `ExecutionEngine` /
+   `OrderTracker` / `AccountingCore`）。
+2. **不依赖具体 venue**：loop 只面向 `ExecutionEngine`（adapter/connector seam 在 engine 内），不 import
+   Binance/Paper 实现；REPLAY = observe-only，PAPER = write-enabled（TESTNET/LIVE 写路径仍归既有
+   `LiveExecutionOrchestrator`，本阶段语义不变）。
+3. **风险预算的唯一来源是 Risk domain**：`risk/budget.py::remaining_exposure_budget(snapshot, limits)` 把
+   `RiskGate` 对增加暴露订单的既有名义额度检查**只读暴露**为"还剩多少 notional 可增加"
+   （`max_position_qty` / `max_position_notional` / `max_open_order_exposure` / `available_balance × effective_leverage`
+   取最小；`mark_price` 未知或存在未量化订单 ⇒ 未知 / 0，fail closed）。assembly / runtime / decision loop
+   **只消费**该结果，**不做**风险数学；`Remaining_risk_budget = None` 时 `MakerPolicy` 按既有规则 fail closed。
+4. **PAPER readiness 只记录、不作为 submit authority**（人类裁决方案 A）：`ReadinessFact.applicable = False`，
+   理由 `PAPER_LIVE_READINESS_NOT_APPLICABLE`；trace outcome = `not_applicable`，不制造 blocker；
+   `LiveReadinessGate` 的既有业务规则**未修改**，TESTNET/LIVE 仍为 `Risk allow → LiveReadinessGate → authority → submit`。
+5. **决策原因必须可读**：maker 决策的真实原因 = `MakerDecision.blocked_by`，否则取"当前未报价那一侧"的
+   `QuoteTrigger`；统一为大写 reason code 后进入 trace 的 `maker_decision` stage 与 `StrategyView.blocked_by`
+   （catalog 可解释；无原因 ⇒ 如实 UNKNOWN，不伪造）。
+6. **缺失配置 ⇒ 缺失事实**：`strategy.maker.*` 任一键缺失 ⇒ `MakerPolicy = None` ⇒ 不产生 decision（ABSENT，
+   **不**伪造 HOLD/BUY-SELL）；prediction provider 未接线 ⇒ trace `absent`、无报价；
+   **不**用 `tests/fakes.py::FakeProvider` 冒充产品级验收。
+7. **唯一 execution broker**：`MarketFeedProvider` 不再拥有 `PaperBroker` / `OrderManager`；
+   唯一实例 = `ExecutionEngine.manager.adapter`。

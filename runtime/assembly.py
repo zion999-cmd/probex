@@ -55,11 +55,23 @@ from runtime.observability import configure_logging, log_event, register_secret
 from runtime.session import RuntimeSession, SessionSummaryFacts
 from runtime.state import RuntimeState, RuntimeStatus, RuntimeStatusTracker
 from runtime.wiring import SessionHost
+from risk.budget import remaining_exposure_budget
+from runtime.maker_config import build_loop_options, build_maker_policy
 from storage.retention import RetentionPolicy, prune_finished_runs
 from storage.run_registry import (DEFAULT_RUN_REGISTRY_DIR, INDEX_FILE, RUNS_DIR, RUN_REGISTRY_ENV,
                                   JsonRunRegistry, process_start_epoch_ms)
 
 DEFAULT_HOST = "127.0.0.1"
+
+
+@dataclass(frozen=True, slots=True)
+class _CallableClock:
+    """既有 `Clock` 协议适配（`now()`）；时间仍由 profile 注入。"""
+
+    now_fn: Callable[[], int]
+
+    def now(self) -> int:
+        return int(self.now_fn())
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +274,9 @@ class ProductRuntime:
     _private_runtime: object | None = field(default=None, init=False)
     _latency_observer: object | None = field(default=None, init=False)
     _execution: object | None = field(default=None, init=False)
+    _risk_limits: object | None = field(default=None, init=False)
+    _maker_policy: object | None = field(default=None, init=False)
+    _decision_loop: object | None = field(default=None, init=False)
     _reconciliation_events: list[object] = field(default_factory=list, init=False)
     _retention_policy: RetentionPolicy = field(default_factory=RetentionPolicy, init=False)
     _last_prune: dict[str, object] | None = field(default=None, init=False)
@@ -787,14 +802,18 @@ class ProductRuntime:
                                ("risk.max_drawdown_pct", "max_drawdown_pct")):
                 if key in values:
                     limit_values[field] = float(values[key])
+            self._risk_limits = RiskLimits(**limit_values)                    # type: ignore[arg-type]
             self._execution = ExecutionEngine(
                 accounting=(accounting if accounting is not None else __import__(
                     "portfolio.accounting", fromlist=["AccountingCore"]).AccountingCore(initial_balance=0.0)),
                 # 只启用显式配置的限额：未配置的限额不强制对应事实存在（不是 bypass；配置了的仍严格判定）
-                gate=RiskGate(RiskLimits(**limit_values)),                    # type: ignore[arg-type]
+                gate=RiskGate(self._risk_limits),
                 manager=manager, book_healthy=True,
                 normalizer=normalizer,
                 latency_observer=lambda kind, ts: self._latency_note(kind, ts))
+        # P0001.14：MakerPolicy / PredictionRuntime 均由显式配置构造（缺键 ⇒ None；不发明业务数值）
+        self._maker_policy = build_maker_policy(values)
+        self._prediction_runtime = self._build_prediction_runtime(values)
 
         self._safety_projection = ExecutionSafetyProjection(
             clock=self.profile.clock, policy=self._safety_policy,
@@ -822,10 +841,15 @@ class ProductRuntime:
             market_state=lambda: (self._feed_provider.last_state if self._feed_provider else None),
             market_history=lambda: self._history,
             projection_config=lambda: self._projection_config,
-            prediction=lambda: None,
-            maker_decision=lambda: None,
-            risk_snapshot=lambda: None,
-            risk_limits=lambda: None,
+            # P0001.14：决策链真实 facts（loop 未运行时 ⇒ None，产品层如实 UNKNOWN/ABSENT）
+            prediction=lambda: (self._decision_loop.latest_prediction
+                                if self._decision_loop is not None else None),
+            maker_decision=lambda: (self._decision_loop.latest_decision
+                                    if self._decision_loop is not None else None),
+            risk_snapshot=self._risk_snapshot_provider,
+            risk_limits=lambda: self._risk_limits,
+            prediction_fresh=self._prediction_fresh,
+            risk_rejects=self._risk_reject_codes,
             accounting=lambda: self._accounting,
             accounting_facts=(lambda: (self._accounting_provider.facts()
                                        if self._accounting_provider is not None else None)),
@@ -843,7 +867,8 @@ class ProductRuntime:
             run_summary=lambda: self._durable_run_summary(None),
             durable_run_summary=self._durable_run_summary,
             raw_fact_lookup=self._raw_fact_lookup,
-            readiness=lambda: None,
+            readiness=lambda: (self._decision_loop.readiness_result
+                               if self._decision_loop is not None else None),
             health=lambda: {"notes": (f"mode={self.profile.mode.value}",)},
             clock=self.profile.clock,
         )
@@ -977,6 +1002,7 @@ class ProductRuntime:
                   quoting=status.quoting)
         if self.profile.feed is not None:
             self._start_feed()
+            self._start_decision_loop()
         return status
 
     # ------------------------------------------------------------------ composition（不含 feed 业务逻辑）
@@ -1044,6 +1070,116 @@ class ProductRuntime:
                 return record
             return None
         return None
+
+    # ---------------------------------------------------------------- P0001.14 decision loop
+
+    def _risk_snapshot_provider(self) -> object | None:
+        execution = getattr(self, "_execution", None)
+        if execution is None:
+            return None
+        try:
+            return execution.snapshot(self.profile.symbol, now_ms=int(self.profile.clock()))
+        except Exception:  # noqa: BLE001 - 读不到就是 UNKNOWN
+            return None
+
+    def _prediction_fresh(self) -> bool | None:
+        loop = getattr(self, "_decision_loop", None)
+        runtime = getattr(self, "_prediction_runtime", None)
+        record = loop.latest_prediction if loop is not None else None
+        if record is None or runtime is None:
+            return None
+        try:
+            return not bool(runtime.is_expired(record))
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _risk_reject_codes(self) -> tuple[str, ...]:
+        execution = getattr(self, "_execution", None)
+        if execution is None:
+            return ()
+        return tuple(str(getattr(getattr(item, "reason_code", None), "value", ""))
+                     for item in execution.rejections)
+
+    def _kill_switch(self) -> object:
+        """kill switch 由 Risk limits 拥有（本层只读取）。"""
+        from risk.types import KillSwitchMode
+
+        limits = getattr(self, "_risk_limits", None)
+        if limits is None:
+            return KillSwitchMode.NORMAL
+        return limits.effective_kill_switch_mode
+
+    def _risk_budget(self, snapshot: object) -> float | None:
+        """只消费 Risk domain 的 canonical budget（本层不做风险数学）。"""
+        limits = getattr(self, "_risk_limits", None)
+        if limits is None:
+            return None
+        try:
+            return remaining_exposure_budget(snapshot, limits).remaining_notional  # type: ignore[arg-type]
+        except Exception:  # noqa: BLE001 - 算不出就是未知（fail closed）
+            return None
+
+    def _build_prediction_runtime(self, values: dict[str, object]) -> object | None:
+        """仅在显式配置 + credential 可用时构造正式 `PredictionRuntime`；否则 None（诚实 UNAVAILABLE）。"""
+        if values.get("prediction.provider") != "systemone":
+            return None
+        threshold = values.get("prediction.adverse_selection_threshold_bps")
+        timeout_ms = values.get("prediction.timeout_ms")
+        ttl_ms = values.get("prediction.ttl_ms")
+        if threshold is None or timeout_ms is None or ttl_ms is None:
+            return None
+        if not os.environ.get("OPENROUTER_API_KEY"):
+            return None
+        try:
+            from prediction.providers.systemone import SystemOneProvider, SystemOneTransport
+            from prediction.runtime import PredictionRuntime
+
+            provider = SystemOneProvider(transport=SystemOneTransport(),
+                                         adverse_selection_threshold_bps=float(threshold))
+            return PredictionRuntime(provider=provider, clock=_CallableClock(self.profile.clock),
+                                     timeout_ms=int(timeout_ms), ttl_ms=int(ttl_ms))
+        except Exception:  # noqa: BLE001 - credential/阈值不可用 ⇒ 不构造
+            return None
+
+    def attach_prediction_provider(self, provider: object, *, timeout_ms: int, ttl_ms: int,
+                                   mode: object | None = None) -> "ProductRuntime":
+        """显式注入正式 provider 契约的实现（wiring/集成测试用）；未注入 ⇒ prediction UNAVAILABLE。"""
+        from prediction.runtime import PredictionMode, PredictionRuntime
+
+        self._prediction_runtime = PredictionRuntime(
+            provider=provider, clock=_CallableClock(self.profile.clock),
+            timeout_ms=int(timeout_ms), ttl_ms=int(ttl_ms),
+            mode=(mode if mode is not None else PredictionMode.LIVE_REQUERY))
+        return self
+
+    def _start_decision_loop(self) -> None:
+        """在真实 feed 与 execution 就位后启动决策 loop（REPLAY observe-only / PAPER write-enabled）。"""
+        if self._decision_loop is not None or self._feed_provider is None or self._execution is None:
+            return
+        if self.profile.mode not in (RuntimeMode.REPLAY, RuntimeMode.PAPER):
+            return
+        from runtime.decision_loop import DecisionLoopConfig, RuntimeDecisionLoop
+
+        options = build_loop_options(self._config_values())
+        loop = RuntimeDecisionLoop(
+            config=DecisionLoopConfig(symbol=self.profile.symbol, mode=self.profile.mode, **options),
+            state_provider=lambda: self._feed_provider.last_state,
+            engine=self._execution, tracker=self._tracker_owner,
+            risk_budget_provider=self._risk_budget,
+            clock=self.profile.clock, policy=self._maker_policy,
+            prediction_runtime=self._prediction_runtime,
+            kill_switch_provider=self._kill_switch)
+        self._decision_loop = loop
+        loop.start()
+        log_event("runtime", "decision_loop_start", runtime_id=self._identity.runtime_id,
+                  run_id=self._current_run_id(), mode=self.profile.mode.value,
+                  policy_configured=self._maker_policy is not None,
+                  prediction_provider="wired" if self._prediction_runtime is not None else "unavailable")
+
+    def _stop_decision_loop(self) -> None:
+        loop = getattr(self, "_decision_loop", None)
+        if loop is not None:
+            loop.stop()
 
     def _market_identity(self) -> object | None:
         """F-08：MarketState 的既有 canonical 指纹（只读；未接线/无状态 ⇒ None）。"""
@@ -1125,6 +1261,7 @@ class ProductRuntime:
         """graceful stop：session 先 finalize（COMPLETED），状态置 STOPPED。"""
         now = int(self.profile.clock())
         self._tracker.mark_stopping(now_ms=now)
+        self._stop_decision_loop()          # P0001.14：先停 decision loop（无 background thread 泄漏）
         self._stop_feed()
         if self._session.record.status.value == "RUNNING":
             self._host.finish(facts=self._build_summary_facts())
@@ -1137,6 +1274,7 @@ class ProductRuntime:
     def fail(self, error: str) -> RuntimeStatus:
         """异常终止：run 记 INCOMPLETE（不伪造 COMPLETED），runtime 置 FAILED。"""
         now = int(self.profile.clock())
+        self._stop_decision_loop()
         if self._session.record.status.value == "RUNNING":
             self._session.stop(status=RunStatus.INCOMPLETE, facts=self._build_summary_facts())
         status = self._tracker.mark_failed(now_ms=now, error=error)

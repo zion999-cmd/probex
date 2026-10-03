@@ -40,6 +40,33 @@ from product.types import (
 )
 
 
+def _maker_reason(decision: object | None) -> object | None:
+    """maker decision 的**真实**主导原因：`blocked_by` 优先，否则取"当前未报价那一侧"的 trigger。
+
+    P0001.14：`RISK_BUDGET_UNKNOWN` 这类原因由 policy 记在侧向 trigger 上（`blocked_by` 保持 None），
+    trace/UI 必须能看到真实原因，而不是退化成"没有原因"。
+    """
+    if decision is None:
+        return None
+    blocked = _get(decision, "blocked_by")
+    if blocked is not None:
+        return _reason_code(blocked)
+    for name in ("bid", "ask"):
+        side = _get(decision, name)
+        action = _get(side, "action")
+        if getattr(action, "value", action) != "none":
+            continue
+        trigger = _get(side, "trigger")
+        if trigger is not None:
+            return _reason_code(trigger)
+    return None
+
+
+def _reason_code(value: object) -> str:
+    """reason code 统一为大写（与 catalog / RiskReasonCode 的既有约定一致）。"""
+    return str(getattr(value, "value", value)).upper()
+
+
 def _get(obj: object | None, name: str) -> object | None:
     """从 Owner 事实对象上取字段；缺失/None ⇒ None（由调用方转成 UNKNOWN）。"""
     if obj is None:
@@ -277,13 +304,12 @@ class ProductService:
                                 bid_quantity=unknown, ask_price=unknown, ask_quantity=unknown)
         bid = _get(decision, "bid")
         ask = _get(decision, "ask")
-        blocked_by = _get(decision, "blocked_by")
+        reason = _maker_reason(decision)
         return StrategyView(
             at_ms=Fact.of(_get(decision, "at_ms")),
             mode=Fact.of(getattr(decision, "mode", None)),
             detail=Fact.of(_get(decision, "detail")),
-            blocked_by=(Fact.unknown("not blocked") if blocked_by is None
-                        else Fact.of(getattr(blocked_by, "value", blocked_by))),
+            blocked_by=(Fact.unknown("not blocked") if reason is None else Fact.of(reason)),
             bid_action=Fact.of(getattr(_get(bid, "action"), "value", None)),
             ask_action=Fact.of(getattr(_get(ask, "action"), "value", None)),
             bid_price=Fact.of(_get(bid, "price")),
@@ -397,6 +423,7 @@ class ProductService:
         if result is None:
             return ReadinessView(status=Fact.unknown("readiness not evaluated"),
                                  scope=Fact.unknown("readiness not evaluated"),
+                                 applicable=Fact.unknown("readiness not evaluated"),
                                  authority_id=Fact.of(self.authority_id(),
                                                       unknown_reason="no authority issued"))
         status = _get(result, "status")
@@ -419,6 +446,7 @@ class ProductService:
             scope=Fact.of(getattr(scope, "value", scope)),
             reasons=tuple(r.value if hasattr(r, "value") else str(r) for r in (_get(result, "reasons") or ())),
             details=tuple(str(d) for d in (_get(result, "details") or ())),
+            applicable=Fact.of(getattr(result, "applicable", True)),
             authority_id=Fact.of(self.authority_id(), unknown_reason="no authority issued"),
         )
 
@@ -591,8 +619,7 @@ class ProductService:
                                      if prediction is None else "no reason code at this stage"),
             detail=str(_get(prediction, "provider") or ""),
             unknown_reason="no prediction record yet" if prediction is None else "no timestamp")
-        blocked_by = _get(decision, "blocked_by") if decision is not None else None
-        blocked_code = None if blocked_by is None else getattr(blocked_by, "value", blocked_by)
+        blocked_code = _maker_reason(decision)
         add("maker_decision", _get(decision, "at_ms"), identity=_get(prediction, "request_id"),
             identity_kind="prediction_request_id",
             outcome=(str(getattr(_get(decision, "mode"), "value", "unknown")) if decision is not None
@@ -620,10 +647,12 @@ class ProductService:
         reasons = (() if readiness is None
                    else tuple(r.value if hasattr(r, "value") else str(r)
                               for r in (_get(readiness, "reasons") or ())))
+        applicable = bool(getattr(readiness, "applicable", True))
         add("readiness", _get(readiness, "evaluated_at_ms") or _get(readiness, "at_ms"),
             identity=(self.authority_id() or str(getattr(_get(readiness, "status"), "value", "unknown"))),
             identity_kind="authority_id",
-            outcome=("absent" if readiness is None else ("blocked" if reasons else "ready")),
+            outcome=("absent" if readiness is None else
+                     ("not_applicable" if not applicable else ("blocked" if reasons else "ready"))),
             reason_code=Fact.of(reasons[0]) if reasons else Fact.unknown("no blocker"),
             detail="; ".join(reasons[:3]),
             unknown_reason="readiness not evaluated" if readiness is None else "readiness has no timestamp")

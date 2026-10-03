@@ -252,8 +252,9 @@ class RealFeedSlice2Test(ProductRuntimeTest):
             __import__("time").sleep(0.05)
         try:
             provider = runtime._feed_provider                                   # noqa: SLF001
-            self.assertIsNotNone(provider.paper_broker)                         # 真实 paper 链路
-            self.assertIsNotNone(provider.paper_manager)
+            # P0001.14 §6：feed 不拥有 broker；唯一 PaperBroker 在 engine 的 execution adapter 上
+            self.assertFalse(hasattr(provider, "paper_broker"))
+            self.assertIsNotNone(runtime._execution.manager.adapter)            # noqa: SLF001
             self.assertGreater(runtime.service.market_history_view().counts["states"], 0)
             self.assertEqual(runtime.service.snapshot().execution.active_orders, ())   # 未伪造订单
         finally:

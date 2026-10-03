@@ -2076,3 +2076,91 @@ runtime 回路）**未动**。边界：无新策略 / 无新 metric 算法 / 无
 - 全量 **2303 passed / 0 failed / 24 skipped**（+17：candles 单测、indicator Node 单测、candles API 集成）。
 - 遗留 UX：历史 run 的 equity/K 线序列未持久化；prediction 面板在无预测源时为 UNKNOWN（F6 未接，按指令未动）；
   `getConvertPictureUrl` 不能作为渲染证据（已改用 chart 区域 clipped screenshot diff）。
+
+## 2026-10-03：P0001.14 Runtime Decision Loop Integration（已完成）
+
+### 当前 Proposal
+
+P0001.14（`proposals/P0001.14-runtime-decision-loop-integration.md`，状态 **已完成**）；
+`context/status.json.currentProposal` = `null`（未获切换到 P0001.15 的授权 —— **不自行启动**）。
+
+### 本次新增
+
+- `runtime/decision_loop.py`：`DecisionLoopConfig` / `DecisionLoopStatus` / `ReadinessFact` /
+  `RuntimeDecisionLoop`。单线程 + 自有 asyncio event loop（`PredictionRuntime.submit` 是 async）；
+  `start()`/`stop()`（幂等、不遗留 `probex-decision-*` 线程）；节流 = market state hash 变化 OR prediction 过期
+  OR decision cadence；`predictions_submitted/accepted`、`decisions/submits/cancels/risk_rejects/readiness_blocks/errors`
+  计数器；`policy=None` 时明确 ABSENT（不伪造 HOLD/BUY-SELL）；`write_enabled` 只对 PAPER。
+- `runtime/maker_config.py`：`build_maker_policy(values)` 在 `strategy.maker.*` 25 个键齐备时构造 `MakerPolicy`，
+  否则 `None`；`build_loop_options(values)`（`runtime.loop.*` 技术参数，可选）。
+- `risk/budget.py`：`remaining_exposure_budget(snapshot, limits) -> ExposureBudget`（Risk domain canonical 预算，
+  与 `RiskGate._increasing_exposure_checks` 一致，含 `missing` / `constraints` 审计字段）。
+- `tests/unit/test_decision_loop.py`（23）、`tests/unit/test_risk_budget.py`（11）、
+  `tests/integration/test_runtime_decision_loop_e2e.py`（10）。
+
+### 本次修改
+
+- `runtime/assembly.py`：新增 `_risk_limits` / `_maker_policy` / `_decision_loop` 字段；
+  `_risk_snapshot_provider` / `_prediction_fresh` / `_risk_reject_codes` / `_kill_switch` / `_risk_budget`
+  （只消费 `risk/budget.py`，不做风险数学）；`_build_prediction_runtime`（全部键 + `OPENROUTER_API_KEY` 才构造）；
+  `attach_prediction_provider(...)`（wiring/集成测试注入 provider 契约实现）；
+  `_start_decision_loop()` / `_stop_decision_loop()`（`start()` 内启动，`stop()`/`fail()` 先停）；
+  ProductService providers 全部改为真实事实（不再 `lambda: None`）。
+- `runtime/provider.py`：删除 `paper_broker` / `paper_manager` 字段与构造（feed 不拥有 broker）；移除不再使用的 import。
+- `product/service.py`：`_maker_reason`（`blocked_by` → 未报价侧 trigger → 大写 reason code）+ `_reason_code`；
+  readiness stage outcome 支持 `not_applicable`；`_readiness` 投射 `applicable`。
+- `product/types.py`：`ReadinessView.applicable: Fact`（默认 UNKNOWN）。
+- `product/blockers.py`：readiness 不适用时不生成 blocker；strategy blocker message 为空时用稳定说明（原来会抛错）。
+- `product/reason_catalog.py`：`PAPER_LIVE_READINESS_NOT_APPLICABLE`、`LIVE_READINESS_NOT_EVALUATED`、
+  `RISK_BUDGET_UNKNOWN`、`RISK_BUDGET_EXHAUSTED`。
+- `tests/integration/test_runtime_assembly_startup.py`：改为"feed 不拥有 broker + 唯一 broker 在 engine"。
+
+### 本次删除
+
+- `MarketFeedProvider.paper_broker` / `.paper_manager`（重复 PaperBroker 消除）。
+
+### Acceptance 结果
+
+- SC-1 闭环 wiring：**PASS** — PAPER 真实装配下 `MakerPolicy` 自然产出初始双边 `PLACE` → `RiskGate` 逐单
+  `allow`（trace 2× allow）→ 唯一 `PaperBroker` 2 张 `OPEN` 订单 + ack。
+- SC-2 自然决策（含 HOLD/NONE）：**PASS** — 无 mark price ⇒ `NONE` + `RISK_BUDGET_UNKNOWN`；无 policy ⇒ ABSENT。
+- SC-3 唯一 PaperBroker / RiskGate 必经 / loop 无 venue 耦合：**PASS**（含源码级守卫测试）。
+- SC-4 PAPER readiness 记录但不作为 gate、TESTNET/LIVE 语义不变：**PASS**（`applicable=false`、trace `not_applicable`、
+  无 readiness blocker、`readiness_blocks=0`；`LiveReadinessGate` 未改动）。
+- SC-5 prediction unavailable 诚实显示：**PASS**（trace `absent`、`prediction_provider_status` UNKNOWN、无报价）。
+- SC-6 Product providers 真实事实 + trace/UI：**PASS**（in-process snapshot + HTTP `/api/v1/snapshot` 双重复核）。
+- SC-7 graceful shutdown：**PASS**（无 `probex-decision-*` 残留线程）。
+- SC-8 detached full suite green + commit/push：见下。
+
+### 测试结果
+
+- 全量：**2347 passed / 0 failed / 24 skipped**（新增 44）。
+- 真实装配 E2E：`tests/integration/test_runtime_decision_loop_e2e.py` 10/10 PASS（PAPER 闭环、readiness 方案 A、
+  无 mark price fail closed、provider 未接线、无 maker 配置、providers 真实事实、唯一 broker、无 venue 耦合、
+  REPLAY observe-only、graceful stop）。
+- HTTP 层抽查：`/api/v1/snapshot` 返回 readiness `unavailable` + `PAPER_LIVE_READINESS_NOT_APPLICABLE` +
+  `applicable=false`；strategy `both`；prediction provider `fake-jev`；execution 2 张 `OPEN` 订单；
+  blockers 只有既有的 `VENUE_FACTS_UNAVAILABLE`（无假 readiness blocker）。
+
+### 风险 / 已知问题
+
+1. **产品级真实下单尚未成立**：`MakerPolicyConfig` 的 25 个业务数值不在 `profiles/trial-local.json`，
+   外部 credential（`OPENROUTER_API_KEY`）+ adverse-selection 阈值也不在仓库内 ⇒ 真实运行中
+   `MakerPolicy = None`、`PredictionRuntime` 不构造（`UNAVAILABLE`）。按裁决第 4 条，未用 FakeProvider 冒充产品验收，
+   也未修改策略强迫下单 —— 自然真实 order/fill 的**强制**验收因此未触发（条件未成立）。
+2. **PAPER 无 mark price 来源**：既有 `AccountingCore.update_mark_price` 契约明确"不使用 last trade"；
+   产品路径目前无 mark price 注入点 ⇒ 风险事实缺失时 `RiskGate` fail closed（既有语义，未改动）。
+   如需让 PAPER 真正持续报价，需人类裁决 mark price 事实来源。
+3. `OrderView.decision_id` 仍为 `no matching maker decision`（既有投影按 decision id 匹配，未接线）——
+   trace 已用 prediction request id 关联，未在本阶段改动。
+4. `history_ready` 需要 5 分钟窗口覆盖：短 REPLAY 数据不会进入 tradeable（E2E 使用 3h fixture）。
+
+### 阻塞
+
+无实现阻塞。待人类决定（不阻塞本阶段完成）：maker 生产数值、prediction 凭据/阈值、PAPER mark price 来源、
+`RiskLimits` 生产数值。
+
+### 下一步
+
+- **不启动 P0001.15**（Instrument/Venue Domain）—— 需人类落盘新 Proposal 并明确下达实施指令。
+- 若人类要求"产品级真实下单"，需先补齐上述 1./2./4. 的业务数值与事实来源。
