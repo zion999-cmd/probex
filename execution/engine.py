@@ -100,6 +100,12 @@ class ExecutionEngine:
     decision_capacity: int = 200
     #: F-08：执行边界的显式归一化（None ⇒ 不归一，行为与既有完全一致）
     normalizer: OrderNormalizer | None = None
+    #: P0001.16：真实资金快照所需的**既有**事实提供者（受信历史 baseline / 交易所可用余额）。
+    #: 默认 None ⇒ 与既有行为完全一致（不注入 ⇒ 相关事实保持 UNKNOWN，Risk 仍 fail closed）。
+    historical_baseline_provider: Callable[[Milliseconds], object | None] | None = None
+    exchange_available_balance_provider: Callable[[str], object | None] | None = None
+    #: P0001.16：durable HWM 证据提供者（真实资金下 drawdown 必须 known，由既有 HWM owner 提供）
+    high_watermark_provider: Callable[[], object | None] | None = None
     normalization_capacity: int = 200
     rejections: list[ExecutionRejected] = field(default_factory=list)
     _decisions: deque = field(default_factory=deque, init=False)
@@ -216,6 +222,12 @@ class ExecutionEngine:
             unresolved_order_count=self.manager.unresolved_order_count,
             liquidation=liquidation,
             day_start_ts=self.day_start_fn(now_ms),
+            historical_baseline=(None if self.historical_baseline_provider is None
+                                 else self.historical_baseline_provider(now_ms)),
+            exchange_available_balance=(None if self.exchange_available_balance_provider is None
+                                        else self.exchange_available_balance_provider(symbol)),
+            high_watermark=(None if self.high_watermark_provider is None
+                            else self.high_watermark_provider()),
         )
 
     # ------------------------------------------------------------------ 内部

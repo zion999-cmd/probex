@@ -942,3 +942,20 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
 10. **范围纪律**：只实现 BTCUSDT / CRYPTO / PERPETUAL / PAPER + 现有 Binance adapter；
     EQUITY / FUTURE 只建 vocabulary/capability contract；不实现股票、期货、OKX/IBKR/CTP、multi-venue、
     OrderRouter/SOR、跨交易所套利（→ 未来另立 Proposal）。
+
+## D-052 TESTNET acceptance capability 的结构性隔离（P0001.16，人类裁决 B）
+
+**日期**：2026-10-04
+**状态**：生效（P0001.16 实现中）
+
+1. **性质**：`execution/acceptance.py::TestnetAcceptancePermission` 是 **TESTNET acceptance capability**，
+   不是产品交易能力；只用于验证真实供应商执行工程闭环。
+2. **默认不存在**：只有 composition root 在**显式 flag** 下构造许可并注入 Binance adapter；
+   `BinanceExecutionAdapter.acceptance is None` ⇒ 非 post-only 单一律本地拒绝（`post_only_required`），
+   **且不发出任何写请求**。
+3. **边界**：TESTNET only / BTCUSDT only / notional ≤ 100 USDT / **只允许 IOC**（永不挂单）/ `granted_by` 审计字段。
+4. **不改变正常语义**：`MakerPolicy` 仍恒为 `post_only=True`；post-only 单仍走 `LIMIT+GTX`；
+   Strategy / Product / UI / Assistant / CAPITAL Action 均无法触达该能力（有 token 扫描守卫）。
+5. **唯一写路径不变**：`Risk → Readiness → ExecutionEngine → PrivateExecutionConnector → Binance`；
+   仍走同一 `OrderTracker` / `FillLedger` / `AccountingCore` / user stream / reconciliation。
+6. **UNKNOWN 语义不变**：ambiguous ⇒ UNKNOWN，不自动 retry，不伪造 REJECTED/ACCEPTED（本次实测再次验证）。

@@ -84,6 +84,13 @@ class BinancePrivateExecutionConnector:
     def poll(self) -> tuple[ExecutionEvent, ...]:
         return self._note(self.adapter.poll())
 
+    def query_order(self, *, client_order_id: str, timestamp: Milliseconds) -> tuple[ExecutionEvent, ...]:
+        """`query order`（§2/§3）：用于 UNKNOWN 收敛 / reconciliation（**不**自动 retry 写请求）。"""
+        query = getattr(self.adapter, "query_order", None)
+        if query is None:
+            return ()
+        return self._note(tuple(query(client_order_id=client_order_id, timestamp=timestamp)))
+
     def open_orders(self) -> tuple[ExternalOrder, ...]:
         return tuple(self.adapter.open_orders())
 
@@ -125,7 +132,9 @@ class BinancePrivateExecutionConnector:
         return self.rate_limit_provider()
 
     def health(self, *, now_ms: Milliseconds) -> PrivateConnectorHealth:
-        telemetry = self.runtime.telemetry() if self.runtime is not None else None
+        telemetry = self.runtime.telemetry if self.runtime is not None else None
+        if callable(telemetry):      # 兼容 duck-typed double（真实 runtime 是 property）
+            telemetry = telemetry()
         raw_state = str(self.runtime.lifecycle_state()) if self.runtime is not None else "STOPPED"
         connection_state = _CONNECTION_STATE_BY_LIFECYCLE.get(raw_state, ConnectionState.UNKNOWN)
         if not self._connected:

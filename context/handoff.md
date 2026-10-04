@@ -2240,3 +2240,52 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 ### 下一步
 
 - **不启动下一 Proposal** —— 需人类落盘新 Proposal 并明确下达「读取 … 实施」指令。
+
+## 2026-10-04：P0001.16 Venue Execution Productization（**实现中 / 未 CLOSED**）
+
+### 当前 Proposal
+
+`P0001.16`（状态 **实现中**）；`context/status.json.currentProposal = "P0001.16"`。
+**未 CLOSED**：人类裁决第 7 条明确 SC-12（真实 TESTNET 成交）未达到不得标记完成。
+
+### 本次新增
+
+- `execution/acceptance.py`：TESTNET acceptance capability（显式许可、默认不存在、TESTNET/BTCUSDT/≤100/IOC only）。
+- `runtime/testnet.py`：TESTNET 组合（唯一写路径：engine → `BinancePrivateExecutionConnector` → Binance adapter；
+  readiness authority、bootstrap 冷启动、market/private pump、health、reconciliation facts、HWM/income 事实注入）。
+- `tests/acceptance/testnet_acceptance_run.py`：§14 A/B/C 验收 driver（`--confirm`/flags 守卫、异常必先清场）。
+- `tests/unit/test_acceptance_capability.py`：13 条隔离性/默认关闭/边界测试。
+
+### 本次修改
+
+- `connectors/binance/execution/rest.py`：新增 `submit_ioc_limit`（acceptance 专用；GTX 方法未改）。
+- `connectors/binance/execution/adapter.py`：`acceptance` 许可字段 + 非 post-only gate（默认拒绝，无写请求）。
+- `connectors/binance/execution_connector.py`：新增 `query_order`（§2/§3）。
+- `execution/engine.py`：新增 additive 事实 provider（`historical_baseline_provider` /
+  `exchange_available_balance_provider` / `high_watermark_provider`），使真实资金快照的 daily PnL/drawdown 可知
+  （**未改任何 Risk 规则**；默认 None 行为不变）。
+- `runtime/testnet.py`、`tests/acceptance/*`：见上。
+
+### 实测结果（真实 TESTNET，凭据仅从环境/`~/.probex/testnet.env` 注入，未打印）
+
+- TESTNET 可达；public mark ≈ 85.2k；market evidence `ready=True`；recovery `RECOVERED`；HWM `ACTIVE`；
+  readiness 由 `blocked`（`PRIVATE_LATENCY_UNOBSERVED` + HWM/drawdown）收敛到 `bootstrap_eligible`；
+  **BOOTSTRAP authority 签发 `phase=ACTIVE`**。
+- 经统一路径的 `submit`（GTX，post-only）返回 **UNKNOWN**（`unknown_submit_count=1`、无本地拒绝）；
+  venue 侧无该订单（`order_history` 查无、`open_orders=[]`）⇒ 请求未落地；**未 retry**（语义正确）。
+- 同 endpoint/参数/凭据的 **raw** 调用成功：`POST → orderId 28617093528 (NEW) → cancel → CANCELED`。
+- **venue 收尾核验：0 挂单、FLAT、availableBalance 4998.73**（无任何残余状态）。
+- offline 全量：**2414 passed / 0 failed / 24 skipped**。
+
+### 未达成 / 阻塞
+
+- SC-11/SC-12/SC-13 **未达成**（统一路径 UNKNOWN；本地订单停留 `PENDING_CREATE`）。
+- **UNKNOWN 收敛逻辑缺失**（`runtime/testnet.py` 未在 UNKNOWN 后走 `query_order`/reconciliation）⇒
+  driver 的 cancel 被本地状态机正确拒绝（`IllegalOrderTransition: PENDING_CREATE`）。
+- SC-14…SC-18（真实 user stream 驱动的生命周期/成交、TESNET Product/UI/Assistant facts）未验证。
+
+### 下一步（继续实施 P0001.16）
+
+1. 定位 adapter 路径 UNKNOWN 根因（raw 成功 vs adapter 未知；逐字段对比请求/传输/时钟）。
+2. 实现 UNKNOWN → query/reconciliation 收敛（§9/§10）。
+3. 重跑 §14 A/B/C；4) §15 fault injection；5) SC-16/17/18 + SC-19 guard。

@@ -41,6 +41,7 @@ from connectors.binance.private.auth import (
 )
 from connectors.binance.private.errors import PrivateFormatError, PrivateResponseError
 from connectors.binance.private.rest import API_KEY_HEADER
+from execution.acceptance import ACCEPTANCE_TIME_IN_FORCE
 
 #: 写路径端点唯一 Owner。
 ORDER_PATH = "/fapi/v1/order"
@@ -165,6 +166,41 @@ class BinanceExecutionRestClient:
             "side": side.value,
             "type": "LIMIT",
             "timeInForce": POST_ONLY_TIME_IN_FORCE,
+            "quantity": _require_number(quantity, "quantity"),
+            "price": _require_number(price, "price"),
+            "newClientOrderId": _require_text(client_order_id, "newClientOrderId"),
+            "positionSide": ONE_WAY_POSITION_SIDE,
+            "newOrderRespType": "RESULT",
+        }
+        if reduce_only:
+            params["reduceOnly"] = "true"
+        return self._signed_request("POST", params)
+
+    def submit_ioc_limit(
+        self,
+        *,
+        symbol: str,
+        side: OrderSide,
+        quantity: float,
+        price: float,
+        client_order_id: str,
+        reduce_only: bool,
+    ) -> object:
+        """`POST /fapi/v1/order`：LIMIT + **IOC** + positionSide=BOTH。
+
+        **只由 TESTNET acceptance capability 使用**（P0001.16 §14 B + 人类裁决）：IOC 要么立即成交、
+        要么立即取消，**永不挂单**，因此不会留下残留挂单，也不会成为常规执行路径。
+        订单的 `post_only=False` 由 adapter 侧显式许可 gate 把关（默认拒绝）。
+        """
+        if not isinstance(side, OrderSide):
+            raise PrivateFormatError("submit side must be an OrderSide")
+        if not isinstance(reduce_only, bool):
+            raise PrivateFormatError("submit reduce_only must be a bool")
+        params: dict[str, object] = {
+            "symbol": _require_text(symbol, "symbol"),
+            "side": side.value,
+            "type": "LIMIT",
+            "timeInForce": ACCEPTANCE_TIME_IN_FORCE,
             "quantity": _require_number(quantity, "quantity"),
             "price": _require_number(price, "price"),
             "newClientOrderId": _require_text(client_order_id, "newClientOrderId"),

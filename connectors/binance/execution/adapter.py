@@ -39,6 +39,7 @@ from execution.events import (
     OrderRejected,
     OrderStatusUpdate,
 )
+from execution.acceptance import TestnetAcceptancePermission
 from execution.types import (
     ExternalFill,
     ExternalOrder,
@@ -205,6 +206,9 @@ class BinanceExecutionAdapter:
     validator: ExecutionReadinessAuthorityValidator = field(
         default_factory=ExecutionReadinessAuthorityValidator
     )
+    #: P0001.16 §14 B / 人类裁决「选择 B」：TESTNET acceptance capability 的显式许可。
+    #: **默认 None** ⇒ 非 post-only 订单一律本地拒绝（产品默认路径仍是 GTX-only）。
+    acceptance: TestnetAcceptancePermission | None = None
     #: 本地状态查询（用于把 stream 事实安全地映射成事件；由调用方注入 tracker 查询）
     local_status_provider: Callable[[str], OrderStatus | None] | None = None
     #: 外部事实 provider（reconciliation 输入）。**未注入 ⇒ unavailable（不是空）**。
@@ -292,15 +296,27 @@ class BinanceExecutionAdapter:
                 detail=refusal.detail,
             )
 
+        acceptance_granted = (not order.post_only) and self._acceptance_decision(order)[0]
         try:
-            raw = self.rest.submit_post_only_limit(
-                symbol=order.symbol,
-                side=OrderSide(order.side.value.upper()),
-                quantity=quantity,
-                price=price,
-                client_order_id=order.client_order_id,
-                reduce_only=order.reduce_only,
-            )
+            if acceptance_granted:
+                # TESTNET acceptance capability（IOC：要么立即成交、要么立即取消，永不挂单）
+                raw = self.rest.submit_ioc_limit(
+                    symbol=order.symbol,
+                    side=OrderSide(order.side.value.upper()),
+                    quantity=quantity,
+                    price=price,
+                    client_order_id=order.client_order_id,
+                    reduce_only=order.reduce_only,
+                )
+            else:
+                raw = self.rest.submit_post_only_limit(
+                    symbol=order.symbol,
+                    side=OrderSide(order.side.value.upper()),
+                    quantity=quantity,
+                    price=price,
+                    client_order_id=order.client_order_id,
+                    reduce_only=order.reduce_only,
+                )
         except BaseException as error:  # noqa: BLE001 - 三分类必须覆盖一切异常（UNKNOWN 最常见）
             classification = classify_submit_response(error)
             if classification is SubmitClassification.CONFIRMED_REJECTED:
@@ -506,13 +522,27 @@ class BinanceExecutionAdapter:
         if not is_probex_order(order.client_order_id):
             raise SubmitRefusedError("ownership_violation", order.client_order_id)
         if not order.post_only:
-            raise SubmitRefusedError("post_only_required", "first version only allows GTX/post-only")
+            # P0001.16：非 post-only 只有**显式 acceptance 许可**才允许（默认拒绝）
+            allowed, detail = self._acceptance_decision(order)
+            if not allowed:
+                raise SubmitRefusedError("post_only_required", f"taker orders are refused ({detail})")
         rules = self.rules_provider()
         if rules is None:
             raise SubmitRefusedError("trading_rules_unavailable", "exchangeInfo rules are required before submit")
         self._require_rules(order, rules=rules)
         # §13：adapter **不**判断"是否真的降险"（那是 RiskGate 的业务约束）；reduceOnly 原样透传。
         self._require_authority(order)
+
+    def _acceptance_decision(self, order: Order) -> tuple[bool, str]:
+        """非 post-only 是否被显式 acceptance 许可覆盖（默认：没有许可）。"""
+        if self.acceptance is None:
+            return False, "no_acceptance_permission"
+        return self.acceptance.authorize(order=order)
+
+    @property
+    def acceptance_view(self) -> dict[str, object] | None:
+        """审计：当前 adapter 是否存在 acceptance 能力（None ⇒ 结构性不存在）。"""
+        return None if self.acceptance is None else self.acceptance.view()
 
     def _require_rules(self, order: Order, *, rules: TradingRules) -> None:
         """§14：不合规就**本地拒绝**，绝不自动 round。"""
@@ -555,8 +585,8 @@ class BinanceExecutionAdapter:
                 requested_environment=self.environment,
                 symbol=order.symbol,
                 notional_usdt=float(order.price) * float(order.quantity),
-                # adapter 的唯一写路径就是 post-only limit（GTX）；不存在非 post-only 写入口
-                post_only=True,
+                # P0001.16：按订单真实语义传递（非 post-only 必须先通过 acceptance 许可，见 _require_submittable）
+                post_only=order.post_only,
                 private_continuity_valid=context.private_continuity_valid,
                 latency_status=(
                     PrivateLatencyStatus.UNKNOWN
