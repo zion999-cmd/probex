@@ -15,8 +15,8 @@ Provider identity 核实（决策 D，提案 §1.7）与授权探测 P1/P2（提
   P2 单条 `noul` 探针 → HTTP 200、604 ms、`answers.ok={type:noul,noul:0.99}`、cost 1.1634e-05。
 - **热路径 Jev 的真实目标应为 `/api/v1/systemone`**；实现 typed provider 需新提案（尚未授权、尚未改代码）。
 
-`context/status.json` 的 `currentProposal` 为 **`null`**（**P0001.14 与 P0001.15 均已于 2026-10-03 完成**；
-未获人类切换授权，故按 CLAUDE.md §5 置 `null`，不得据此推断下一阶段）。
+`context/status.json` 的 `currentProposal` 为 **`"P0001.16"`**（**实现中 / 未 CLOSED**）：人类 2026-10-04
+「选择 B，并批准 P0001.16 进入实现」；SC-11/SC-12/SC-13（真实 TESTNET 挂单/成交/flat）尚未达成，因此不得标记完成。
 
 > 历史说明（superseded）：本文件早期段落中的 `"P0001.9.7"` / 各 P0001.9.x 状态描述只反映当时事实；
 > 判断当前 Proposal 一律以 `context/status.json` 为准。
@@ -852,3 +852,37 @@ detached worktree（`7987cd5`，无 `node_modules` / 无未跟踪文件）复核
    真实 Binance/PAPER 已获得实时 mark（人类裁决 1E）。
 3. `INDEX` 只有 vocabulary（本阶段无正式 index price 来源）。
 4. EQUITY / FUTURE 只有 vocabulary（无股票/期货/多 venue 实现，SC-19）。
+
+## P0001.16 Venue Execution Productization（**实现中 / 未 CLOSED**，2026-10-04）
+
+**状态**：实现中；`proposals/P0001.16-...md` 状态 = 实现中；`currentProposal = "P0001.16"`。
+
+### 已完成（结构性）
+
+- **TESTNET 唯一写路径组合**（`runtime/testnet.py`）：`ExecutionEngine → PrivateExecutionConnector
+  (BinancePrivateExecutionConnector) → BinanceExecutionAdapter → Binance TESTNET`；`OrderTracker` 唯一订单 Owner、
+  `AccountingCore` 唯一账本 Owner、`FillLedger` 追加 canonical fill、`PrivateExternalFactsProvider` 注入。
+- **readiness 作为写边界权威**：生产 `ReadinessEvidenceCollector` + `LiveReadinessGate` + `issue_authority`；
+  未签发 authority ⇒ adapter 拒绝（实测）。**未修改**任何 readiness / Risk 规则。
+- **冷启动**：readiness `bootstrap_eligible` ⇒ 既有 `BootstrapAuthorityCoordinator` 签发 BOOTSTRAP authority（实测 ACTIVE）。
+- **Acceptance capability（人类裁决 B，严格隔离）**：`execution/acceptance.py`（TESTNET/BTCUSDT/≤100/IOC only/默认关闭）
+  + adapter gate（默认拒绝且不发请求）+ `submit_ioc_limit`（GTX 路径未改）；Strategy/Product/UI/Assistant/Actions
+  结构性不可触达（13 条隔离测试）。
+- **engine additive 真实事实 provider**：historical baseline / exchange available balance / durable HWM
+  （真实资金下 daily PnL 与 drawdown 可知；默认 None 行为不变）。
+- 全量 offline suite **2414 passed / 0 failed / 24 skipped**；detached worktree（`aad76f9`，无 `node_modules`）同样通过。
+
+### 未达成 / 阻塞（导致不能 CLOSED）
+
+- 经统一路径的 TESTNET `submit` 返回 **UNKNOWN**（`unknown_submit_count=1`，无本地拒绝），venue 无该订单
+  ⇒ SC-11/SC-12/SC-13 未达成；adapter **未 retry**（语义正确）。
+- **UNKNOWN 收敛缺失**：`runtime/testnet.py` 未在 UNKNOWN 后走 `query_order`/reconciliation
+  ⇒ 本地订单停留 `PENDING_CREATE`，driver 的 cancel 被本地状态机正确拒绝。
+- 同 endpoint/参数的 **raw** 调用成功（`orderId 28617093528 → CANCELED`）⇒ 根因在 adapter 路径的传输/时钟配置。
+- venue 收尾核验 **0 挂单 / FLAT / availableBalance 4998.73**（无残余真实状态）。
+- 未验证：真实 user stream 生命周期、真实 fill → ledger/accounting、真实 latency 样本、TESNET Product/UI/Assistant facts。
+
+### 下一步
+
+1) 定位 adapter 路径 UNKNOWN；2) 实现 UNKNOWN → query/reconciliation 收敛；3) 重跑 §14 A/B/C；
+4) §15 fault injection；5) SC-16/17/18 + SC-19 guard。
