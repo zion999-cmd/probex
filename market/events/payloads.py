@@ -170,3 +170,20 @@ class TradePayload:
             )
         object.__setattr__(self, "price", price)
         object.__setattr__(self, "quantity", quantity)
+
+@dataclass(frozen=True, slots=True)
+class MarkPricePayload:
+    """正式 mark price 事件载荷（P0001.15 §11–§12 + 人类裁决 1A）。
+
+    `MARK` 是**独立的价格语义**：它由 venue 正式发布（Binance `markPriceUpdate`），
+    **不是** last trade。本阶段不提供 `INDEX` 来源（只有 vocabulaory 允许表达）。
+    """
+
+    price: float
+
+    def __post_init__(self) -> None:
+        price = _require_finite_number(self.price, field="MarkPricePayload.price")
+        if price <= 0.0:
+            raise InvalidPayloadError(f"MarkPricePayload.price must be positive, got {price!r}")
+        object.__setattr__(self, "price", price)
+

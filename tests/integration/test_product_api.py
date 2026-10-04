@@ -84,7 +84,10 @@ class ProductApiTest(unittest.TestCase):
         orders = payload["execution"]["active_orders"]
         self.assertEqual(len(orders), 1)
         self.assertEqual(orders[0]["client_order_id"], "probex-s1-000001")
-        self.assertEqual(orders[0]["decision_id"]["value"], "maker:2100:bid")
+        # P0001.15 §15/SC-26：decision 关联来自订单自身的 canonical correlation
+        self.assertEqual(orders[0]["decision_id"]["value"], "d-abc-2100")
+        self.assertEqual(orders[0]["instrument_id"]["value"], "paper:BTCUSDT")
+        self.assertEqual(orders[0]["venue_id"]["value"], "paper")
 
     def test_10_no_write_endpoint_exists(self) -> None:
         """SC-10：UI/API 没有任何绕过 RiskGate 的交易写入口。"""

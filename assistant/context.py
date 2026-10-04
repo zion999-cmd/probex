@@ -32,6 +32,19 @@ class AssistantContext:
     #: P0001.13：执行安全事实（未接线 ⇒ UNKNOWN）
     execution_health: Fact = field(default_factory=lambda: _unknown("execution safety not wired"))
     rate_limit_state: Fact = field(default_factory=lambda: _unknown("execution safety not wired"))
+    #: P0001.15 §27：instrument / venue / reference price / connector 上下文
+    instrument_id: Fact = field(default_factory=lambda: _unknown("no instrument identity"))
+    asset_class: Fact = field(default_factory=lambda: _unknown("no instrument identity"))
+    product_type: Fact = field(default_factory=lambda: _unknown("no instrument identity"))
+    instrument_capabilities: Fact = field(default_factory=lambda: _unknown("no instrument capabilities"))
+    venue_id: Fact = field(default_factory=lambda: _unknown("no venue identity"))
+    venue_environment: Fact = field(default_factory=lambda: _unknown("no venue identity"))
+    market_connector: Fact = field(default_factory=lambda: _unknown("no market connector"))
+    execution_connector: Fact = field(default_factory=lambda: _unknown("no execution connector"))
+    reference_price: Fact = field(default_factory=lambda: _unknown("no reference price"))
+    reference_price_type: Fact = field(default_factory=lambda: _unknown("no reference price"))
+    reference_price_source: Fact = field(default_factory=lambda: _unknown("no reference price"))
+    reference_price_reason: Fact = field(default_factory=lambda: _unknown("no reference price"))
     venue_facts_state: Fact = field(default_factory=lambda: _unknown("execution safety not wired"))
     latency_state: Fact = field(default_factory=lambda: _unknown("execution safety not wired"))
     reconciliation_state: Fact = field(default_factory=lambda: _unknown("execution safety not wired"))
@@ -56,6 +69,18 @@ class AssistantContext:
             "selected_drawing": to_jsonable(self.selected_drawing),
             "execution_health": to_jsonable(self.execution_health),
             "rate_limit_state": to_jsonable(self.rate_limit_state),
+            "instrument_id": to_jsonable(self.instrument_id),
+            "asset_class": to_jsonable(self.asset_class),
+            "product_type": to_jsonable(self.product_type),
+            "instrument_capabilities": to_jsonable(self.instrument_capabilities),
+            "venue_id": to_jsonable(self.venue_id),
+            "venue_environment": to_jsonable(self.venue_environment),
+            "market_connector": to_jsonable(self.market_connector),
+            "execution_connector": to_jsonable(self.execution_connector),
+            "reference_price": to_jsonable(self.reference_price),
+            "reference_price_type": to_jsonable(self.reference_price_type),
+            "reference_price_source": to_jsonable(self.reference_price_source),
+            "reference_price_reason": to_jsonable(self.reference_price_reason),
             "venue_facts_state": to_jsonable(self.venue_facts_state),
             "latency_state": to_jsonable(self.latency_state),
             "reconciliation_state": to_jsonable(self.reconciliation_state),

@@ -51,11 +51,15 @@ def maker_decision() -> object:
     )
 
 
-def order(client_order_id: str = "probex-s1-000001") -> object:
+def order(client_order_id: str = "probex-s1-000001", *,
+          correlation: object | None = SimpleNamespace(
+              decision_id="d-abc-2100", instrument_id="paper:BTCUSDT", venue_id="paper",
+              prediction_id="pred-1", market_state_hash="sha256:deadbeef")) -> object:
+    """订单事实（P0001.15 §15：identity / decision 关联来自订单自身的 canonical correlation）。"""
     return SimpleNamespace(client_order_id=client_order_id, side="buy",
                            status="OPEN", price=82_890.0,
                            quantity=0.0007, filled_quantity=0.0, reduce_only=False, created_at=2_200,
-                           updated_at=2_200)
+                           updated_at=2_200, correlation=correlation)
 
 
 def tracker(orders: tuple[object, ...] = ()) -> object:
@@ -179,16 +183,24 @@ class EvidenceTraceTest(unittest.TestCase):
         self.assertEqual(decision_entry.identity.value, "pred-1")
 
     def test_active_order_traces_back_to_decision(self) -> None:
-        """SC-7：每个 active order 都能追溯到产生它的 decision。"""
+        """SC-7 / P0001.15 §15：每个 active order 都能追溯到产生它的 decision（含 instrument/venue）。"""
         snap = service().snapshot()
         order_view = snap.execution.active_orders[0]
         self.assertEqual(order_view.client_order_id, "probex-s1-000001")
-        self.assertEqual(order_view.decision_id.value, "maker:2100:bid")
+        self.assertEqual(order_view.decision_id.value, "d-abc-2100")
+        self.assertEqual(order_view.instrument_id.value, "paper:BTCUSDT")
+        self.assertEqual(order_view.venue_id.value, "paper")
+        self.assertEqual(order_view.prediction_id.value, "pred-1")
 
-    def test_order_without_decision_is_explicitly_unknown(self) -> None:
-        snap = service(tracker=lambda: tracker((order("probex-s1-999999"),))).snapshot()
-        self.assertFalse(snap.execution.active_orders[0].decision_id.known)
-        self.assertIsNone(snap.execution.active_orders[0].decision_id.value)
+    def test_order_without_correlation_is_explicitly_unknown(self) -> None:
+        """没有 canonical correlation ⇒ 如实 UNKNOWN（不靠时间/名称模糊匹配）。"""
+        snap = service(tracker=lambda: tracker((order("probex-s1-999999", correlation=None),))).snapshot()
+        view = snap.execution.active_orders[0]
+        for fact in (view.decision_id, view.instrument_id, view.venue_id, view.prediction_id):
+            with self.subTest(field=fact):
+                self.assertFalse(fact.known)
+                self.assertIsNone(fact.value)
+                self.assertTrue(fact.reason)
 
     def test_readiness_blockers_are_listed_verbatim(self) -> None:
         """SC-8。"""

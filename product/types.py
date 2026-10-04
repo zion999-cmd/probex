@@ -192,6 +192,93 @@ class OpsView:
 
 
 @dataclass(frozen=True, slots=True)
+class InstrumentView:
+    """Instrument identity + product semantics（P0001.15 §1–§5、§21）。"""
+
+    instrument_id: Fact
+    symbol: Fact
+    asset_class: Fact
+    product_type: Fact
+    base_asset: Fact
+    quote_asset: Fact
+    settlement_asset: Fact
+    price_tick: Fact
+    quantity_step: Fact
+    min_quantity: Fact
+    min_notional: Fact
+    production_ready: Fact
+    capabilities: Fact = field(default_factory=lambda: Fact.unknown("no instrument capabilities"))
+    reference_price_policy: Fact = field(default_factory=lambda: Fact.unknown("no reference price policy"))
+
+
+@dataclass(frozen=True, slots=True)
+class VenueView:
+    """Venue identity（P0001.15 §6）：venue_id / venue_type / environment 三个正交维度。"""
+
+    venue_id: Fact
+    venue_type: Fact
+    environment: Fact
+    market_connector_id: Fact = field(default_factory=lambda: Fact.unknown("no market connector"))
+    execution_connector_id: Fact = field(default_factory=lambda: Fact.unknown("no execution connector"))
+
+
+@dataclass(frozen=True, slots=True)
+class ReferencePriceView:
+    """Reference price 事实（P0001.15 §11）：`known=False` ⇒ price/as_of/source 必须缺失 + reason 必填。"""
+
+    instrument_id: Fact
+    price_type: Fact
+    known: Fact
+    price: Fact
+    as_of: Fact
+    source: Fact
+    freshness_ms: Fact
+    reason: Fact
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectorHealth:
+    """单个 connector 的健康（market / private 各自独立，P0001.15 §16–§18 / SC-28）。"""
+
+    kind: str
+    connector_id: Fact
+    venue_id: Fact
+    connection_state: Fact
+    last_event_ms: Fact
+    event_age_ms: Fact
+    detail: Fact = field(default_factory=lambda: Fact.unknown("no connector detail"))
+    observed: Fact = field(default_factory=lambda: Fact.unknown("no connector observation"))
+    extras: Fact = field(default_factory=lambda: Fact.unknown("no connector extras"))
+
+
+#: 未接线时的「未知」read-model 单例（immutable；供 snapshot 默认值复用，不伪造任何事实）
+UNKNOWN_INSTRUMENT_VIEW = InstrumentView(
+    instrument_id=Fact.unknown("no instrument"), symbol=Fact.unknown("no instrument"),
+    asset_class=Fact.unknown("no instrument"), product_type=Fact.unknown("no instrument"),
+    base_asset=Fact.unknown("no instrument"), quote_asset=Fact.unknown("no instrument"),
+    settlement_asset=Fact.unknown("no instrument"), price_tick=Fact.unknown("no instrument"),
+    quantity_step=Fact.unknown("no instrument"), min_quantity=Fact.unknown("no instrument"),
+    min_notional=Fact.unknown("no instrument"), production_ready=Fact.unknown("no instrument"))
+UNKNOWN_VENUE_VIEW = VenueView(
+    venue_id=Fact.unknown("no venue"), venue_type=Fact.unknown("no venue"),
+    environment=Fact.unknown("no venue"))
+UNKNOWN_REFERENCE_PRICE_VIEW = ReferencePriceView(
+    instrument_id=Fact.unknown("no reference price"), price_type=Fact.unknown("no reference price"),
+    known=Fact.unknown("no reference price"), price=Fact.unknown("no reference price"),
+    as_of=Fact.unknown("no reference price"), source=Fact.unknown("no reference price"),
+    freshness_ms=Fact.unknown("no reference price"), reason=Fact.unknown("no reference price"))
+UNKNOWN_MARKET_CONNECTOR_HEALTH = ConnectorHealth(
+    kind="market", connector_id=Fact.unknown("no market connector"),
+    venue_id=Fact.unknown("no market connector"), connection_state=Fact.unknown("no market connector"),
+    last_event_ms=Fact.unknown("no market connector"), event_age_ms=Fact.unknown("no market connector"))
+UNKNOWN_PRIVATE_CONNECTOR_HEALTH = ConnectorHealth(
+    kind="private", connector_id=Fact.unknown("no private connector"),
+    venue_id=Fact.unknown("no private connector"),
+    connection_state=Fact.unknown("no private connector"), last_event_ms=Fact.unknown("no private connector"),
+    event_age_ms=Fact.unknown("no private connector"))
+
+
+@dataclass(frozen=True, slots=True)
 class MarketView:
     healthy: Fact
     tradeable: Fact
@@ -265,6 +352,12 @@ class OrderView:
     updated_at: Milliseconds
     decision_id: Fact
     uncertain: bool
+    #: P0001.15 §15 / SC-26–SC-27：来自订单自身的 canonical correlation（不是 runtime 侧映射）
+    instrument_id: Fact = field(default_factory=lambda: Fact.unknown("order carries no instrument identity"))
+    venue_id: Fact = field(default_factory=lambda: Fact.unknown("order carries no venue identity"))
+    prediction_id: Fact = field(default_factory=lambda: Fact.unknown("order carries no prediction identity"))
+    #: §25：venue 侧订单号（外部事实；PAPER 未分配 external id ⇒ UNKNOWN，不伪造）
+    venue_order_id: Fact = field(default_factory=lambda: Fact.unknown("order carries no venue order id"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -361,6 +454,9 @@ class TraceEntry:
     ts: Fact = field(default_factory=lambda: Fact.unknown("stage has no timestamp"))
     identity_kind: str = ""
     latency_ms: Fact = field(default_factory=lambda: Fact.unknown("no latency fact at this stage"))
+    #: P0001.15 §24：causal chain 每个阶段都带同一 instrument / venue identity
+    instrument_id: Fact = field(default_factory=lambda: Fact.unknown("no instrument identity at this stage"))
+    venue_id: Fact = field(default_factory=lambda: Fact.unknown("no venue identity at this stage"))
 
 
 @dataclass(frozen=True, slots=True)

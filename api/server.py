@@ -36,6 +36,7 @@ from api.routes import (
     MARKET_OVERLAYS_PATH,
     MARKET_TIMELINE_PATH,
     MARKET_TRADES_PATH,
+    DECISION_ORDERS_PATH,
     REPLAY_PATH,
     METRICS_PATH,
     REPORT_PATH,
@@ -540,6 +541,26 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE,
                               "entries": to_jsonable(entries), "counts": gateway.audit.counts})
 
+    def _serve_decision_orders(self, query: str) -> None:
+        """`GET /api/v1/decisions/orders?decision_id=...`：`Decision → Order(s)`（P0001.15 §15 / SC-27）。
+
+        由 `OrderTracker` 的 canonical correlation 反查（不是 runtime / product 侧映射）。
+        """
+        from product.serialization import to_jsonable
+
+        params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
+        decision_id = params.get("decision_id", "")
+        if not decision_id:
+            self._error(400, "missing_decision_id", "decision_id query parameter is required")
+            return
+        try:
+            orders = self.service.decision_orders(decision_id)
+        except ValueError as exc:
+            self._error(400, "invalid_decision_id", str(exc))
+            return
+        self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE, "decision_id": decision_id,
+                              "count": len(orders), "orders": to_jsonable(list(orders))})
+
     def _serve_assistant_context(self, query: str) -> None:
         assistant = self.service.assistant_view()
         if assistant is None:
@@ -722,6 +743,9 @@ class ProductApiHandler(BaseHTTPRequestHandler):
             return
         if path == ACTIONS_AUDIT_PATH:
             self._serve_action_audit()
+            return
+        if path == DECISION_ORDERS_PATH:
+            self._serve_decision_orders(query)
             return
         if path == ASSISTANT_CONTEXT_PATH:
             self._serve_assistant_context(query)

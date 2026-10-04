@@ -15,7 +15,11 @@ from market.events.types import Milliseconds
 
 from product.blockers import project_blockers
 from product.snapshot import SystemSnapshot
-from product.types import (
+from product.types import (  # noqa: I001 - 视图按 domain 分组
+    UNKNOWN_INSTRUMENT_VIEW,
+    UNKNOWN_MARKET_CONNECTOR_HEALTH,
+    UNKNOWN_PRIVATE_CONNECTOR_HEALTH,
+    UNKNOWN_REFERENCE_PRICE_VIEW,
     UNKNOWN_NOT_AVAILABLE,
     UNKNOWN_NOT_PROVIDED,
     BlockerView,
@@ -27,17 +31,28 @@ from product.types import (
     ExecutionView,
     Fact,
     HealthView,
+    ConnectorHealth,
+    InstrumentView,
     MarketView,
     OpsView,
     OrderView,
     PortfolioView,
     PredictionView,
     ReadinessView,
+    ReferencePriceView,
     RiskView,
     RuntimeIdentity,
     StrategyView,
     TraceEntry,
+    VenueView,
 )
+
+
+#: `ConnectorHealth` 已显式投影的字段；其余 health 字段进入 `extras`（不丢失、不伪造）
+_CONNECTOR_CORE_KEYS = frozenset({
+    "connector_id", "venue_id", "connection_state", "last_market_event_ms", "last_private_event_ms",
+    "event_age_ms", "private_event_age_ms", "detail", "events_observed", "private_events_observed",
+})
 
 
 def _maker_reason(decision: object | None) -> object | None:
@@ -117,6 +132,17 @@ class ProductService:
     raw_fact_lookup: Callable[[str, str], object | None] | None = None
     #: G3：账户/敞口时间线缓冲（只读；不是新的 accounting Owner）
     account_timeline: Callable[[], object | None] = lambda: None
+    #: P0001.15 §21–§26：instrument / venue / reference price / connector health（两个 connector 分开）
+    instrument: Callable[[], object | None] = lambda: None
+    instrument_registry: Callable[[], object | None] = lambda: None
+    venue: Callable[[], object | None] = lambda: None
+    reference_price: Callable[[], object | None] = lambda: None
+    market_connector_health: Callable[[], object | None] = lambda: None
+    private_connector_health: Callable[[], object | None] = lambda: None
+    #: §15 / SC-27：`Decision → Order(s)` 反查（由 OrderTracker 提供，产品层不维护 side mapping）
+    orders_for_decision: Callable[[str], tuple[object, ...]] = lambda decision_id: ()
+    #: 用于把 ActiveOrder 的 correlation 关联到产生它的 decision（只读）
+    trader_orders: Callable[[], tuple[object, ...]] = tuple
     #: G4：prediction provider 状态 / accounting 健康
     prediction_provider_status: Callable[[], object | None] = lambda: None
     accounting_health: Callable[[], object | None] = lambda: None
@@ -228,6 +254,11 @@ class ProductService:
             health=self._health(health, market),
             evidence=self._evidence(market_state, prediction, decision, readiness, tracker),
             config=self._config(),
+            instrument=self._instrument(),
+            venue=self._venue(),
+            reference_price=self._reference_price(),
+            market_connector_health=self._connector_health(self.market_connector_health(), "market"),
+            private_connector_health=self._connector_health(self.private_connector_health(), "private"),
             execution_safety=self._execution_safety(),
             ops=self._ops(),
             blockers=(),
@@ -296,6 +327,94 @@ class ProductService:
             horizons=Fact.of(horizons, unknown_reason="prediction has no horizon distributions"),
         )
 
+    # ------------------------------------------------------------------ P0001.15 投影
+
+    def _instrument(self) -> InstrumentView:
+        spec = self.instrument()
+        if spec is None:
+            return UNKNOWN_INSTRUMENT_VIEW
+        policy = _get(spec, "reference_price_policy")
+        capabilities = _get(spec, "capabilities")
+        return InstrumentView(
+            instrument_id=Fact.of(_get(spec, "instrument_id")),
+            symbol=Fact.of(_get(spec, "symbol")),
+            asset_class=Fact.of(getattr(_get(spec, "asset_class"), "value", None)),
+            product_type=Fact.of(getattr(_get(spec, "product_type"), "value", None)),
+            base_asset=Fact.of(_get(spec, "base_asset")),
+            quote_asset=Fact.of(_get(spec, "quote_asset")),
+            settlement_asset=Fact.of(_get(spec, "settlement_asset")),
+            price_tick=Fact.of(_get(spec, "price_tick")),
+            quantity_step=Fact.of(_get(spec, "quantity_step")),
+            min_quantity=Fact.of(_get(spec, "min_quantity")),
+            min_notional=Fact.of(_get(spec, "min_notional")),
+            production_ready=Fact.of(_get(spec, "production_ready")),
+            capabilities=(Fact.unknown("instrument has no capabilities view")
+                          if capabilities is None or not hasattr(capabilities, "view")
+                          else Fact.of(capabilities.view())),
+            reference_price_policy=(Fact.unknown("instrument has no reference price policy")
+                                    if policy is None or not hasattr(policy, "view")
+                                    else Fact.of(policy.view())))
+
+    def _venue(self) -> VenueView:
+        identity = self.venue()
+        market_connector = self.market_connector_health()
+        private_connector = self.private_connector_health()
+        return VenueView(
+            venue_id=Fact.of(_get(identity, "venue_id")),
+            venue_type=Fact.of(getattr(_get(identity, "venue_type"), "value", None)),
+            environment=Fact.of(getattr(_get(identity, "environment"), "value", None)),
+            market_connector_id=Fact.of(_get(market_connector, "connector_id")),
+            execution_connector_id=Fact.of(_get(private_connector, "connector_id")))
+
+    def _reference_price(self) -> ReferencePriceView:
+        reference = self.reference_price()
+        if reference is None:
+            return UNKNOWN_REFERENCE_PRICE_VIEW
+        return ReferencePriceView(
+            instrument_id=Fact.of(_get(reference, "instrument_id")),
+            price_type=Fact.of(getattr(_get(reference, "price_type"), "value", None)),
+            known=Fact.of(_get(reference, "known")),
+            price=Fact.of(_get(reference, "price"),
+                          unknown_reason=str(_get(reference, "reason") or "reference price unknown")),
+            as_of=Fact.of(_get(reference, "as_of"),
+                          unknown_reason=str(_get(reference, "reason") or "reference price unknown")),
+            source=Fact.of(_get(reference, "source"),
+                           unknown_reason=str(_get(reference, "reason") or "reference price unknown")),
+            freshness_ms=Fact.of(_get(reference, "freshness_ms")),
+            reason=(Fact.unknown("reference price is known")
+                    if _get(reference, "known") else Fact.of(_get(reference, "reason"))))
+
+    @staticmethod
+    def _connector_health(health: object | None, kind: str) -> ConnectorHealth:
+        if health is None:
+            return (UNKNOWN_MARKET_CONNECTOR_HEALTH if kind == "market"
+                    else UNKNOWN_PRIVATE_CONNECTOR_HEALTH)
+        # health 是 `slots=True` 的 dataclass（无 __dict__）⇒ 按字段名读取；None 字段不伪造
+        extras: dict[str, object] = {}
+        for name in getattr(health, "__dataclass_fields__", {}):
+            if name in _CONNECTOR_CORE_KEYS:
+                continue
+            value = getattr(health, name, None)
+            if value is None:
+                continue
+            extras[name] = value.value if hasattr(value, "value") else (
+                value if isinstance(value, (str, int, float, bool)) else str(value))
+        observed_key = "events_observed" if kind == "market" else "private_events_observed"
+        observed = _get(health, observed_key)
+        last_event = _get(health, "last_market_event_ms") if kind == "market" else _get(health, "last_private_event_ms")
+        age = _get(health, "event_age_ms") if kind == "market" else _get(health, "private_event_age_ms")
+        return ConnectorHealth(
+            kind=kind,
+            connector_id=Fact.of(_get(health, "connector_id")),
+            venue_id=Fact.of(_get(health, "venue_id")),
+            connection_state=Fact.of(getattr(_get(health, "connection_state"), "value", None)),
+            last_event_ms=Fact.of(last_event),
+            event_age_ms=Fact.of(age),
+            detail=Fact.of(_get(health, "detail")),
+            observed=(Fact.unknown("connector observation not reported") if observed is None
+                      else Fact.of(bool(observed))),
+            extras=(Fact.unknown("connector reports no extra facts") if not extras else Fact.of(extras)))
+
     def _strategy(self, decision: object | None) -> StrategyView:
         if decision is None:
             unknown = Fact.unknown("no maker decision yet")
@@ -335,26 +454,7 @@ class ProductService:
 
     def _execution(self, tracker: object | None, decision: object | None) -> ExecutionView:
         orders = tuple(getattr(tracker, "active", lambda: ())()) if tracker is not None else ()
-        decision_id_by_client = self._decision_index(decision)
-        views = tuple(
-            OrderView(
-                client_order_id=str(_get(order, "client_order_id") or ""),
-                side=str(getattr(_get(order, "side"), "value", None) or "unknown"),
-                status=str(getattr(_get(order, "status"), "value", None) or "unknown"),
-                price=Fact.of(_get(order, "price")),
-                quantity=Fact.of(_get(order, "quantity")),
-                filled_quantity=Fact.of(_get(order, "filled_quantity")),
-                reduce_only=bool(_get(order, "reduce_only") or False),
-                created_at=int(_get(order, "created_at") or 0),
-                updated_at=int(_get(order, "updated_at") or 0),
-                decision_id=(Fact.unknown("no matching maker decision")
-                             if str(_get(order, "client_order_id") or "") not in decision_id_by_client
-                             else Fact.of(decision_id_by_client[str(_get(order, "client_order_id") or "")])),
-                uncertain=bool(getattr(order, "status", None) is not None
-                               and getattr(getattr(order, "status"), "is_lost", False)),
-            )
-            for order in orders
-        )
+        views = self._order_views(orders)
         unknown_exposure = (Fact.unknown("tracker not provided") if tracker is None
                             else Fact.of(getattr(tracker, "uncertain_exposure", lambda: None)()))
         pending = (Fact.unknown("tracker not provided") if tracker is None
@@ -382,6 +482,37 @@ class ProductService:
             unknown_submit_count=Fact.of(_get(tracker, "unknown_submit_count")),
             unknown_cancel_count=Fact.of(_get(tracker, "unknown_cancel_count")),
         )
+
+    @staticmethod
+    def _order_views(orders: tuple[object, ...]) -> tuple[OrderView, ...]:
+        """订单视图：identity / decision 关联**全部来自订单自身的 canonical correlation**（§15/SC-26）。"""
+        views: list[OrderView] = []
+        for order in orders:
+            correlation = _get(order, "correlation")
+            views.append(OrderView(
+                client_order_id=str(_get(order, "client_order_id") or ""),
+                side=str(getattr(_get(order, "side"), "value", None) or "unknown"),
+                status=str(getattr(_get(order, "status"), "value", None) or "unknown"),
+                price=Fact.of(_get(order, "price")),
+                quantity=Fact.of(_get(order, "quantity")),
+                filled_quantity=Fact.of(_get(order, "filled_quantity")),
+                reduce_only=bool(_get(order, "reduce_only") or False),
+                created_at=int(_get(order, "created_at") or 0),
+                updated_at=int(_get(order, "updated_at") or 0),
+                decision_id=Fact.of(_get(correlation, "decision_id"),
+                                    unknown_reason="order carries no decision correlation"),
+                uncertain=bool(getattr(order, "status", None) is not None
+                               and getattr(getattr(order, "status"), "is_lost", False)),
+                instrument_id=Fact.of(_get(correlation, "instrument_id"),
+                                      unknown_reason="order carries no instrument correlation"),
+                venue_id=Fact.of(_get(correlation, "venue_id"),
+                                 unknown_reason="order carries no venue correlation"),
+                prediction_id=Fact.of(_get(correlation, "prediction_id"),
+                                      unknown_reason="order carries no prediction correlation"),
+                venue_order_id=Fact.of(_get(order, "exchange_order_id"),
+                                       unknown_reason="venue has not assigned an order id"),
+            ))
+        return tuple(views)
 
     def _portfolio(self, accounting: object | None) -> PortfolioView:
         facts = self.accounting_facts()
@@ -566,18 +697,33 @@ class ProductService:
 
     # ------------------------------------------------------------------ evidence
 
-    def _decision_index(self, decision: object | None) -> dict[str, str]:
-        """client_order_id → decision identity（订单↔决策回溯，SC-7）。"""
-        index: dict[str, str] = {}
-        if decision is None:
-            return index
-        at_ms = _get(decision, "at_ms")
+    def _causal_identity(self, decision: object | None,
+                         orders: tuple[object, ...] = ()) -> tuple[str | None, str | None]:
+        """causal chain 的 instrument / venue identity。
+
+        来源优先级（都是既有事实，不推断）：
+        1. 订单自身的 canonical correlation（P0001.15 §15）；
+        2. 决策侧的 correlation（MakerDecision → OrderProposal）；
+        3. instrument spec + venue identity（deployment identity）。
+        """
+        for order in orders:
+            correlation = _get(order, "correlation")
+            if correlation is not None:
+                return _get(correlation, "instrument_id"), _get(correlation, "venue_id")
         for side_name in ("bid", "ask"):
-            side = _get(decision, side_name)
-            client_id = _get(side, "client_order_id")
-            if isinstance(client_id, str) and client_id:
-                index[client_id] = f"maker:{at_ms}:{side_name}"
-        return index
+            proposal = _get(_get(decision, side_name), "proposal")
+            correlation = _get(proposal, "correlation")
+            if correlation is not None:
+                return _get(correlation, "instrument_id"), _get(correlation, "venue_id")
+        spec = self.instrument()
+        identity = self.venue()
+        return _get(spec, "instrument_id"), _get(identity, "venue_id")
+
+    def decision_orders(self, decision_id: str) -> tuple[OrderView, ...]:
+        """`Decision → Order(s)`（SC-27）：由 OrderTracker 的 canonical correlation 反查。"""
+        if not isinstance(decision_id, str) or not decision_id:
+            raise ValueError("decision_orders requires a non-empty decision_id")
+        return self._order_views(self.orders_for_decision(decision_id))
 
     def _evidence(self, state: object | None, prediction: object | None, decision: object | None,
                   readiness: object | None, tracker: object | None) -> EvidenceView:
@@ -589,8 +735,9 @@ class ProductService:
         - 每个 entry 带 canonical `identity_kind`（client_order_id / fill_id / ...）。
         """
         active = tuple(getattr(tracker, "active", lambda: ())()) if tracker is not None else ()
-        decision_index = self._decision_index(decision)
         entries: list[TraceEntry] = []
+        # P0001.15 §15/§24：causal chain 的每个阶段都带同一 instrument / venue identity
+        instrument_id, venue_id = self._causal_identity(decision, active)
 
         def add(stage: str, ts: object, *, identity: object, identity_kind: str, outcome: str,
                 reason_code: Fact, detail: str = "", latency: Fact | None = None,
@@ -601,6 +748,8 @@ class ProductService:
                 identity_kind=identity_kind, outcome=outcome, reason_code=reason_code, detail=detail,
                 latency_ms=(latency if latency is not None
                             else Fact.unknown("no latency fact at this stage")),
+                instrument_id=Fact.of(instrument_id, unknown_reason="no instrument identity in the chain yet"),
+                venue_id=Fact.of(venue_id, unknown_reason="no venue identity in the chain yet"),
             ))
 
         # market → prediction → decision（既有三阶段，语义不变）
@@ -682,13 +831,14 @@ class ProductService:
             all_orders = active
         for order in all_orders:
             client_id = str(_get(order, "client_order_id") or "")
-            decision_ref = decision_index.get(client_id)
+            # §15/SC-26：decision 关联来自订单自身的 canonical correlation（不是产品侧映射）
+            decision_ref = _get(_get(order, "correlation"), "decision_id")
             add("order", _get(order, "created_at"), identity=client_id,
                 identity_kind="client_order_id",
                 outcome=str(getattr(_get(order, "status"), "value", "unknown")),
                 reason_code=Fact.unknown("order carries no rejection reason code"),
                 detail=(f"decision_id={decision_ref}" if decision_ref
-                        else "no matching maker decision"),
+                        else "order carries no decision correlation"),
                 unknown_reason="order without client_order_id")
 
         # ack（F-08 新增）：只读 Slice 3 已接的真实 observer

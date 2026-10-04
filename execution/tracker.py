@@ -130,6 +130,7 @@ class OrderTracker:
             updated_at=timestamp,
             reduce_only=proposal.reduce_only,
             post_only=proposal.post_only,
+            correlation=proposal.correlation,
         )
         self._orders[identifier] = order
         return order
@@ -145,6 +146,16 @@ class OrderTracker:
 
     def order(self, client_order_id: str) -> Order | None:
         return self._orders.get(client_order_id)
+
+    def orders_for_decision(self, decision_id: str) -> tuple[Order, ...]:
+        """按 canonical correlation 反查订单（P0001.15 §15 `Decision → Order(s)`）。
+
+        只读 tracker 自身持有的订单事实（correlation 随订单记录存在），**不**依赖任何 runtime 侧映射。
+        """
+        if not isinstance(decision_id, str) or not decision_id:
+            raise ValueError("orders_for_decision requires a non-empty decision_id")
+        return tuple(order for _, order in sorted(self._orders.items())
+                     if order.correlation is not None and order.correlation.decision_id == decision_id)
 
     def require_order(self, client_order_id: str) -> Order:
         order = self._orders.get(client_order_id)

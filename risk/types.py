@@ -91,6 +91,36 @@ class RiskDecisionType(Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class OrderCorrelation:
+    """订单的 canonical correlation metadata（P0001.15 §15 / SC-26 + 人类裁决 2）。
+
+    随 `OrderProposal` 进入**提交边界**，与 `client_order_id` 一起进入 canonical order record；
+    **不是** runtime 侧临时映射，重启（durable read）后仍应可关联。
+    """
+
+    decision_id: str
+    instrument_id: str | None = None
+    venue_id: str | None = None
+    prediction_id: str | None = None
+    market_state_hash: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.decision_id, str) or not self.decision_id:
+            raise InvalidOrderProposalError("OrderCorrelation.decision_id must be a non-empty string")
+        for name in ("instrument_id", "venue_id", "prediction_id", "market_state_hash"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            if not isinstance(value, str) or not value:
+                raise InvalidOrderProposalError(f"OrderCorrelation.{name} must be a non-empty string or None")
+
+    def view(self) -> dict[str, object]:
+        return {"decision_id": self.decision_id, "instrument_id": self.instrument_id,
+                "venue_id": self.venue_id, "prediction_id": self.prediction_id,
+                "market_state_hash": self.market_state_hash}
+
+
+@dataclass(frozen=True, slots=True)
 class OrderProposal:
     """风险输入契约（不是 Order）。
 
@@ -104,10 +134,14 @@ class OrderProposal:
     price: float
     reduce_only: bool = False
     post_only: bool = False
+    #: canonical correlation metadata（P0001.15 §15）；缺省 None = UNKNOWN（不伪造 id）
+    correlation: OrderCorrelation | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.symbol, str) or not self.symbol:
             raise InvalidOrderProposalError("OrderProposal.symbol must be a non-empty string")
+        if self.correlation is not None and not isinstance(self.correlation, OrderCorrelation):
+            raise InvalidOrderProposalError("OrderProposal.correlation must be an OrderCorrelation")
         if not isinstance(self.side, Side):
             raise InvalidOrderProposalError(f"OrderProposal.side must be a Side, got {type(self.side).__name__}")
         for field in ("quantity", "price"):

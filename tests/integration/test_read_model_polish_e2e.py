@@ -126,9 +126,9 @@ class ReadModelPolishE2E(unittest.TestCase):
         submitted = runtime._execution.submit(proposal, now_ms=mark)      # noqa: SLF001
         self.assertTrue(submitted.submitted, submitted)
         client_order_id = submitted.order.client_order_id
-        # 注意：engine 的 paper broker 才是真实执行边界（feed provider 另有一个未被使用的实例）
-        broker = runtime._execution.manager.adapter                       # noqa: SLF001
-        broker.fill(client_order_id, quantity=0.001, price=59_000.0, timestamp=mark)
+        # P0001.15 §9：唯一的 PaperBroker 由统一 execution connector 持有（feed 不再有实例）
+        adapter = runtime._execution.manager.adapter                      # noqa: SLF001
+        adapter.broker.fill(client_order_id, quantity=0.001, price=59_000.0, timestamp=mark)
         runtime._execution.poll(now_ms=mark)                              # noqa: SLF001
 
         snap = runtime.service.snapshot()
@@ -180,7 +180,7 @@ class ReadModelPolishE2E(unittest.TestCase):
             OrderProposal(symbol="BTCUSDT", side=Side.BUY, quantity=0.001, price=59_000.0,
                           post_only=True), now_ms=mark)
         client_order_id = submitted.order.client_order_id
-        runtime._execution.manager.adapter.fill(client_order_id, quantity=0.001, price=59_000.0,
+        runtime._execution.manager.adapter.broker.fill(client_order_id, quantity=0.001, price=59_000.0,
                                                 timestamp=mark)          # noqa: SLF001
         runtime._execution.poll(now_ms=mark)                            # noqa: SLF001
         base = self._serve(runtime)

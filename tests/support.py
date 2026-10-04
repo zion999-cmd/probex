@@ -15,7 +15,7 @@ from pathlib import Path
 
 from connectors.binance.market_data import parse_depth_diff, parse_depth_snapshot
 from market.book.market_book import BookUpdate, BookView, MarketBook
-from market.events.payloads import AggressorSide, PriceLevel, TradePayload
+from market.events.payloads import AggressorSide, MarkPricePayload, PriceLevel, TradePayload
 from market.events.types import EventType, MarketEvent, Venue
 from market.features.engine import FeatureEngine
 from market.health.state import BookHealth, HealthTransition
@@ -134,6 +134,30 @@ def trade_event(
             quantity=quantity,
             aggressor=aggressor,
         ),
+    )
+
+
+def mark_price_event(
+    *,
+    price: float,
+    symbol: str = SYMBOL,
+    exchange_ts: int = BASE_TS,
+    receive_ts: int | None = None,
+    process_ts: int | None = None,
+) -> MarketEvent:
+    """构造一条正式 MARK_PRICE 事件（P0001.15 §11–§12：`MARK` 是独立价格语义，不是 last trade）。
+
+    这是**测试市场事实**：不允许由 last trade / mid 临时转换成 MARK（人类裁决 1C）。
+    """
+    return MarketEvent(
+        venue=Venue.BINANCE,
+        symbol=symbol,
+        event_type=EventType.MARK_PRICE,
+        exchange_ts=exchange_ts,
+        receive_ts=exchange_ts if receive_ts is None else receive_ts,
+        process_ts=exchange_ts if process_ts is None else process_ts,
+        sequence=None,
+        payload=MarkPricePayload(price=price),
     )
 
 

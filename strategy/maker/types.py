@@ -148,8 +148,15 @@ class MakerPolicyConfig:
     price_move_ticks_replace: int
     max_quote_age_ms: Milliseconds
     size_drift_tolerance: float
+    # P0001.15 §15：correlation identity（由 composition root 按 instrument / venue 注入；不是业务数值）
+    instrument_id: str = ""
+    venue_id: str = ""
 
     def __post_init__(self) -> None:
+        for name in ("instrument_id", "venue_id"):
+            value = getattr(self, name)
+            if not isinstance(value, str):
+                raise ValueError(f"MakerPolicyConfig.{name} must be a string")
         _normalize_grid(self)
         _normalize_price_params(self)
         _normalize_prediction_thresholds(self)
@@ -341,6 +348,8 @@ class MakerDecision:
     ask_desired: bool
     blocked_by: QuoteTrigger | None = None
     detail: str = ""
+    #: 稳定 / 确定性的决策身份（P0001.15 §15）：随 OrderProposal 进入 canonical order record
+    decision_id: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.symbol, str) or not self.symbol:

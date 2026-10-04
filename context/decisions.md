@@ -907,3 +907,38 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
    **不**用 `tests/fakes.py::FakeProvider` 冒充产品级验收。
 7. **唯一 execution broker**：`MarketFeedProvider` 不再拥有 `PaperBroker` / `OrderManager`；
    唯一实例 = `ExecutionEngine.manager.adapter`。
+
+## D-051 Instrument Domain 与 Venue Integration Contract（P0001.15）
+
+**日期**：2026-10-03
+**状态**：生效（P0001.15 已完成）
+
+1. **两个正交维度**：Instrument Domain 描述「交易的是什么」（identity / asset class / product type /
+   capabilities / reference price policy）；Venue Integration 描述「通过谁、怎么执行」。**不得**合并成一个
+   `VenueGateway`（人类裁决 4）；也**不得**用 venue 名称推导 product semantics（人类裁决 3）。
+2. **instrument semantics 与 venue rules 分离**：执行参数以 venue rules（`TradingRules` / `venue.rules.*`）为准；
+   `InstrumentSpec` 的 declared 参数只是产品自身声明，只能通过 `venue_rules_discrepancies()` 做**只读**比对
+   （不抛错、不自动覆盖）。
+3. **两个 connector 契约正交**：`MarketDataConnector`（公开行情/规则/reference-price source/健康/时钟；
+   **不**持有 broker、不下单、不改账户）与 `PrivateExecutionConnector`（账户/持仓/下单/撤单/查询/成交/private stream/
+   reconciliation/健康/rate-limit）。两者的 health **独立**上报，产品层不提供单一 `connected`。
+4. **执行三分类语义复用既有 vocabulary**：`ORDER_ACCEPTED` ⇒ ACCEPTED、`ORDER_REJECTED` ⇒ REJECTED、
+   两者都无 ⇒ UNKNOWN（**不得**自动 retry）。不引入平行事件词汇。
+5. **PAPER 走统一 connector seam**：`ExecutionEngine → PrivateExecutionConnector → PaperExecutionConnector →
+   PaperBroker`，`PaperBroker` 仍只有**一个**实例，且不直接暴露给 Strategy/Product/UI；`ExecutionEngine`
+   不依赖任何 Binance 实现。
+6. **ReferencePrice**：风险/会计路径只接受正式 `MARK`（`PriceType.LAST` 在 policy 构造期即被结构性拒绝）；
+   `MID`/`INDEX`/`LAST` 可表达但**不得静默替代** MARK；正式来源 = 统一事件 `MARK_PRICE`
+   （Binance `markPriceUpdate`）；无来源 ⇒ `UNKNOWN` + reason（fail-closed）。是否过期仍由 Risk 既有
+   `max_mark_age_ms` 判定（本层不自造 TTL）。
+7. **MARK 注入的所有权与线程**：由 composition root 在 **decision loop 同一线程**、紧邻快照前注入
+   `AccountingCore.update_mark_price`（仅 known 时），避免跨线程写 accounting。
+8. **Order ↔ Decision correlation 属于订单记录**（人类裁决 2）：`OrderCorrelation{decision_id, instrument_id,
+   venue_id, prediction_id, market_state_hash}` 随提案进入提交边界并写进 canonical order record；
+   `OrderTracker.orders_for_decision()` 是唯一反查入口；**禁止** runtime 或 product 维护 decision↔order 映射
+   （重启/durable read 后关联仍成立，不依赖运行时内存）。
+9. **decision_id 是内容寻址身份**：由 `market_state_hash` 摘要段 + 决策时刻确定性派生（同一输入 ⇒ 同一 id），
+   不引入 runtime 计数器，也不引入新的哈希依赖到 strategy 层（strategy 依赖白名单不变）。
+10. **范围纪律**：只实现 BTCUSDT / CRYPTO / PERPETUAL / PAPER + 现有 Binance adapter；
+    EQUITY / FUTURE 只建 vocabulary/capability contract；不实现股票、期货、OKX/IBKR/CTP、multi-venue、
+    OrderRouter/SOR、跨交易所套利（→ 未来另立 Proposal）。

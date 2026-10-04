@@ -22,6 +22,40 @@ def _coerce_int(value: object) -> int | None:
         return None
 
 
+def _as_fact(value: object, reason: str) -> Fact:
+    """已经是 `Fact` 的字段直接透传（避免 `Fact.of(Fact)` 造成不可序列化）。"""
+    if isinstance(value, Fact):
+        return value
+    return Fact.of(value, unknown_reason=reason)
+
+
+def _instrument_facts(snapshot: object) -> dict[str, Fact]:
+    """P0001.15 §27：把 instrument / venue / reference price / connector 事实搬进 assistant 上下文。"""
+    instrument = getattr(snapshot, "instrument", None)
+    venue = getattr(snapshot, "venue", None)
+    reference = getattr(snapshot, "reference_price", None)
+    market_connector = getattr(snapshot, "market_connector_health", None)
+    private_connector = getattr(snapshot, "private_connector_health", None)
+    if instrument is None or venue is None or reference is None:
+        return {}
+    return {
+        "instrument_id": instrument.instrument_id,
+        "asset_class": instrument.asset_class,
+        "product_type": instrument.product_type,
+        "instrument_capabilities": instrument.capabilities,
+        "venue_id": venue.venue_id,
+        "venue_environment": venue.environment,
+        "market_connector": _as_fact(getattr(market_connector, "connector_id", None),
+                                     "no market connector"),
+        "execution_connector": _as_fact(getattr(private_connector, "connector_id", None),
+                                        "no execution connector"),
+        "reference_price": reference.price,
+        "reference_price_type": reference.price_type,
+        "reference_price_source": reference.source,
+        "reference_price_reason": reference.reason,
+    }
+
+
 @dataclass(slots=True)
 class AssistantService:
     """产品助手（read-only + manifest 建议；不拥有交易能力）。"""
@@ -87,6 +121,7 @@ class AssistantService:
             timeframe=(Fact.unknown("no chart selection") if not timeframe else Fact.of(str(timeframe))),
             selected_candle=(Fact.unknown("no candle selected") if not candle else Fact.of(str(candle))),
             selected_drawing=(Fact.unknown("no drawing selected") if not drawing else Fact.of(str(drawing))),
+            **_instrument_facts(snapshot),
             **execution_facts,
         )
 
@@ -187,8 +222,74 @@ class AssistantService:
             "raw_facts": facts,
             "blockers": [f"{b.owner.value}:{b.reason_code}" for b in snapshot.blockers],
             "blocker_explanations": explain_codes(b.reason_code for b in snapshot.blockers),
+            "answers": self._instrument_answers(snapshot, kind=kind, identity=identity),
             "note": "explanation is composed from existing product facts (no LLM, no new truth)",
         }
+
+    # ------------------------------------------------------------------ instrument / venue Q&A
+
+    def _instrument_answers(self, snapshot: object, *, kind: str, identity: str) -> dict[str, str]:
+        """P0001.15 §27 的确定性问答（只组合既有事实；不推断、不调用 LLM）。
+
+        覆盖人类裁决第 6 条要求 Assistant 能回答的五个问题。
+        """
+        instrument = getattr(snapshot, "instrument", None)
+        venue = getattr(snapshot, "venue", None)
+        reference = getattr(snapshot, "reference_price", None)
+        answers: dict[str, str] = {}
+        if instrument is not None and instrument.product_type.known:
+            product = str(instrument.product_type.value)
+            asset = str(instrument.asset_class.value)
+            symbol = str(instrument.symbol.value)
+            spot_or_perp = ("SPOT（现货，不持有合约仓位）" if product == "SPOT"
+                            else f"{product}（{asset}）")
+            answers["spot_or_perpetual"] = (
+                f"{symbol} 是 {spot_or_perp}；instrument_id={instrument.instrument_id.value}，"
+                f"结算资产={instrument.settlement_asset.value}")
+            capabilities = instrument.capabilities.value if instrument.capabilities.known else {}
+            supports_short = capabilities.get("supports_short")
+            supports_reduce_only = capabilities.get("supports_reduce_only")
+            has_funding = capabilities.get("has_funding")
+            answers["why_short_and_reduce_only"] = (
+                f"supports_short={supports_short}，supports_reduce_only={supports_reduce_only}，"
+                f"has_funding={has_funding}（product semantics，由 instrument domain 声明，"
+                "不由 venue 名称推断）")
+        if venue is not None and venue.venue_id.known:
+            answers["venue_and_connectors"] = (
+                f"venue_id={venue.venue_id.value}（environment={venue.environment.value}）；"
+                f"market connector={venue.market_connector_id.value}；"
+                f"execution connector={venue.execution_connector_id.value}（两者 health 独立）")
+        if reference is not None:
+            if reference.known.known and reference.known.value:
+                answers["reference_price_source"] = (
+                    f"当前 reference price 来自 {reference.source.value}"
+                    f"（price_type={reference.price_type.value}，price={reference.price.value}，"
+                    f"as_of={reference.as_of.value}，freshness_ms={reference.freshness_ms.value}）")
+            else:
+                reason = reference.reason.value if reference.reason.known else "UNKNOWN"
+                answers["reference_price_source"] = (
+                    f"reference price 未知（reason={reason}）：正式 MARK 来源未提供事实 ⇒ 风险事实缺失，"
+                    "RiskGate 按既有规则 fail closed（新增暴露被拒绝）；"
+                    "本系统不会用 last trade / mid 冒充 mark price")
+        if kind in ("order", "decision") and identity:
+            answers["order_decision_link"] = self._order_decision_answer(snapshot, kind=kind,
+                                                                        identity=identity)
+        return answers
+
+    def _order_decision_answer(self, snapshot: object, *, kind: str, identity: str) -> str:
+        execution = getattr(snapshot, "execution", None)
+        orders = tuple(getattr(execution, "active_orders", ()) or ())
+        for order in orders:
+            if kind == "order" and order.client_order_id == identity:
+                decided = order.decision_id.value if order.decision_id.known else "UNKNOWN"
+                return (f"order {order.client_order_id} 来自 decision_id={decided}"
+                        f"（instrument={order.instrument_id.value if order.instrument_id.known else 'UNKNOWN'}，"
+                        f"venue={order.venue_id.value if order.venue_id.known else 'UNKNOWN'}）；"
+                        "关联来自订单自身的 canonical correlation metadata")
+            if kind == "decision" and order.decision_id.known and order.decision_id.value == identity:
+                return (f"decision_id={identity} 产生了 order {order.client_order_id}"
+                        "（由 OrderTracker 的 canonical correlation 反查）")
+        return f"未在 active orders 中找到与 {kind}={identity} 关联的订单（可能已终态或未提交）"
 
 
 __all__ = ["AssistantService"]

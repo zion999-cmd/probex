@@ -12,12 +12,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from execution.types import Order, OrderStatus
 from market.events.types import Milliseconds
 from portfolio.types import Side
-from risk.types import OrderProposal
+from risk.types import OrderCorrelation, OrderProposal
 from strategy.maker.types import MakerPolicyConfig, QuoteAction, QuoteDecision, QuoteTrigger
 
 
@@ -69,12 +69,35 @@ def plan_side_action(
     gate_trigger: QuoteTrigger | None = None,
     cancel_increasing: bool = False,
     cancel_all: bool = False,
+    correlation: OrderCorrelation | None = None,
 ) -> QuoteDecision:
     """把「该侧期望」与「该侧现有挂单」合成为一个确定性动作。
 
     `cancel_increasing`：全局门禁止新增暴露时，撤掉**非 reduce-only** 的现有报价；
     `cancel_all`：操作级熔断（HALT_ALL），撤掉该侧全部报价。
+
+    `correlation`（P0001.15 §15）：写入该侧提案的 canonical correlation metadata，
+    使其随 `OrderProposal → Order` 进入订单记录（不是 runtime 侧映射）。
     """
+    decision = _plan_side_action(
+        plan=plan, existing=existing, symbol=symbol, config=config, now_ms=now_ms,
+        gate_trigger=gate_trigger, cancel_increasing=cancel_increasing, cancel_all=cancel_all)
+    if correlation is None or decision.proposal is None:
+        return decision
+    return replace(decision, proposal=replace(decision.proposal, correlation=correlation))
+
+
+def _plan_side_action(
+    *,
+    plan: SidePlan,
+    existing: Order | None,
+    symbol: str,
+    config: MakerPolicyConfig,
+    now_ms: Milliseconds,
+    gate_trigger: QuoteTrigger | None = None,
+    cancel_increasing: bool = False,
+    cancel_all: bool = False,
+) -> QuoteDecision:
     preemptive = _preemptive_action(
         plan=plan,
         existing=existing,

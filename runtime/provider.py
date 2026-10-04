@@ -98,6 +98,8 @@ class MarketFeedProvider:
     history_account: object | None = None
     #: 真实事件驱动的 data timestamp 回调（composition root 用它推进 runtime 时间事实）
     on_data_timestamp: Callable[[int], None] | None = None
+    #: P0001.15 §11 人类裁决 1A：正式 MARK_PRICE 事件 → reference price source 的只写 sink
+    reference_price_sink: Callable[[object], None] | None = None
     _thread: threading.Thread | None = field(default=None, init=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False)
     _stats: dict[str, object] = field(default_factory=dict, init=False)
@@ -160,10 +162,12 @@ class MarketFeedProvider:
                 if self._stop.is_set():
                     self._stats["stopped_early"] = True
                     return
-                # TRADE 不是盘口 mutation（MarketBook 会拒绝）；只进成交历史，不喂 book/engine。
+                # 按事件类型路由：TRADE / MARK_PRICE 都不是盘口 mutation（MarketBook 会拒绝）。
                 is_trade = event.event_type is EventType.TRADE
+                is_mark = event.event_type is EventType.MARK_PRICE
+                is_book = event.event_type in (EventType.BOOK_SNAPSHOT, EventType.BOOK_DELTA)
                 state = self._stats.get("last_state")
-                if not is_trade:
+                if is_book:
                     self.book.on_market_event(event)
                     state = self.engine.on_market_event(event)
                     self.history.feed_snapshot(self._book_snapshot(event.exchange_ts))
@@ -180,12 +184,22 @@ class MarketFeedProvider:
                     if sample is not None:
                         self.history_account.feed(sample)
                 transition = self.book.last_transition
-                if not is_trade and transition is not None:
+                if is_book and transition is not None:
                     self.history.feed_health(self._health_segment(transition, event.exchange_ts))
                 payload = event.payload
                 if isinstance(payload, TradePayload):
                     self.history.feed_trade(self._trade_print(payload, event.exchange_ts))
                     self._stats["trade_events"] = int(self._stats.get("trade_events", 0)) + 1
+                if is_mark:
+                    # 正式 MARK 事实只进入 reference price source（**不**进盘口/feature，也不冒充 last trade）
+                    self._stats["mark_events"] = int(self._stats.get("mark_events", 0)) + 1
+                    if self.reference_price_sink is not None:
+                        try:
+                            self.reference_price_sink(event)
+                        except Exception as exc:  # noqa: BLE001 - sink 失败不得打断 feed
+                            self._stats["mark_sink_errors"] = int(
+                                self._stats.get("mark_sink_errors", 0)) + 1
+                            self._stats["mark_sink_last_error"] = type(exc).__name__
                 if self.on_data_timestamp is not None:
                     try:
                         self.on_data_timestamp(int(event.exchange_ts))
@@ -195,6 +209,7 @@ class MarketFeedProvider:
                         self._stats["data_timestamp_last_error"] = type(exc).__name__
                 self._stats.update({"events": int(self._stats.get("events", 0)) + 1,
                                    "last_ts": int(event.exchange_ts),
+                                   "last_process_ts": int(event.process_ts),
                                    "last_state": state,
                                    "last_health": self.book.health.value,
                                    "last_event_type": event.event_type.value})

@@ -15,7 +15,7 @@ Provider identity 核实（决策 D，提案 §1.7）与授权探测 P1/P2（提
   P2 单条 `noul` 探针 → HTTP 200、604 ms、`answers.ok={type:noul,noul:0.99}`、cost 1.1634e-05。
 - **热路径 Jev 的真实目标应为 `/api/v1/systemone`**；实现 typed provider 需新提案（尚未授权、尚未改代码）。
 
-`context/status.json` 的 `currentProposal` 为 **`null`**（**P0001.14 已于 2026-10-03 完成**；
+`context/status.json` 的 `currentProposal` 为 **`null`**（**P0001.14 与 P0001.15 均已于 2026-10-03 完成**；
 未获人类切换授权，故按 CLAUDE.md §5 置 `null`，不得据此推断下一阶段）。
 
 > 历史说明（superseded）：本文件早期段落中的 `"P0001.9.7"` / 各 P0001.9.x 状态描述只反映当时事实；
@@ -794,3 +794,59 @@ detached worktree（`7987cd5`，无 `node_modules` / 无未跟踪文件）复核
 3. **PAPER 的 mark price 来源**：既有契约明确"不使用 last trade"，产品路径目前没有任何 mark price 注入点；
    未注入时风险事实缺失 ⇒ `RiskGate` fail closed（既有语义）。若需要，须由人类裁决 mark price 事实来源。
 4. `RiskLimits` 生产限额数值（同上，全为调用方配置）。
+
+## P0001.15 Instrument Domain + Venue Integration Contract（已完成，2026-10-03）
+
+**状态**：已完成；`proposals/P0001.15-instrument-domain-venue-integration-contract.md` 状态 = 已完成；
+`context/status.json.currentProposal` = `null`（未获切换到 P0001.16 或其它阶段的授权）。
+
+### 已完成能力
+
+- **Instrument Domain**（`domain/instruments/`）：正式 `InstrumentSpec`（identity / asset class / product type /
+  base-quote-settle / declared 参数 / capabilities / reference price policy）+ `InstrumentRegistry`。
+  当前生产实例 = `paper:BTCUSDT` / `CRYPTO` / `PERPETUAL`；EQUITY / FUTURE 只有 vocabulary（SC-19）。
+  **instrument semantics 与 venue rules 分离**：执行以 venue rules（`TradingRules` / `venue.rules.*`）为准，
+  instrument 的 declared 参数只做只读比对（`venue_rules_discrepancies`）。
+- **Venue Integration**（`venue/`）：`VenueIdentity{venue_id, venue_type, environment}`（正交，含合法组合校验）；
+  `MarketDataConnector` 与 `PrivateExecutionConnector` 两个**正交**契约（刻意不做万能 gateway）；
+  两者 health 完全独立（`MarketConnectorHealth` / `PrivateConnectorHealth`，无单一 `connected`）。
+- **Connector adapters**：`PaperExecutionConnector`（唯一 `PaperBroker` 的统一 execution seam：`ExecutionEngine →
+  PrivateExecutionConnector → PaperExecutionConnector → PaperBroker`）、`PaperMarketDataConnector`（本地 event store
+  行情事实投影）、`BinanceMarketDataConnector` / `BinancePrivateExecutionConnector`（薄 adapter，复用既有
+  REST/WS/user stream/exchangeInfo/recovery/rate limit/UNKNOWN 语义，未重写 client）。
+- **ReferencePrice contract**（`venue/reference_price.py`）：`PriceType{MARK,MID,INDEX,LAST}`；
+  风险/会计路径**只接受** `MARK`，`LAST` 在 policy 构造期即被结构性拒绝；正式来源 = 统一事件 `MARK_PRICE`
+  （Binance `markPriceUpdate` 归一化）。无正式来源 ⇒ `UNKNOWN` + reason（fail-closed），**不**回退到 last trade。
+- **MARK 事实链（工程闭环完整）**：`MARK_PRICE` event → `MarketFeedProvider.reference_price_sink` →
+  `MarkPriceReferenceSource` → decision loop 在**同一线程**、紧邻快照前注入 `AccountingCore.update_mark_price`
+  （仅 known 时注入）→ `RiskSnapshot.mark_price` → RiskGate → PAPER execution。
+- **Order ↔ Decision canonical correlation**（人类裁决 2）：`OrderCorrelation{decision_id, instrument_id, venue_id,
+  prediction_id, market_state_hash}` 随 `MakerDecision → OrderProposal → Order` 进入 canonical order record；
+  `OrderTracker.orders_for_decision()` 提供反查。**不存在** runtime 侧或产品侧 decision↔order 映射
+  （产品层 P0001.14 的 `_decision_index` 已删除）。
+- **Product / UI**：`InstrumentView` / `VenueView` / `ReferencePriceView` / 两个 `ConnectorHealth`；
+  `OrderView` 增加 instrument/venue/prediction/venue_order_id；trace 每个阶段带 instrument/venue identity；
+  `GET /api/v1/instrument`；`GET /api/v1/decisions/orders?decision_id=`（SC-27）；
+  UI：Monitor / Market / Activity / Orders(detail) / System(instruments + connections) / Assistant(五个确定性问答)。
+
+### 验收（人类裁决 + SC-24…SC-28）
+
+- **SC-24 PASS**：含 `MARK_PRICE` fixture → reference price known（`source=market_event.mark_price`, price=60000）
+  → Risk 允许 → 唯一 `PaperBroker` 产生 `OPEN` 订单 + ack（自然决策，非手工 smoke order）。
+- **SC-25 PASS**：无 `MARK_PRICE` → `ReferencePrice UNKNOWN` → `mark_price=None` → 决策 `NONE`、零下单。
+- **SC-26 PASS**：correlation 存在于订单记录；loop 与 product 均无映射（守卫断言）。
+- **SC-27 PASS**：`Order → Decision` 与 `Decision → Order(s)` 双向可查（tracker + `/api/v1/decisions/orders` + UI）。
+- **SC-28 PASS**：两个 connector health 独立且真实出现过不同状态。
+- **验收 C PASS（离线）**：Binance 两个 connector 各自暴露 health/facts（未发真实交易）。
+- **验收 F PASS**：真实浏览器 7 张截图在 `artifacts/p0001.15/`（含可见文本断言 JSON）。
+- **§G 守卫 PASS**：Strategy/Risk 不 import venue/connectors；Product 不 import connectors；ExecutionEngine 不依赖
+  Binance 实现；feed 不持有 broker；instrument domain 不依赖 venue；无 `VenueGateway`；`PaperBroker` 单构造点。
+- 全量测试 **2401 passed / 0 failed / 24 skipped**（新增 54；连续两次通过）。
+
+### 已知限制（不阻塞本阶段）
+
+1. 真实 TESTNET/LIVE 写链仍归既有 `LiveExecutionOrchestrator`（本阶段未改其语义，Binance connector 只做事实投影）。
+2. REPLAY/PAPER 的 MARK 取决于 event store 是否含 `MARK_PRICE` 事件；**不得**因为测试 fixture 有 MARK 就声称
+   真实 Binance/PAPER 已获得实时 mark（人类裁决 1E）。
+3. `INDEX` 只有 vocabulary（本阶段无正式 index price 来源）。
+4. EQUITY / FUTURE 只有 vocabulary（无股票/期货/多 venue 实现，SC-19）。

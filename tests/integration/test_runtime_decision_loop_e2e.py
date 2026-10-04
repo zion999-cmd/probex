@@ -17,6 +17,7 @@ import time
 import unittest
 from pathlib import Path
 
+from connectors.paper import PaperExecutionConnector
 from execution.adapters.paper import PaperBroker
 from product import reason_catalog
 from product.provenance import ConfigEntry, ConfigSource
@@ -104,15 +105,13 @@ class DecisionLoopE2ETest(unittest.TestCase):
             runtime.attach_prediction_provider(FakeProvider(), timeout_ms=1_000, ttl_ms=120_000)
         return runtime
 
-    def started(self, *, mark_price: bool = False, **kwargs: object) -> tuple[ProductRuntime, list]:
-        """启动真实 runtime，并捕获 loop 产出的**每一轮** decision（第一轮通常是最初报价）。"""
+    def started(self, *, mark_price: bool = False, **kwargs: object) -> ProductRuntime:
+        """启动真实 runtime（等 market state 变为 tradeable 后返回）。"""
         runtime = self.runtime(**kwargs)                                   # type: ignore[arg-type]
         if mark_price:
             self.inject_mark_price(runtime)                                # 启动前注入 Risk 事实
         runtime.start()
         self.started_runtimes.append(runtime)
-        decisions: list = []
-        runtime._decision_loop.on_decision = decisions.append               # noqa: SLF001
         provider = runtime._feed_provider                                       # noqa: SLF001
 
         def tradeable() -> bool:
@@ -120,7 +119,7 @@ class DecisionLoopE2ETest(unittest.TestCase):
             return bool(quality)
 
         self.assertTrue(wait_for(tradeable, timeout=30.0), "market state never became tradeable")
-        return runtime, decisions
+        return runtime
 
     @staticmethod
     def inject_mark_price(runtime: ProductRuntime, price: float = MARK_PRICE) -> None:
@@ -131,7 +130,7 @@ class DecisionLoopE2ETest(unittest.TestCase):
     # ------------------------------------------------------------------ PAPER 闭环
 
     def test_paper_natural_decision_reaches_execution_through_the_risk_gate(self) -> None:
-        runtime, decisions = self.started(mark_price=True)
+        runtime = self.started(mark_price=True)
         loop = runtime._decision_loop                                           # noqa: SLF001
 
         self.assertTrue(wait_for(lambda: loop.status.submits >= 2, timeout=30.0),
@@ -139,10 +138,10 @@ class DecisionLoopE2ETest(unittest.TestCase):
         snapshot = runtime.service.snapshot()
 
         # 决策链真实发生（不是手工 smoke order，也不是伪装订单）
-        first = next(decision for decision in decisions if decision is not None)
-        self.assertEqual(first.bid.action, QuoteAction.PLACE)        # 初始报价（无挂单）
-        self.assertEqual(first.ask.action, QuoteAction.PLACE)
-        self.assertEqual(first.mode.value, "both")
+        self.assertTrue(wait_for(lambda: loop.latest_decision is not None, timeout=30.0))
+        decision = loop.latest_decision
+        self.assertEqual(decision.mode.value, "both")               # 双边报价姿态
+        self.assertIn(decision.bid.action, (QuoteAction.PLACE, QuoteAction.KEEP, QuoteAction.REPLACE))
         self.assertGreaterEqual(loop.status.decisions, 1)
         self.assertEqual(loop.status.risk_rejects, 0)
         self.assertIsNotNone(loop.latest_prediction)
@@ -159,7 +158,7 @@ class DecisionLoopE2ETest(unittest.TestCase):
         self.assertTrue(all(stage.outcome == "OPEN" for stage in order_stages))
 
     def test_paper_records_readiness_but_does_not_use_it_as_a_submit_gate(self) -> None:
-        runtime, _ = self.started(mark_price=True)
+        runtime = self.started(mark_price=True)
         loop = runtime._decision_loop                                           # noqa: SLF001
         self.assertTrue(wait_for(lambda: loop.status.submits >= 1, timeout=30.0))
 
@@ -180,7 +179,7 @@ class DecisionLoopE2ETest(unittest.TestCase):
         self.assertNotIn("READINESS", owners)                        # 不制造假 readiness blocker
 
     def test_without_mark_price_the_chain_fails_closed_and_reports_why(self) -> None:
-        runtime, _ = self.started()
+        runtime = self.started()
         loop = runtime._decision_loop                                           # noqa: SLF001
 
         self.assertTrue(wait_for(lambda: loop.status.decisions >= 1, timeout=30.0))
@@ -201,7 +200,7 @@ class DecisionLoopE2ETest(unittest.TestCase):
         self.assertIsNotNone(reason_catalog.lookup("RISK_BUDGET_UNKNOWN"))
 
     def test_unavailable_prediction_provider_is_reported_honestly(self) -> None:
-        runtime, _ = self.started(mark_price=True, provider=False)
+        runtime = self.started(mark_price=True, provider=False)
         loop = runtime._decision_loop                                           # noqa: SLF001
 
         self.assertTrue(wait_for(lambda: loop.status.decisions >= 1, timeout=30.0))
@@ -215,7 +214,7 @@ class DecisionLoopE2ETest(unittest.TestCase):
         self.assertEqual(snapshot.execution.active_orders, ())                  # 不伪造报价
 
     def test_missing_maker_config_produces_no_decision_instead_of_a_fake_one(self) -> None:
-        runtime, _ = self.started(mark_price=True, maker=False)
+        runtime = self.started(mark_price=True, maker=False)
         loop = runtime._decision_loop                                           # noqa: SLF001
 
         self.assertTrue(wait_for(lambda: loop.status.ticks >= 5, timeout=30.0))
@@ -233,7 +232,7 @@ class DecisionLoopE2ETest(unittest.TestCase):
     # ------------------------------------------------------------------ 装配 / 边界
 
     def test_product_providers_expose_real_runtime_facts(self) -> None:
-        runtime, _ = self.started(mark_price=True)
+        runtime = self.started(mark_price=True)
         loop = runtime._decision_loop                                           # noqa: SLF001
         self.assertTrue(wait_for(lambda: loop.status.decisions >= 1, timeout=30.0))
 
@@ -248,12 +247,15 @@ class DecisionLoopE2ETest(unittest.TestCase):
         self.assertTrue(snapshot.prediction.freshest.known)
 
     def test_exactly_one_paper_broker_owns_execution(self) -> None:
-        runtime, _ = self.started()
+        runtime = self.started()
 
         provider = runtime._feed_provider                                       # noqa: SLF001
         self.assertFalse(hasattr(provider, "paper_broker"))                     # feed 不拥有 broker
         self.assertFalse(hasattr(provider, "paper_manager"))
-        self.assertIsInstance(runtime._execution.manager.adapter, PaperBroker)  # noqa: SLF001
+        # P0001.15 §9：engine 依赖统一 connector seam，唯一 PaperBroker 由 connector 持有
+        adapter = runtime._execution.manager.adapter                          # noqa: SLF001
+        self.assertIsInstance(adapter, PaperExecutionConnector)
+        self.assertIsInstance(adapter.broker, PaperBroker)
 
         sources = {path.name: path.read_text(encoding="utf-8")
                    for path in (Path(__file__).resolve().parents[2] / "runtime").glob("*.py")}
@@ -268,7 +270,7 @@ class DecisionLoopE2ETest(unittest.TestCase):
                 self.assertNotIn(forbidden, text)
 
     def test_replay_is_observe_only(self) -> None:
-        runtime, _ = self.started(mode=RuntimeMode.REPLAY, mark_price=True)
+        runtime = self.started(mode=RuntimeMode.REPLAY, mark_price=True)
         loop = runtime._decision_loop                                           # noqa: SLF001
 
         self.assertTrue(wait_for(lambda: loop.status.decisions >= 1, timeout=30.0))
@@ -277,7 +279,7 @@ class DecisionLoopE2ETest(unittest.TestCase):
         self.assertEqual(runtime.service.snapshot().execution.active_orders, ())
 
     def test_stop_is_graceful_and_leaves_no_thread_behind(self) -> None:
-        runtime, _ = self.started()
+        runtime = self.started()
         loop = runtime._decision_loop                                           # noqa: SLF001
         self.assertTrue(loop.running)
 

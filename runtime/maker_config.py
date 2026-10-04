@@ -45,8 +45,13 @@ LOOP_KEYS: tuple[tuple[str, str], ...] = (
 )
 
 
-def build_maker_policy(values: dict[str, Any]) -> object | None:
-    """全部键齐备才构造 `MakerPolicy`；否则 None（不编造业务数值）。"""
+def build_maker_policy(values: dict[str, Any], *, instrument_id: str = "",
+                       venue_id: str = "") -> object | None:
+    """全部键齐备才构造 `MakerPolicy`；否则 None（不编造业务数值）。
+
+    `instrument_id` / `venue_id` 是 deployment identity（由 composition root 从 instrument domain /
+    venue identity 注入，不是操作者填写的业务数值），用于 P0001.15 §15 的 correlation metadata。
+    """
     if any(key not in values for key, _, _ in MAKER_KEYS):
         return None
     from strategy.maker.policy import MakerPolicy
@@ -55,6 +60,8 @@ def build_maker_policy(values: dict[str, Any]) -> object | None:
     kwargs: dict[str, Any] = {}
     for key, field, coerce in MAKER_KEYS:
         kwargs[field] = coerce(values[key])
+    kwargs["instrument_id"] = instrument_id
+    kwargs["venue_id"] = venue_id
     return MakerPolicy(MakerPolicyConfig(**kwargs))
 
 

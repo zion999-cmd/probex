@@ -10,7 +10,8 @@ from enum import Enum
 from typing import TypeAlias
 
 from market.events.errors import InvalidEventError
-from market.events.payloads import BookDeltaPayload, BookSnapshotPayload, TradePayload
+from market.events.payloads import (BookDeltaPayload, BookSnapshotPayload, MarkPricePayload,
+                                    TradePayload)
 
 #: Unix epoch 毫秒（UTC）。交易所报文本身使用毫秒。
 Milliseconds: TypeAlias = int
@@ -40,12 +41,13 @@ class EventType(Enum):
 
 
 #: 已具备载荷类型的事件载荷联合。
-MarketPayload: TypeAlias = BookSnapshotPayload | BookDeltaPayload | TradePayload
+MarketPayload: TypeAlias = BookSnapshotPayload | BookDeltaPayload | TradePayload | MarkPricePayload
 
 _PAYLOAD_EVENT_TYPES: dict[type, EventType] = {
     BookSnapshotPayload: EventType.BOOK_SNAPSHOT,
     BookDeltaPayload: EventType.BOOK_DELTA,
     TradePayload: EventType.TRADE,
+    MarkPricePayload: EventType.MARK_PRICE,
 }
 
 #: 必须携带 sequence 的事件类型。

@@ -4,7 +4,7 @@
  * 下方保留 L2 heatmap（微观结构）与 order book / recent trades / prediction / features。
  */
 import { ENDPOINTS, fetchJson, fetchSnapshot } from "/ui/client/api.js";
-import { escapeHtml, rows, section, table, valueView } from "/ui/client/render.js";
+import { escapeHtml, fact, rows, section, table, valueView } from "/ui/client/render.js";
 import { HEATMAP_NOTE, drawHeatmap } from "/ui/pages/market/heatmap.js";
 import { boundsNote, decisionTable, executionTable, tradesTable } from "/ui/pages/market/overlays.js";
 import { replayControls } from "/ui/pages/market/replay.js";
@@ -29,6 +29,25 @@ function orderBookRows(depth) {
   const last = (payload.cells || []).slice(-12).reverse();
   return table(["side", "price", "visible qty"], last.map((cell) =>
     [escapeHtml(cell.side), escapeHtml(String(cell.price)), escapeHtml(String(cell.quantity))]));
+}
+
+/** P0001.15 §23：Market 页面明确 instrument / venue / market data source / MARK 状态。 */
+function instrumentVenueSection(snapshot) {
+  const instrument = snapshot.instrument || {};
+  const venue = snapshot.venue || {};
+  const reference = snapshot.reference_price || {};
+  const connector = snapshot.market_connector_health || {};
+  const extras = connector.extras && connector.extras.known ? connector.extras.value : {};
+  return section("Instrument / market data source", rows([
+    ["instrument", `${fact(instrument.instrument_id)} · ${fact(instrument.asset_class)} · ${fact(instrument.product_type)}`],
+    ["venue", `${fact(venue.venue_id)} (${fact(venue.environment)})`],
+    ["market connector", `${fact(connector.connector_id)} · ${fact(connector.connection_state)}`],
+    ["data source", escapeHtml(String(extras.data_source || "UNKNOWN"))],
+    ["mark / reference price", `${fact(reference.price_type)} ${fact(reference.price)}`],
+    ["reference source", fact(reference.source)],
+    ["reference freshness (ms)", fact(reference.freshness_ms)],
+    ["reference reason", fact(reference.reason)],
+  ]));
 }
 
 export async function render(rest = []) {
@@ -91,7 +110,7 @@ export async function render(rest = []) {
     `<section><h2>Execution</h2>${executionTable(overlays.overlays)}</section>` +
     `<section><h2>Replay controls</h2><div id="replay-controls"></div>` +
       '<div class="muted">play / pause / step / speed / seek 与 K 线 cursor/time window 同步</div></section>' +
-    section("Projection bounds", boundsNote(depth));
+    section("Projection bounds", boundsNote(depth)) + instrumentVenueSection(snapshot);
 
   lastMarket = { candles1m, trace, focusTs, depth, symbol: snapshot.runtime.symbol };
   return header + body;

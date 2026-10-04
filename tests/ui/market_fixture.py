@@ -10,17 +10,25 @@ from pathlib import Path
 
 from market.events.payloads import AggressorSide
 from market.events.types import MarketEvent
-from tests.support import BASE_TS, depth_snapshot_event, trade_event, write_store
+from tests.support import BASE_TS, depth_snapshot_event, mark_price_event, trade_event, write_store
 
 #: 与 trial 配置一致的时间窗口起点（便于 candle 对齐）
 START_TS = BASE_TS
 DEFAULT_HOURS = 3
 DEFAULT_STEP_MS = 5_000
+#: 注入 MARK_PRICE 事件的默认间隔（测试事实；仅当显式给出 mark_price 时生效）
+DEFAULT_MARK_STEP_MS = 30_000
 
 
 def build_market_events(*, hours: int = DEFAULT_HOURS, step_ms: int = DEFAULT_STEP_MS,
-                        seed: int = 7) -> list[MarketEvent]:
-    """随机游走价格 + 每步一笔成交 + 每步一个盘口快照（确定性）。"""
+                        seed: int = 7, mark_price: float | None = None,
+                        mark_step_ms: int = DEFAULT_MARK_STEP_MS) -> list[MarketEvent]:
+    """随机游走价格 + 每步一笔成交 + 每步一个盘口快照（确定性）。
+
+    `mark_price`（P0001.15 §12 / 人类裁决 1B–1C）：给出时按 `mark_step_ms` 注入**明确**的
+    `MARK_PRICE` 事件 —— 这是**测试市场事实**，不是把 last trade / mid 转换成 MARK。
+    `None` ⇒ 不含任何 MARK 事件（用于验证 UNKNOWN → fail-closed 路径）。
+    """
     rng = random.Random(seed)
     price = 60_000.0
     events: list[MarketEvent] = []
@@ -47,14 +55,20 @@ def build_market_events(*, hours: int = DEFAULT_HOURS, step_ms: int = DEFAULT_ST
         events.append(depth_snapshot_event(update_id, bids=bids, asks=asks, exchange_ts=ts,
                                            receive_ts=ts, process_ts=ts))
         update_id += 1
+        if mark_price is not None and mark_step_ms > 0 and index % max(1, mark_step_ms // step_ms) == 0:
+            events.append(mark_price_event(price=mark_price, exchange_ts=ts, receive_ts=ts, process_ts=ts))
     return events
 
 
 def write_market_store(path: Path, *, hours: int = DEFAULT_HOURS,
-                       step_ms: int = DEFAULT_STEP_MS, seed: int = 7) -> tuple[int, int]:
-    events = build_market_events(hours=hours, step_ms=step_ms, seed=seed)
+                       step_ms: int = DEFAULT_STEP_MS, seed: int = 7,
+                       mark_price: float | None = None,
+                       mark_step_ms: int = DEFAULT_MARK_STEP_MS) -> tuple[int, int]:
+    events = build_market_events(hours=hours, step_ms=step_ms, seed=seed, mark_price=mark_price,
+                                mark_step_ms=mark_step_ms)
     write_store(path, events)
     return len(events), 2 * int(hours * 3_600_000 / step_ms)
 
 
-__all__ = ["DEFAULT_HOURS", "DEFAULT_STEP_MS", "START_TS", "build_market_events", "write_market_store"]
+__all__ = ["DEFAULT_HOURS", "DEFAULT_MARK_STEP_MS", "DEFAULT_STEP_MS", "START_TS", "build_market_events",
+           "write_market_store"]

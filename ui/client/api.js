@@ -10,6 +10,10 @@ export const ENDPOINTS = {
   orders: "/api/v1/orders",
   portfolio: "/api/v1/portfolio",
   readiness: "/api/v1/readiness",
+  instrument: "/api/v1/instrument",
+  decisionOrders: "/api/v1/decisions/orders",
+  assistantContext: "/api/v1/assistant/context",
+  assistantExplain: "/api/v1/assistant/explain",
   evidence: "/api/v1/evidence",
   runSummary: "/api/v1/reports/run-summary",
   metrics: "/api/v1/metrics",
@@ -91,4 +95,16 @@ export async function fetchRunSummary() {
   } catch (error) {
     return { unavailable: String(error) };
   }
+}
+
+/** P0001.15 §27：deterministic explain（instrument / venue / reference price / order / decision）。 */
+export async function explain(kind, identity) {
+  const query = `?kind=${encodeURIComponent(kind)}&identity=${encodeURIComponent(identity || "")}`;
+  const payload = await fetchJson(`${ENDPOINTS.assistantExplain}${query}`);
+  return payload.explanation || {};
+}
+
+/** P0001.15 §15/SC-27：`Decision → Order(s)` 反查（由 canonical correlation 提供）。 */
+export async function fetchDecisionOrders(decisionId) {
+  return fetchJson(`${ENDPOINTS.decisionOrders}?decision_id=${encodeURIComponent(decisionId)}`);
 }

@@ -19,7 +19,7 @@ from portfolio.position import Position
 from portfolio.types import Side
 from prediction.types import PredictionRecord
 from market.events.types import Milliseconds
-from risk.types import KillSwitchMode, RiskSnapshot
+from risk.types import KillSwitchMode, OrderCorrelation, RiskSnapshot
 from strategy.maker.inventory import InventoryBias, compute_inventory_bias
 from strategy.maker.lifecycle import SidePlan, plan_side_action
 from strategy.maker.pricing import PricePlan, plan_quote_price
@@ -173,6 +173,8 @@ class MakerPolicy:
             remaining_risk_budget=remaining_risk_budget,
             kill_switch=kill_switch,
         )
+        decision_id = self._decision_identity(state=state, prediction=prediction, now_ms=snapshot.now_ms)
+        correlation = self._correlation(decision_id=decision_id, state=state, prediction=prediction)
         gate = evaluate_global_gate(
             state=state,
             prediction=prediction,
@@ -194,6 +196,7 @@ class MakerPolicy:
             gate=gate,
             now_ms=snapshot.now_ms,
             existing_orders=existing_orders,
+            correlation=correlation,
         )
         return _assemble(
             symbol=state.identity.symbol,
@@ -201,7 +204,36 @@ class MakerPolicy:
             plans=plans,
             decisions=decisions,
             gate=gate,
+            decision_id=decision_id,
         )
+
+    # ------------------------------------------------------------------ correlation（P0001.15 §15）
+
+    def _decision_identity(self, *, state: MarketState, prediction: PredictionRecord | None,
+                           now_ms: Milliseconds) -> str:
+        """稳定 / 确定性的决策身份：同一输入 ⇒ 同一 id（无需额外 owner 维护计数器）。
+
+        直接复用既有 `market_state_hash`（内容寻址摘要）的摘要段 + 决策时刻，
+        因此本层无需引入新的哈希依赖，也不需要 runtime 侧计数器。
+        """
+        from prediction.schema import market_state_hash
+
+        digest = market_state_hash(state).split(":", 1)[-1][:12]
+        return f"d-{digest}-{int(now_ms)}"
+
+    def _correlation(self, *, decision_id: str, state: MarketState,
+                     prediction: PredictionRecord | None) -> OrderCorrelation | None:
+        """correlation metadata：instrument / venue 由 config 注入；缺身份 ⇒ 不伪造（返回 None）。"""
+        if not self._config.instrument_id and not self._config.venue_id:
+            return None
+        from prediction.schema import market_state_hash
+
+        return OrderCorrelation(
+            decision_id=decision_id,
+            instrument_id=self._config.instrument_id or None,
+            venue_id=self._config.venue_id or None,
+            prediction_id=None if prediction is None else str(prediction.request_id),
+            market_state_hash=market_state_hash(state))
 
     def _side_plans(
         self,
@@ -237,6 +269,7 @@ class MakerPolicy:
         gate: GlobalGate,
         now_ms: int,
         existing_orders: tuple[Order, ...],
+        correlation: OrderCorrelation | None = None,
     ) -> tuple[QuoteDecision, QuoteDecision]:
         decisions = tuple(
             plan_side_action(
@@ -248,6 +281,7 @@ class MakerPolicy:
                 gate_trigger=gate.trigger,
                 cancel_increasing=gate.cancel_increasing_quotes,
                 cancel_all=gate.cancel_all_quotes,
+                correlation=correlation,
             )
             for plan in plans
         )
@@ -410,6 +444,7 @@ def _assemble(
     plans: tuple[SidePlan, SidePlan],
     decisions: tuple[QuoteDecision, QuoteDecision],
     gate: GlobalGate,
+    decision_id: str = "",
 ) -> MakerDecision:
     return MakerDecision(
         symbol=symbol,
@@ -420,6 +455,7 @@ def _assemble(
         ask_desired=plans[1].desired,
         blocked_by=gate.trigger,
         detail=gate.detail,
+        decision_id=decision_id,
     )
 
 

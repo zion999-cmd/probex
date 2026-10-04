@@ -2165,3 +2165,77 @@ P0001.14（`proposals/P0001.14-runtime-decision-loop-integration.md`，状态 **
 
 - **不启动 P0001.15**（Instrument/Venue Domain）—— 需人类落盘新 Proposal 并明确下达实施指令。
 - 若人类要求"产品级真实下单"，需先补齐上述 1./2./4. 的业务数值与事实来源。
+
+## 2026-10-03：P0001.15 Instrument Domain + Venue Integration Contract（已完成）
+
+### 当前 Proposal
+
+P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null`（未获切换到下一阶段的授权 —— 不自行启动）。
+
+### 本次新增（要点）
+
+- `domain/instruments/{model,capabilities,registry}.py`：`InstrumentSpec` / `AssetClass` / `ProductType` /
+  `PriceType` / `ReferencePricePolicy` / `InstrumentCapabilities` / `InstrumentRegistry`。
+- `venue/{identity,contracts,health,reference_price}.py`：`VenueIdentity`、两个正交 connector 契约 +
+  `classify_submission`、两个独立 health、`ReferencePrice` + `MarkPriceReferenceSource` +
+  `ReferencePriceProvider.for_risk`。
+- `connectors/paper/{execution,market_connector}.py`、`connectors/binance/{market_connector,execution_connector}.py`。
+- `api/routes/instrument.py`（`GET /api/v1/instrument`）。
+- 测试：`tests/unit/test_instrument_venue_contracts.py`(24)、`tests/unit/test_venue_architecture_guards.py`(12)、
+  `tests/integration/test_venue_integration_e2e.py`(9)、`tests/integration/test_binance_connector_contract.py`(9)。
+- 测试资产：`tests/ui/venue_demo.py`、`tests/ui/capture_venue.mjs`、`artifacts/p0001.15/*.png`（7 张真实截图 +
+  `venue_capture.json` 可见文本断言）。
+
+### 本次修改（要点）
+
+- 统一事件契约新增 `MarkPricePayload`（`market/events/*`、`storage/events/codec.py`），`runtime/provider.py`
+  按事件类型路由并新增 `reference_price_sink`。
+- `risk/types.py`：`OrderCorrelation` + `OrderProposal.correlation`；`execution/{types,tracker,manager,engine}.py`
+  携带并反查 correlation。
+- `strategy/maker/{types,policy,lifecycle}.py`：`MakerDecision.decision_id`、`MakerPolicyConfig.instrument_id/venue_id`、
+  提案携带 correlation。
+- `runtime/{assembly,decision_loop,provider,maker_config}.py`：instrument/venue/reference-price 装配、
+  `pre_snapshot` 钩子（同线程注入正式 MARK）、`PaperExecutionConnector` 作为唯一 execution seam、
+  两个 connector 的 health provider、stop 时各自断开。
+- `product/{types,snapshot,service}.py`：新视图 + trace identity + 删除产品侧 decision 映射 + `decision_orders()`。
+- `assistant/{context,service}.py`：instrument/venue/reference-price 上下文 + 五个确定性问答。
+- `api/{server.py,routes/__init__.py}`：`/api/v1/decisions/orders` + `READ_PATHS`。
+- UI：Monitor / Market / Activity / Orders(detail) / System(instruments, connections) / Assistant drawer。
+
+### 本次删除
+
+- `product/service.py::_decision_index`（产品侧 side mapping，已由订单 canonical correlation 取代）。
+- `MarketFeedProvider.paper_broker/paper_manager` 的残留引用（P0001.14 已删字段，本次清理守卫与文档表述）。
+
+### Acceptance 结果
+
+- SC-24 PASS（MARK fixture → reference price known → Risk allow → PAPER 唯一 PaperBroker 产生 OPEN 订单 + ack）。
+- SC-25 PASS（无 MARK fixture → UNKNOWN + `REFERENCE_PRICE_MARK_UNAVAILABLE` → `NONE`、零下单）。
+- SC-26 PASS（correlation 在订单记录；loop/product 均无映射，守卫断言）。
+- SC-27 PASS（Order→Decision / Decision→Order 双向：tracker + API + UI）。
+- SC-28 PASS（两个 connector health 独立，真实出现不同状态）。
+- 验收 A/B/C(离线)/D/E/F PASS；§G 守卫 PASS。
+
+### 测试结果
+
+- 全量 **2401 passed / 0 failed / 24 skipped**（新增 54；连续两次通过）。
+- 真实浏览器：7 张截图（Monitor / Market / Activity / Order detail / System connections / System instruments /
+  Assistant 五个问答），每张都带可见文本断言（`artifacts/p0001.15/venue_capture.json`）。
+
+### 风险 / 已知问题
+
+1. 真实 TESTNET/LIVE 写链未改动（仍归既有 `LiveExecutionOrchestrator`）；Binance connector 只做事实投影，
+   本阶段不新增真实交易路径。
+2. REPLAY/PAPER 的 MARK 取决于 event store 是否含 `MARK_PRICE` 事件；**不得**由 fixture 有 MARK 推断真实
+   Binance/PAPER 已获得实时 mark（人类裁决 1E）。
+3. `INDEX` 无正式来源（只有 vocabulary）；EQUITY/FUTURE 无实现（SC-19）。
+4. `OrderView.venue_order_id` 在 PAPER 下为 UNKNOWN（paper 不分配外部订单号，不伪造）。
+5. 历史 run 的 equity/K 线序列仍未持久化（既有 UX 缺口）。
+
+### 阻塞
+
+无实现阻塞。待人类决定（不阻塞本阶段）：是否进入 P0001.16（若需 multi-venue / 股票期货等，必须另立 Proposal）。
+
+### 下一步
+
+- **不启动下一 Proposal** —— 需人类落盘新 Proposal 并明确下达「读取 … 实施」指令。

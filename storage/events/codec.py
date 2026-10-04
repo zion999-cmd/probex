@@ -26,7 +26,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from market.events.errors import MarketEventError
-from market.events.payloads import AggressorSide, BookDeltaPayload, BookSnapshotPayload, PriceLevel, TradePayload
+from market.events.payloads import (AggressorSide, BookDeltaPayload, BookSnapshotPayload,
+                                    MarkPricePayload, PriceLevel, TradePayload)
 from market.events.types import EventType, MarketEvent, Milliseconds, Venue
 
 from storage.events.errors import (
@@ -189,7 +190,9 @@ def decode_event(raw: object) -> MarketEvent:
         raise EventStoreFormatError(f"record.event: {exc}") from exc
 
 
-def _encode_payload(payload: BookSnapshotPayload | BookDeltaPayload | TradePayload) -> dict[str, object]:
+def _encode_payload(
+    payload: BookSnapshotPayload | BookDeltaPayload | TradePayload | MarkPricePayload,
+) -> dict[str, object]:
     if isinstance(payload, BookSnapshotPayload):
         return {
             "kind": EventType.BOOK_SNAPSHOT.value,
@@ -216,6 +219,8 @@ def _encode_payload(payload: BookSnapshotPayload | BookDeltaPayload | TradePaylo
             "quantity": payload.quantity,
             "aggressor": payload.aggressor.value,
         }
+    if isinstance(payload, MarkPricePayload):
+        return {"kind": "mark_price", "price": payload.price}
     raise EventStoreFormatError(f"unsupported payload type: {type(payload).__name__}")
 
 
@@ -223,11 +228,15 @@ def _encode_levels(levels: Sequence[PriceLevel]) -> list[list[float]]:
     return [[level.price, level.size] for level in levels]
 
 
-def _decode_payload(raw: object, *, path: str) -> BookSnapshotPayload | BookDeltaPayload | TradePayload:
+def _decode_payload(
+    raw: object, *, path: str
+) -> BookSnapshotPayload | BookDeltaPayload | TradePayload | MarkPricePayload:
     message = _require_object(raw, path=path)
     kind = _require_str(_require_field(message, "kind", path=path), path=f"{path}.kind")
     if kind == EventType.TRADE.value:
         return _decode_trade_payload(message, path=path)
+    if kind == "mark_price":
+        return MarkPricePayload(_require_number(_require_field(message, "price", path=path), path=f"{path}.price"))
     if kind == EventType.BOOK_SNAPSHOT.value:
         return _decode_snapshot_payload(message, path=path)
     if kind == EventType.BOOK_DELTA.value:

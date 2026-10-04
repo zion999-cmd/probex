@@ -173,6 +173,10 @@ class ExecutionEngine:
             fills=self._account(updates),
         )
 
+    def orders_for_decision(self, decision_id: str) -> tuple[Order, ...]:
+        """`Decision → Order(s)`：按订单自身的 canonical correlation 反查（P0001.15 §15 / SC-27）。"""
+        return self.manager.orders_for_decision(decision_id)
+
     def cancel(self, client_order_id: str, *, now_ms: Milliseconds) -> ExecutionResult:
         """撤单**不经过 RiskGate**：kill switch 的 HALT_ALL 不能把已有挂单锁在市场上。"""
         self._note_latency("cancel_request", now_ms)

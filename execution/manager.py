@@ -113,5 +113,9 @@ class OrderManager:
     def orders(self) -> tuple[Order, ...]:
         return self.tracker.orders
 
+    def orders_for_decision(self, decision_id: str) -> tuple[Order, ...]:
+        """`Decision → Order(s)` 反查（由 tracker 的 canonical correlation 提供）。"""
+        return self.tracker.orders_for_decision(decision_id)
+
 
 __all__ = ["OrderManager", "ReplaceOutcome"]

@@ -8,6 +8,7 @@ from market.events.payloads import (
     BookDeltaPayload,
     BookSnapshotPayload,
     PriceLevel,
+    MarkPricePayload,
     TradePayload,
 )
 from market.events.types import (
@@ -33,6 +34,7 @@ __all__ = [
     "MarketPayload",
     "Milliseconds",
     "PriceLevel",
+    "MarkPricePayload",
     "TradePayload",
     "Venue",
     "event_type_for",

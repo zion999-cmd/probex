@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 
 from market.events.types import Milliseconds, Venue
+from risk.types import OrderCorrelation
 from portfolio.types import Side
 
 #: 第一版只支持 LIMIT 订单（post_only 是 LIMIT 的属性）。
@@ -159,6 +160,8 @@ class Order:
     final_executed_quantity: float | None = None
     #: LOST 的原因（审计用）
     lost_reason: str | None = None
+    #: canonical correlation metadata（P0001.15 §15 / SC-26）：由提案带入，随订单生命周期存在
+    correlation: OrderCorrelation | None = None
 
     def __post_init__(self) -> None:
         for field in ("client_order_id", "symbol"):
@@ -192,6 +195,8 @@ class Order:
             value = getattr(self, field)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise InvalidOrderError(f"Order.{field} must be a non-negative int epoch-millisecond value")
+        if self.correlation is not None and not isinstance(self.correlation, OrderCorrelation):
+            raise InvalidOrderError("Order.correlation must be an OrderCorrelation")
 
     # ------------------------------------------------------------------ 派生
 
@@ -239,6 +244,7 @@ class Order:
             "status": self.status.value,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "correlation": None if self.correlation is None else self.correlation.view(),
         }
 
     def with_status(self, status: OrderStatus, *, timestamp: Milliseconds, **changes: object) -> Order:

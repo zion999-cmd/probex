@@ -22,6 +22,7 @@ from api.routes import (
     METRICS_PATH,
     PORTFOLIO_TIMELINE_PATH,
     REPLAY_PATH,
+    READ_PATHS,
     REPORT_PATH,
     ROUTES,
     RUNS_COMPARE_PATH,
@@ -116,7 +117,7 @@ class SurfaceArchitectureTest(unittest.TestCase):
                  PORTFOLIO_TIMELINE_PATH, ACTIONS_PATH, ACTIONS_AUDIT_PATH, ASSISTANT_CONTEXT_PATH,
                  "/api/v1/reasons"}   # F-09 catalog
         known |= set(EXECUTION_SUB_PATHS)
-        known |= set(ROUTES)
+        known |= set(READ_PATHS)      # P0001.15：含 query 型只读端点（decisions/orders）
         known |= {"/api/v1/execution"}   # execution 路由别名（orders 的兼容路径）
         for path in sorted(UI_ROOT.rglob("*.js")):
             source = read(path)

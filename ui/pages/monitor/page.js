@@ -31,6 +31,26 @@ export async function render() {
         // F-16：Blocker → System 对应 section；F-09：原始 code + 人类解释
         `<a href="${surfaceHash("system", BLOCKER_SECTION[b.owner] || "execution")}">${reasonCell(b.reason_code, catalog)}</a>`])
     : [["blockers", "none"]];
+  // P0001.15 §22：instrument / venue / reference price / connector health（两个 connector 分开）
+  const instrument = snapshot.instrument || {};
+  const venue = snapshot.venue || {};
+  const reference = snapshot.reference_price || {};
+  const identityRow = rows([
+    ["instrument", `${fact(instrument.instrument_id)} · ${fact(instrument.symbol)}`],
+    ["asset class", fact(instrument.asset_class)],
+    ["product type", fact(instrument.product_type)],
+    ["venue", `${fact(venue.venue_id)} (${fact(venue.environment)})`],
+    ["reference price", `${fact(reference.price_type)} ${fact(reference.price)}`],
+    ["reference source", fact(reference.source)],
+    ["reference freshness (ms)", fact(reference.freshness_ms)],
+    ["reference reason", fact(reference.reason)],
+  ]);
+  const connectorRow = rows([
+    ["market connector", `${fact(snapshot.market_connector_health.connector_id)} · ${fact(snapshot.market_connector_health.connection_state)}`],
+    ["market event age (ms)", fact(snapshot.market_connector_health.event_age_ms)],
+    ["private connector", `${fact(snapshot.private_connector_health.connector_id)} · ${fact(snapshot.private_connector_health.connection_state)}`],
+    ["private event age (ms)", fact(snapshot.private_connector_health.event_age_ms)],
+  ]);
   const market = rows([
     ["market health", fact(snapshot.market.healthy)],
     ["tradeable", fact(snapshot.market.tradeable)],
@@ -86,7 +106,8 @@ export async function render() {
     ["execution health", fact(ops.execution_health)],
     ["operational warning", fact(ops.operational_warning)],
   ]);
-  return section("Process / runtime / readiness / execution", opsRow) +
+  return section("Instrument / venue", identityRow) + section("Connectors", connectorRow) +
+    section("Process / runtime / readiness / execution", opsRow) +
     section("Runtime / loop", runtimeRow) + section("System now", metrics) +
     `<section class="wide"><h2>Trends (equity / PnL / exposure)</h2>${sparklinesSection()}</section>` +
     section("Execution safety", execSummary) +

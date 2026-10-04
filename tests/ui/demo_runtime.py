@@ -57,7 +57,7 @@ def main() -> int:
             OrderProposal(symbol="BTCUSDT", side=Side.BUY, quantity=0.002, price=60_000.0,
                           post_only=True), now_ms=now)
         client_order_id = submitted.order.client_order_id
-        runtime._execution.manager.adapter.fill(client_order_id, quantity=0.002, price=60_000.0,
+        runtime._execution.manager.adapter.broker.fill(client_order_id, quantity=0.002, price=60_000.0,
                                                 timestamp=now)                      # noqa: SLF001
         runtime._execution.poll(now_ms=now)                                        # noqa: SLF001
         smoke = {"order": client_order_id, "submitted": submitted.submitted}

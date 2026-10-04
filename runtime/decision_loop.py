@@ -113,6 +113,8 @@ class RuntimeDecisionLoop:
     prediction_runtime: object | None = None
     readiness_provider: Callable[[], object | None] | None = None
     kill_switch_provider: Callable[[], object] | None = None
+    #: 快照前钩子（composition root 用它在同一条线程上把正式 MARK 推给 accounting owner）
+    pre_snapshot: Callable[[], None] | None = None
     on_prediction: Callable[[object | None], None] | None = None
     on_decision: Callable[[object | None], None] | None = None
     on_readiness: Callable[[object | None], None] | None = None
@@ -264,6 +266,9 @@ class RuntimeDecisionLoop:
         return (now - int(self.status.last_decision_at)) >= self.config.decision_interval_ms
 
     def _decide_and_execute(self, state: object, now: Milliseconds) -> None:
+        # P0001.15 §12：在同一线程、紧邻快照之前注入正式 reference price（未知则什么也不做）
+        if self.pre_snapshot is not None:
+            self.pre_snapshot()
         snapshot = self.engine.snapshot(self.config.symbol, now_ms=now)   # type: ignore[attr-defined]
         if self.policy is None:
             # 无 MakerPolicy（配置缺失）⇒ 不产生 decision（诚实 ABSENT；不伪造 HOLD/BUY）

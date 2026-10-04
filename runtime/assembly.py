@@ -55,13 +55,31 @@ from runtime.observability import configure_logging, log_event, register_secret
 from runtime.session import RuntimeSession, SessionSummaryFacts
 from runtime.state import RuntimeState, RuntimeStatus, RuntimeStatusTracker
 from runtime.wiring import SessionHost
+from domain.instruments import (AssetClass, InstrumentRegistry, PriceType, ProductType,
+                                instrument_id_for, perpetual_crypto_spec)
+from connectors.paper import PaperExecutionConnector, PaperMarketDataConnector
 from risk.budget import remaining_exposure_budget
+from venue import (MarkPriceReferenceSource, ReferencePriceProvider, VenueEnvironment, paper_venue,
+                   venue_for_mode)
 from runtime.maker_config import build_loop_options, build_maker_policy
 from storage.retention import RetentionPolicy, prune_finished_runs
 from storage.run_registry import (DEFAULT_RUN_REGISTRY_DIR, INDEX_FILE, RUNS_DIR, RUN_REGISTRY_ENV,
                                   JsonRunRegistry, process_start_epoch_ms)
 
 DEFAULT_HOST = "127.0.0.1"
+
+
+#: 常见 quote asset（用于把 symbol 拆成 base/quote；拆不出 ⇒ 不猜，交由调用方决定）
+_QUOTE_ASSETS = ("USDT", "USDC", "BUSD", "FDUSD", "BTC", "ETH")
+
+
+def _split_symbol(symbol: str) -> tuple[str, str]:
+    """`BTCUSDT` → (`BTC`, `USDT`)；无法确定 ⇒ (`symbol`, "")（不猜）。"""
+    upper = symbol.upper()
+    for quote in _QUOTE_ASSETS:
+        if upper.endswith(quote) and len(upper) > len(quote):
+            return upper[: -len(quote)], quote
+    return upper, ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,6 +295,12 @@ class ProductRuntime:
     _risk_limits: object | None = field(default=None, init=False)
     _maker_policy: object | None = field(default=None, init=False)
     _decision_loop: object | None = field(default=None, init=False)
+    # P0001.15：instrument / venue / reference price / connector 事实
+    _instrument_registry: object | None = field(default=None, init=False)
+    _venue_identity: object | None = field(default=None, init=False)
+    _reference_prices: object | None = field(default=None, init=False)
+    _market_connector: object | None = field(default=None, init=False)
+    _execution_connector: object | None = field(default=None, init=False)
     _reconciliation_events: list[object] = field(default_factory=list, init=False)
     _retention_policy: RetentionPolicy = field(default_factory=RetentionPolicy, init=False)
     _last_prune: dict[str, object] | None = field(default=None, init=False)
@@ -779,7 +803,12 @@ class ProductRuntime:
             from risk.limits import RiskLimits
 
             paper = PaperBroker()
-            manager = OrderManager(tracker=self._tracker_owner, adapter=paper)
+            # P0001.15 §9：唯一 PaperBroker 由统一执行 connector 持有（engine 只依赖 connector seam）
+            self._execution_connector = PaperExecutionConnector(
+                broker=paper, venue_identity=self._resolve_venue_identity(), symbol=self.profile.symbol,
+                clock=self.profile.clock)
+            self._execution_connector.connect()      # P0001.15 §9：paper 执行 connector 在本进程内就绪
+            manager = OrderManager(tracker=self._tracker_owner, adapter=self._execution_connector)
             # F-08：执行边界归一化**只在显式配置舍入模式时**启用（不发明业务值）
             normalizer = None
             price_rounding = values.get("venue.normalization.price_rounding")
@@ -812,7 +841,11 @@ class ProductRuntime:
                 normalizer=normalizer,
                 latency_observer=lambda kind, ts: self._latency_note(kind, ts))
         # P0001.14：MakerPolicy / PredictionRuntime 均由显式配置构造（缺键 ⇒ None；不发明业务数值）
-        self._maker_policy = build_maker_policy(values)
+        _venue = self._resolve_venue_identity()
+        _registry = self._resolve_instrument_registry()
+        self._maker_policy = build_maker_policy(
+            values, instrument_id=("" if _registry is None else _registry.current.instrument_id),
+            venue_id=_venue.venue_id)
         self._prediction_runtime = self._build_prediction_runtime(values)
 
         self._safety_projection = ExecutionSafetyProjection(
@@ -841,6 +874,14 @@ class ProductRuntime:
             market_state=lambda: (self._feed_provider.last_state if self._feed_provider else None),
             market_history=lambda: self._history,
             projection_config=lambda: self._projection_config,
+            # P0001.15 §21–§26：instrument / venue / reference price / connector health（两个 connector 分开）
+            instrument=self._instrument_view,
+            instrument_registry=lambda: self._resolve_instrument_registry(),
+            venue=self._resolve_venue_identity,
+            reference_price=self._reference_price_for_risk,
+            market_connector_health=self._market_connector_health,
+            private_connector_health=self._execution_connector_health,
+            orders_for_decision=self._orders_for_decision,
             # P0001.14：决策链真实 facts（loop 未运行时 ⇒ None，产品层如实 UNKNOWN/ABSENT）
             prediction=lambda: (self._decision_loop.latest_prediction
                                 if self._decision_loop is not None else None),
@@ -1027,6 +1068,21 @@ class ProductRuntime:
             clock=self.profile.clock)
         self._feed_provider = provider
         self._history = provider.history
+        # P0001.15 §11 / 人类裁决 1A：正式 MARK_PRICE 事件驱动 reference price（只接受 MARK_PRICE）
+        reference_prices = self._resolve_reference_prices()
+        provider.reference_price_sink = reference_prices.observe_market_event
+        venue = self._resolve_venue_identity()
+        registry = self._resolve_instrument_registry()
+        instrument = None if registry is None else registry.current
+        self._market_connector = PaperMarketDataConnector(
+            venue_identity=venue, symbol=self.profile.symbol, clock=self.profile.clock,
+            data_source=f"event_store:{profile.event_store}",
+            state_provider=lambda: provider.last_state,
+            rules_provider=lambda: self._trading_rules,
+            last_event_provider=lambda: self._feed_last_event_timestamps(provider),
+            reference_source=(None if instrument is None
+                              else reference_prices.sources.get((instrument.instrument_id, PriceType.MARK))))
+        self._market_connector.connect()
         self._projection_config = provider.config.projection
         self._service.market_state = lambda: provider.last_state   # 只读视图（provider 拥有事实）
         self._service.market_history = lambda: provider.history
@@ -1077,6 +1133,7 @@ class ProductRuntime:
         execution = getattr(self, "_execution", None)
         if execution is None:
             return None
+        self._apply_reference_price()          # P0001.15：正式 MARK → accounting（仅 known）
         try:
             return execution.snapshot(self.profile.symbol, now_ms=int(self.profile.clock()))
         except Exception:  # noqa: BLE001 - 读不到就是 UNKNOWN
@@ -1099,6 +1156,119 @@ class ProductRuntime:
             return ()
         return tuple(str(getattr(getattr(item, "reason_code", None), "value", ""))
                      for item in execution.rejections)
+
+    # ---------------------------------------------------------------- P0001.15 identity / reference price
+
+    def _resolve_venue_identity(self) -> object:
+        """venue identity：REPLAY/PAPER ⇒ paper venue；TESTNET/LIVE ⇒ binance venue（本阶段不启用写路径）。"""
+        if self._venue_identity is None:
+            self._venue_identity = venue_for_mode(self.profile.mode)
+        return self._venue_identity
+
+    def _resolve_instrument_registry(self) -> object:
+        """由显式配置的 venue rules 构造 InstrumentSpec（数值来自 config，不在此处发明）。"""
+        if self._instrument_registry is not None:
+            return self._instrument_registry
+        values = self._config_values()
+
+        def number(key: str) -> float | None:
+            value = values.get(key)
+            return None if value is None else float(value)
+
+        tick = number("venue.rules.tick_size")
+        step = number("venue.rules.step_size")
+        min_qty = number("venue.rules.min_qty")
+        min_notional = number("venue.rules.min_notional")
+        if None in (tick, step, min_qty, min_notional):
+            # 缺 venue rules ⇒ 不伪造 instrument 参数（保持 UNKNOWN，不构造 spec）
+            return None
+        venue = self._resolve_venue_identity()
+        base, quote = _split_symbol(self.profile.symbol)
+        spec = perpetual_crypto_spec(
+            instrument_id=instrument_id_for(self.profile.symbol, venue_id=venue.venue_id),
+            symbol=self.profile.symbol, base_asset=base, quote_asset=quote, settlement_asset=quote,
+            price_tick=tick, quantity_step=step, min_quantity=min_qty, min_notional=min_notional)
+        self._instrument_registry = InstrumentRegistry(
+            instruments=(spec,), current_id=spec.instrument_id)
+        return self._instrument_registry
+
+    def _resolve_reference_prices(self) -> object:
+        """正式 reference price provider + MARK source（由 `MarketEvent.MARK_PRICE` 驱动）。"""
+        if self._reference_prices is not None:
+            return self._reference_prices
+        from domain.instruments import PriceType
+
+        registry = self._resolve_instrument_registry()
+        venue = self._resolve_venue_identity()
+        provider = ReferencePriceProvider(venue_identity=venue)
+        if registry is not None:
+            instrument = registry.current
+            source = MarkPriceReferenceSource(venue_identity=venue, instrument_id=instrument.instrument_id)
+            provider.register(instrument.instrument_id, PriceType.MARK, source)
+        self._reference_prices = provider
+        return provider
+
+    def _reference_price_for_risk(self) -> object | None:
+        registry = self._resolve_instrument_registry()
+        if registry is None:
+            return None
+        provider = self._resolve_reference_prices()
+        instrument = registry.current
+        return provider.for_risk(instrument, now_ms=int(self.profile.clock()))
+
+    def _apply_reference_price(self) -> None:
+        """把**正式 MARK**（且仅 MARK）推到既有 accounting owner；未知 ⇒ 什么也不推（fail closed）。
+
+        P0001.15 §12 / 人类裁决 1：不使用 last trade / mid 替代；`max_mark_age_ms` 仍由 Risk 既有规则判定。
+        """
+        accounting = self._engine_accounting()
+        if accounting is None or self._execution is None:
+            return
+        reference = self._reference_price_for_risk()
+        if reference is None or not getattr(reference, "known", False):
+            return
+        try:
+            accounting.update_mark_price(self.profile.symbol, float(reference.price),
+                                         timestamp=int(reference.as_of))
+        except Exception as exc:  # noqa: BLE001 - 注入失败不得打断决策（保持 UNKNOWN）
+            log_event("market", "reference_price_injection_failed", level=30,
+                      runtime_id=self._identity.runtime_id, error=type(exc).__name__)
+
+    def _engine_accounting(self) -> object | None:
+        execution = getattr(self, "_execution", None)
+        return None if execution is None else getattr(execution, "accounting", None)
+
+    @staticmethod
+    def _feed_last_event_timestamps(provider: object) -> tuple[int, int] | None:
+        """feed 已消费的最后一个事件的 (exchange_ts, process_ts)；未观测 ⇒ None（UNKNOWN）。"""
+        stats = getattr(provider, "stats", {}) or {}
+        exchange_ts = stats.get("last_ts")
+        process_ts = stats.get("last_process_ts", exchange_ts)
+        if not isinstance(exchange_ts, int) or not isinstance(process_ts, int):
+            return None
+        return exchange_ts, process_ts
+
+    def _market_connector_health(self) -> object | None:
+        connector = getattr(self, "_market_connector", None)
+        if connector is None:
+            return None
+        return connector.health(now_ms=int(self.profile.clock()))
+
+    def _execution_connector_health(self) -> object | None:
+        connector = getattr(self, "_execution_connector", None)
+        if connector is None:
+            return None
+        return connector.health(now_ms=int(self.profile.clock()))
+
+    def _instrument_view(self) -> object | None:
+        registry = self._resolve_instrument_registry()
+        return None if registry is None else registry.current
+
+    def _orders_for_decision(self, decision_id: str) -> tuple[object, ...]:
+        execution = getattr(self, "_execution", None)
+        if execution is None:
+            return ()
+        return tuple(execution.orders_for_decision(decision_id))
 
     def _kill_switch(self) -> object:
         """kill switch 由 Risk limits 拥有（本层只读取）。"""
@@ -1168,7 +1338,8 @@ class ProductRuntime:
             risk_budget_provider=self._risk_budget,
             clock=self.profile.clock, policy=self._maker_policy,
             prediction_runtime=self._prediction_runtime,
-            kill_switch_provider=self._kill_switch)
+            kill_switch_provider=self._kill_switch,
+            pre_snapshot=self._apply_reference_price)
         self._decision_loop = loop
         loop.start()
         log_event("runtime", "decision_loop_start", runtime_id=self._identity.runtime_id,
@@ -1180,6 +1351,18 @@ class ProductRuntime:
         loop = getattr(self, "_decision_loop", None)
         if loop is not None:
             loop.stop()
+
+    def _disconnect_connectors(self) -> None:
+        """P0001.15 §16：stop 时按 connector 各自的生命周期断开（不合并状态）。"""
+        for name in ("_market_connector", "_execution_connector"):
+            connector = getattr(self, name, None)
+            if connector is not None:
+                try:
+                    connector.disconnect()
+                except Exception as exc:  # noqa: BLE001 - 断开失败不得掩盖 stop 的结果
+                    log_event("runtime", "connector_disconnect_failed", level=30,
+                              runtime_id=self._identity.runtime_id, connector=name,
+                              error=type(exc).__name__)
 
     def _market_identity(self) -> object | None:
         """F-08：MarketState 的既有 canonical 指纹（只读；未接线/无状态 ⇒ None）。"""
@@ -1263,6 +1446,7 @@ class ProductRuntime:
         self._tracker.mark_stopping(now_ms=now)
         self._stop_decision_loop()          # P0001.14：先停 decision loop（无 background thread 泄漏）
         self._stop_feed()
+        self._disconnect_connectors()       # P0001.15：两个 connector 各自断开
         if self._session.record.status.value == "RUNNING":
             self._host.finish(facts=self._build_summary_facts())
         status = self._tracker.mark_stopped(now_ms=now, detail="graceful stop completed")
@@ -1275,6 +1459,7 @@ class ProductRuntime:
         """异常终止：run 记 INCOMPLETE（不伪造 COMPLETED），runtime 置 FAILED。"""
         now = int(self.profile.clock())
         self._stop_decision_loop()
+        self._disconnect_connectors()
         if self._session.record.status.value == "RUNNING":
             self._session.stop(status=RunStatus.INCOMPLETE, facts=self._build_summary_facts())
         status = self._tracker.mark_failed(now_ms=now, error=error)

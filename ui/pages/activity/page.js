@@ -36,6 +36,15 @@ function stageReason(entry, catalog) {
   return reasonCell(code, catalog);
 }
 
+/** Decision → Order(s)：由 canonical correlation id 反查（P0001.15 §15/§24；不是时间模糊匹配）。 */
+function decisionOrderCell(entry) {
+  const detail = String(entry.detail || "");
+  const match = detail.match(/decision_id=([A-Za-z0-9:_-]+)/);
+  if (!match) return '<span class="unknown">UNKNOWN</span>';
+  const decisionId = match[1];
+  return `<a href="#/orders?decision=${encodeURIComponent(decisionId)}">${escapeHtml(decisionId)}</a>`;
+}
+
 function identityCell(entry) {
   const kind = entry.identity_kind || "";
   if (!entry.identity || !entry.identity.known) {
@@ -66,7 +75,9 @@ export async function render(rest = []) {
   // trace 已由服务端按时间排序；这里再做一次稳定校验（不重排、不丢弃）
   const present = new Set(trace.map((entry) => entry.stage));
   const missing = CHAIN.filter((stage) => !present.has(stage));
-  const timeline = table(["ts", "stage", "outcome", "identity (canonical)", "reason code", "detail", "market"],
+  // P0001.15 §24：causal chain 必须带同一 instrument / venue identity
+  const timeline = table(["ts", "stage", "outcome", "identity (canonical)", "instrument", "venue",
+                          "decision → orders", "reason code", "detail", "market"],
     trace.map((entry) => {
       const ts = entry.ts && entry.ts.known ? String(entry.ts.value) : '<span class="unknown">UNKNOWN</span>';
       const market = entry.ts && entry.ts.known
@@ -75,7 +86,8 @@ export async function render(rest = []) {
       const latency = entry.latency_ms && entry.latency_ms.known
         ? ` <span class="muted">latency=${escapeHtml(String(entry.latency_ms.value))}ms</span>` : "";
       return [ts, escapeHtml(entry.stage), escapeHtml(entry.outcome),
-        identityCell(entry), stageReason(entry, catalog),
+        identityCell(entry), fact(entry.instrument_id), fact(entry.venue_id),
+        decisionOrderCell(entry), stageReason(entry, catalog),
         `${escapeHtml(entry.detail || "")}${latency}`, market];
     }));
   const missingBlock = missing.length

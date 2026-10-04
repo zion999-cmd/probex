@@ -4,11 +4,13 @@ import { escapeHtml, fact, factRows, jsonDetail, reasonCell, rows, section, tabl
 import { mountOpsCharts, opsChartsSection } from "/ui/system/ops_charts.js";
 
 let lastExecution = null;
+let lastSnapshot = null;
 
 export const title = "System";
 export const slug = "system";
 
-export const SECTIONS = ["health", "risk", "readiness", "execution", "configuration", "capabilities", "ops"];
+export const SECTIONS = ["health", "risk", "readiness", "execution", "instruments", "connections",
+                         "configuration", "capabilities", "ops"];
 
 /** F3/F-12/F-15：operational posture。
  *
@@ -72,9 +74,23 @@ async function executionSections() {
     `<section class="wide"><h2>Execution charts</h2>${opsChartsSection()}</section>`;
 }
 
+function venueRules() {
+  return (lastSnapshot && lastSnapshot.config && lastSnapshot.config.venue_rules) || null;
+}
+
+function truthy(source, key, fallbackKey) {
+  if (!source) return '<span class="unknown">UNKNOWN</span>';
+  const value = source[key];
+  if (fallbackKey && source[fallbackKey] !== undefined && value !== undefined) {
+    return `${escapeHtml(String(value))} / ${escapeHtml(String(source[fallbackKey]))}`;
+  }
+  return value === undefined || value === null ? '<span class="unknown">UNKNOWN</span>' : escapeHtml(String(value));
+}
+
 export async function render(rest = []) {
   const active = SECTIONS.includes(rest[0]) ? rest[0] : "health";
   const snapshot = await fetchSnapshot();
+  lastSnapshot = snapshot;
   const catalog = await reasonCatalog();
   const nav = SECTIONS.map((name) =>
     `<a href="#/system/${name}" class="${name === active ? "active" : ""}">${escapeHtml(name)}</a>`).join(" · ");
@@ -103,6 +119,79 @@ export async function render(rest = []) {
       section("Blockers (reason codes + explanation)", table(["owner", "reason code", "severity", "message"],
         (snapshot.blockers || []).map((b) => [escapeHtml(b.owner), reasonCell(b.reason_code, catalog),
           escapeHtml(b.severity), escapeHtml(b.message)])));
+  }
+  if (active === "instruments") {
+    // P0001.15 §26：当前 instrument spec（capabilities / reference price policy / venue rules）
+    const instrument = snapshot.instrument || {};
+    const capabilities = instrument.capabilities && instrument.capabilities.known
+      ? instrument.capabilities.value : null;
+    const policy = instrument.reference_price_policy && instrument.reference_price_policy.known
+      ? instrument.reference_price_policy.value : null;
+    const capabilityRows = capabilities
+      ? rows(Object.entries(capabilities).map(([key, value]) => [key, escapeHtml(String(value))]))
+      : rows([["capabilities", '<span class="unknown">UNKNOWN</span>']]);
+    const policyRows = policy
+      ? rows([
+        ["risk price types", escapeHtml((policy.risk_price_types || []).join(", "))],
+        ["observable price types", escapeHtml((policy.observable_price_types || []).join(", "))],
+        ["substitution allowed", String(policy.substitution_allowed)],
+      ])
+      : rows([["reference price policy", '<span class="unknown">UNKNOWN</span>']]);
+    const specRows = rows([
+      ["instrument id", fact(instrument.instrument_id)],
+      ["symbol", fact(instrument.symbol)],
+      ["asset class", fact(instrument.asset_class)],
+      ["product type", fact(instrument.product_type)],
+      ["base / quote / settle", `${fact(instrument.base_asset)} / ${fact(instrument.quote_asset)} / ${fact(instrument.settlement_asset)}`],
+      ["price tick / qty step", `${fact(instrument.price_tick)} / ${fact(instrument.quantity_step)}`],
+      ["min quantity / notional", `${fact(instrument.min_quantity)} / ${fact(instrument.min_notional)}`],
+      ["production ready", fact(instrument.production_ready)],
+    ]);
+    return header + section("Instrument spec", specRows) +
+      section("Capabilities (product semantics)", capabilityRows) +
+      section("Reference price policy", policyRows) +
+      section("Venue rules (authoritative for execution)", rows([
+        ["tick / step (venue)", truthy(venueRules(), "tick_size", "step_size")],
+        ["source", truthy(venueRules(), "source", null)],
+      ]));
+  }
+  if (active === "connections") {
+    // P0001.15 §26 / SC-28：两个 connector health **分开**显示，绝不合并成单一 Connected
+    const market = snapshot.market_connector_health || {};
+    const private_ = snapshot.private_connector_health || {};
+    const venue = snapshot.venue || {};
+    const marketExtras = market.extras && market.extras.known ? market.extras.value : {};
+    const privateExtras = private_.extras && private_.extras.known ? private_.extras.value : {};
+    const marketRows = rows([
+      ["connector id", fact(market.connector_id)],
+      ["connection state", fact(market.connection_state)],
+      ["last event (ms)", fact(market.last_event_ms)],
+      ["event age (ms)", fact(market.event_age_ms)],
+      ["observed", fact(market.observed)],
+      ["book health", fact(marketExtras.book_health)],
+      ["reconnects", fact(marketExtras.reconnect_count)],
+      ["resyncs", fact(marketExtras.resync_count)],
+      ["detail", fact(market.detail)],
+    ]);
+    const privateRows = rows([
+      ["connector id", fact(private_.connector_id)],
+      ["connection state", fact(private_.connection_state)],
+      ["last private event (ms)", fact(private_.last_event_ms)],
+      ["private event age (ms)", fact(private_.event_age_ms)],
+      ["last order ack (ms)", fact(privateExtras.last_order_ack_ms)],
+      ["reconciliation", fact(privateExtras.reconciliation_state)],
+      ["account freshness (ms)", fact(privateExtras.account_state_freshness_ms)],
+      ["rate limit", fact(privateExtras.rate_limit_state)],
+      ["detail", fact(private_.detail)],
+    ]);
+    return header + section("Venue", rows([
+      ["venue id", fact(venue.venue_id)],
+      ["venue type", fact(venue.venue_type)],
+      ["environment", fact(venue.environment)],
+    ])) + section("Market data connector", marketRows) +
+      section("Private execution connector", privateRows) +
+      section("Note", rows([["separation",
+        "market health 与 private health 独立：行情正常 ≠ 私有交易连接正常（不显示单一 Connected）"]]));
   }
   if (active === "risk") {
     const rejects = (snapshot.risk.rejects || []).length
