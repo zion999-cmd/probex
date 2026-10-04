@@ -2218,7 +2218,8 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 
 ### 测试结果
 
-- 全量 **2401 passed / 0 failed / 24 skipped**（新增 54；连续两次通过）。
+- 全量 **2401 passed / 0 failed / 24 skipped**（新增 54；连续两次通过）；commit `14ac3cb` 已 push 到
+  `origin/master`，detached worktree（无 `node_modules`）复核同样 2401 passed / 0 failed / 24 skipped。
 - 真实浏览器：7 张截图（Monitor / Market / Activity / Order detail / System connections / System instruments /
   Assistant 五个问答），每张都带可见文本断言（`artifacts/p0001.15/venue_capture.json`）。
 

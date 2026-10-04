@@ -421,6 +421,7 @@ Git 仓库已初始化；P0001.1 – P0001.9.2.1 均已提交并推送（每个 
 | `afc0196` | **P0001.9.6** Binance USDⓈ-M ExecutionAdapter（含 UNKNOWN≠EMPTY correction） | 1693 passed（detached worktree 复核） |
 | `d4939a4` | **图表 / UI 产品化**（Chart Workbench：K 线 / 指标 / 画线 / semantic overlays / ECharts 面板） | 2303 passed（detached worktree 复核） |
 | `7987cd5` | **P0001.14** Runtime Decision Loop Integration | 2347 passed（detached worktree 复核） |
+| `14ac3cb` | **P0001.15** Instrument Domain + Venue Integration Contract | 2401 passed（detached worktree 复核） |
 
 `CLAUDE.md` 与 `.gitignore` 被使用者全局 gitignore（`~/.gitignore_global`）排除，未纳入版本控制。
 P0001.9.3（`1be451a`）与 P0001.9.3.1（`4b69a73`）均已提交并 **push 到 `origin/master`**；
@@ -841,7 +842,8 @@ detached worktree（`7987cd5`，无 `node_modules` / 无未跟踪文件）复核
 - **验收 F PASS**：真实浏览器 7 张截图在 `artifacts/p0001.15/`（含可见文本断言 JSON）。
 - **§G 守卫 PASS**：Strategy/Risk 不 import venue/connectors；Product 不 import connectors；ExecutionEngine 不依赖
   Binance 实现；feed 不持有 broker；instrument domain 不依赖 venue；无 `VenueGateway`；`PaperBroker` 单构造点。
-- 全量测试 **2401 passed / 0 failed / 24 skipped**（新增 54；连续两次通过）。
+- 全量测试 **2401 passed / 0 failed / 24 skipped**（新增 54；连续两次通过）；
+  detached worktree（`14ac3cb`，无 `node_modules`）复核同样 **2401 passed / 0 failed / 24 skipped**。
 
 ### 已知限制（不阻塞本阶段）
 
