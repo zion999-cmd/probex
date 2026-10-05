@@ -243,12 +243,17 @@ class BinanceExecutionRestClient:
             recv_window_ms=self.recv_window_ms,
             timestamp_ms=self.offset.timestamp_ms(local_now_ms=int(self.clock())),
         )
-        return self.fetcher.send(
-            method=method,
-            url=f"{self.base_url.rstrip('/')}{ORDER_PATH}?{signed.query}",
-            headers=self._headers(),
-            timeout_s=self.timeout_s,
-        )
+        try:
+            return self.fetcher.send(
+                method=method,
+                url=f"{self.base_url.rstrip('/')}{ORDER_PATH}?{signed.query}",
+                headers=self._headers(),
+                timeout_s=self.timeout_s,
+            )
+        except urllib.error.HTTPError as exc:
+            # P0001.16：写路径**必须**用结构化映射区分"交易所已处理并拒绝"（4xx + 业务码）
+            # 与"结果未知"（5xx / 429 / 408 / 不可解析）。此前该映射不可达 ⇒ 一切拒绝都被误判为 UNKNOWN。
+            raise _http_error(exc, safe_target=f"{self.base_url.rstrip('/')}{ORDER_PATH}") from None
 
     def _headers(self) -> dict[str, str]:
         return {API_KEY_HEADER: self.credentials.api_key, "Accept": "application/json"}

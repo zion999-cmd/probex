@@ -52,6 +52,9 @@ class UrllibRestFetcher:
 
     #: 最近一次响应的真实头（供 usage fact 采集；additive）
     last_headers: dict[str, str] = dataclasses_field(default_factory=dict)
+    #: P0001.16：写路径需要**结构化**的 HTTP 错误（业务错误码 → CONFIRMED_REJECTED）。
+    #: False（默认）⇒ 与既有行为完全一致（抛 `PrivateResponseError`）。
+    expose_http_errors: bool = False
 
     def send(self, *, method: str, url: str, headers: Mapping[str, str], timeout_s: float) -> object:
         parts = urllib.parse.urlsplit(url)
@@ -62,7 +65,17 @@ class UrllibRestFetcher:
                 body = handle.read()
                 self.last_headers = dict(handle.headers.items())
         except urllib.error.HTTPError as exc:
-            raise PrivateResponseError(f"{method} {safe_target} -> HTTP {exc.code}") from None
+            if self.expose_http_errors:
+                # 写路径自己用结构化映射（`_http_error`）区分 4xx 业务拒绝 vs 5xx/429 未知
+                raise
+            # 交易所错误体（JSON 业务错误码/消息）必须保留：否则无法区分 -1021 / -4164 / -2019（不含 secret）
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")[:300]
+            except Exception:  # noqa: BLE001 - 读不到 body 不影响错误分类
+                detail = ""
+            raise PrivateResponseError(
+                f"{method} {safe_target} -> HTTP {exc.code}" + (f": {detail}" if detail else "")
+            ) from None
         except (urllib.error.URLError, OSError, ValueError) as exc:
             raise TransportError(f"{method} {safe_target} failed: {type(exc).__name__}") from exc
         try:

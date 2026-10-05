@@ -169,3 +169,78 @@ class StrategyIsGtxOnlyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HttpErrorMappingTest(unittest.TestCase):
+    """P0001.16 根因回归：写路径必须能区分「交易所已处理并拒绝」与「结果未知」。
+
+    缺陷：`UrllibRestFetcher` 把任何 HTTPError 转成裸 `PrivateResponseError` 并丢弃业务错误码，
+    使 `BinanceExecutionRestClient._http_error` 的结构化映射**不可达** ⇒ `-5022`/`-1111`/`-2013`
+    这类明确拒绝被误判为 UNKNOWN（submit 不落地、也不产生 rejection evidence）。
+    """
+
+    def _fetcher(self) -> object:
+        import urllib.error
+        from io import BytesIO
+
+        class _Fetcher:
+            expose_http_errors = True
+
+            def __init__(self, status, body):
+                self.status, self.body = status, body
+                self.calls = 0
+
+            def send(self, *, method, url, headers, timeout_s):
+                self.calls += 1
+                raise urllib.error.HTTPError(url, self.status, "err", {},
+                                             BytesIO(self.body.encode("utf-8")))
+
+        return _Fetcher
+
+    def _client(self, status: int, body: str):
+        from connectors.binance.execution.rest import BinanceExecutionRestClient
+        from tests.execution_support_live import credentials
+
+        fetcher = self._fetcher()(status, body)
+        return BinanceExecutionRestClient(credentials=credentials(), fetcher=fetcher,
+                                          base_url="https://demo-fapi.binance.com",
+                                          clock=lambda: 1_700_000_000_000), fetcher
+
+    def test_4xx_with_business_code_is_confirmed_rejected(self) -> None:
+        from connectors.binance.execution.rest import ExecutionRequestRejected
+
+        client, fetcher = self._client(400, '{"code":-5022,"msg":"Post Only order will be rejected"}')
+        with self.assertRaises(ExecutionRequestRejected) as ctx:
+            client.submit_post_only_limit(symbol="BTCUSDT", side=__import__(
+                "connectors.binance.execution.rest", fromlist=["OrderSide"]).OrderSide.BUY,
+                quantity=0.001, price=71_000.0, client_order_id="probex-x-1", reduce_only=False)
+        self.assertEqual(ctx.exception.code, -5022)
+        self.assertEqual(fetcher.calls, 1)
+
+    def test_5xx_is_unknown_not_rejected(self) -> None:
+        from connectors.binance.execution.rest import ExecutionOutcomeUnknown
+
+        client, _ = self._client(503, "<html>gateway</html>")
+        with self.assertRaises(ExecutionOutcomeUnknown):
+            client.submit_post_only_limit(symbol="BTCUSDT", side=__import__(
+                "connectors.binance.execution.rest", fromlist=["OrderSide"]).OrderSide.BUY,
+                quantity=0.001, price=71_000.0, client_order_id="probex-x-2", reduce_only=False)
+
+    def test_adapter_classifies_exchange_rejection_as_confirmed_rejected(self) -> None:
+        """同样是一次 -5022：adapter 必须给 CONFIRMED_REJECTED（不是 UNKNOWN）。"""
+        from connectors.binance.execution.adapter import BinanceExecutionAdapter
+        from readiness.types import Environment
+        from tests.unit.test_execution_adapter import context as authority_context
+        from tests.unit.test_execution_adapter import rules as rules_provider
+
+        client, _ = self._client(400, '{"code":-5022,"msg":"Post Only order will be rejected"}')
+        adapter = BinanceExecutionAdapter(rest=client, environment=Environment.TESTNET,
+                                          authority_provider=authority_context,
+                                          rules_provider=rules_provider, symbol=ACCEPTANCE_SYMBOL)
+        from tests.unit.test_execution_adapter import order as order_factory
+
+        outcome = adapter.submit_with_outcome(order_factory())
+        self.assertEqual(outcome.classification.value, "CONFIRMED_REJECTED")
+        self.assertEqual(outcome.rejection_code, -5022)
+        self.assertEqual(adapter.unknown_submit_count, 0)
+        self.assertIn("rejection_code=-5022", adapter.last_submit_detail)

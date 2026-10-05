@@ -99,7 +99,9 @@ def build_config(*, acceptance_enabled: bool) -> TestnetConfig:
                                                               "~/.probex/runs/p0001.16")),
                          authority_ttl_ms=int(env_flag("PROBEX_TESTNET_AUTHORITY_TTL_MS", "60000")),
                          acceptance=permission,
-                         market_window_s=float(env_flag("PROBEX_TESTNET_MARKET_WINDOW_S", "45")))
+                         market_window_s=float(env_flag("PROBEX_TESTNET_MARKET_WINDOW_S", "45")),
+                         price_rounding=env_flag("PROBEX_TESTNET_PRICE_ROUNDING", "ROUND_DOWN"),
+                         quantity_rounding=env_flag("PROBEX_TESTNET_QUANTITY_ROUNDING", "ROUND_DOWN"))
 
 
 def price_for(side: Side, *, mark: float, tick: float, offset_ticks: int) -> float:
@@ -235,21 +237,31 @@ def run(*, out_path: str | None = None) -> int:
             raise TestnetError("trading rules are unavailable; refusing to place orders")
         tick = float(rules.tick_size)
         mark = float(stack.mark_price() or 0.0)
+        bid, ask = stack.book_touch()
+        report.note("book_touch", {"best_bid": bid, "best_ask": ask})
         decision_id = f"acceptance-{_now_ms()}"
         correlation = OrderCorrelation(decision_id=decision_id, instrument_id="binance:BTCUSDT",
                                        venue_id="binance", prediction_id=None,
                                        market_state_hash=None)
 
         # ---------------- A. post-only 挂单 + 撤单（正常执行语义：GTX） ----------------
-        a_price = price_for(Side.BUY, mark=mark, tick=tick, offset_ticks=40)   # 远离盘口，不会成交
+        # A 必须是**被动**挂单（GTX 若会成交会被交易所 -5022 拒绝）：低于 best bid 一个 margin
+        reference_bid = float(bid if bid is not None else mark * 0.97)
+        a_price = price_for(Side.BUY, mark=reference_bid, tick=tick, offset_ticks=-20)
         stack.refresh_mark(seconds=2.0)
         place = OrderProposal(symbol=config.symbol, side=Side.BUY,
                               quantity=float(env_flag("PROBEX_TESTNET_ACCEPTANCE_QTY", "0.001")),
                               price=a_price, post_only=True, reduce_only=False, correlation=correlation)
         latency.note_decision(_now_ms())
         placed = stack.submit(place)
-        report.note("A_submit", {"submitted": placed.submitted, "rejected": placed.rejected,
+        try:
+            _classification = stack.adapter.last_submit_outcome.classification.value
+        except Exception:  # noqa: BLE001
+            _classification = "UNKNOWN"
+        report.note("A_submit", {"classification": _classification, "submitted": placed.submitted,
+                                 "rejected": placed.rejected,
                                  "unknown_submits": stack.adapter.unknown_submit_count,
+                                 "adapter_last_submit": stack.adapter.last_submit_detail,
                                  "local_rejections": [(str(getattr(getattr(r, 'reason_code', None), 'value', None)),
                                                        str(getattr(r, 'details', ''))[:80])
                                                       for r in stack.engine.rejections][-3:],
@@ -260,21 +272,35 @@ def run(*, out_path: str | None = None) -> int:
         if a_order_id is not None:
             stack.pump_private(seconds=WATCH_SECONDS)
             order = stack.tracker.order(a_order_id)
+            # UNKNOWN ⇒ 走唯一收敛入口（query 真实状态；不 retry submit、不伪造状态）
+            if _classification == "UNKNOWN" or (order is not None and order.status.value == "PENDING_CREATE"):
+                report.note("A_unknown_resolution", stack.resolve_unknown(a_order_id))
+                order = stack.tracker.order(a_order_id)
             report.note("A_after_ack", {"status": None if order is None else order.status.value,
                                         "venue_order_id": None if order is None else order.exchange_order_id,
                                         "correlation_decision_id": None if order is None or order.correlation is None
                                         else order.correlation.decision_id})
-            canceled = stack.cancel(a_order_id)
-            report.note("A_cancel", {"requested": True, "updates": len(canceled.updates)})
-            stack.pump_private(seconds=WATCH_SECONDS)
-            order = stack.tracker.order(a_order_id)
-            report.note("A_final", {"status": None if order is None else order.status.value})
+            if order is not None and order.status.value in ("OPEN", "PARTIALLY_FILLED", "PENDING_CANCEL"):
+                canceled = stack.cancel(a_order_id)
+                report.note("A_cancel", {"requested": True, "updates": len(canceled.updates)})
+                stack.pump_private(seconds=WATCH_SECONDS)
+                order = stack.tracker.order(a_order_id)
+                if order is not None and order.status.value == "PENDING_CANCEL":
+                    # 撤单 ack 未到 ⇒ 只靠 query 收敛（不重发撤单）
+                    report.note("A_cancel_resolution", stack.resolve_unknown(a_order_id))
+                    order = stack.tracker.order(a_order_id)
+                report.note("A_final", {"status": None if order is None else order.status.value})
+            else:
+                report.note("A_cancel", {"requested": False,
+                                         "reason": "order is not confirmed live; UNKNOWN is preserved (no writes)"})
+                report.note("A_final", {"status": None if order is None else order.status.value})
 
         # ---------------- B. 受控 marketable 成交（显式 acceptance capability；IOC） ----------------
         if config.acceptance is not None and mark > 0.0:
             stack.refresh_mark(seconds=2.0)
             mark = float(stack.mark_price() or mark)
-            b_price = price_for(Side.BUY, mark=mark, tick=tick, offset_ticks=+2)   # 越过盘口 ⇒ 立即成交
+            # 越过盘口：留足 margin，确保 ROUND_DOWN 归一化后仍然可成交（IOC）
+            b_price = price_for(Side.BUY, mark=mark, tick=tick, offset_ticks=+30)
             fill_proposal = OrderProposal(symbol=config.symbol, side=Side.BUY,
                                           quantity=float(env_flag("PROBEX_TESTNET_ACCEPTANCE_QTY", "0.001")),
                                           price=b_price, post_only=False, reduce_only=False,
@@ -282,11 +308,16 @@ def run(*, out_path: str | None = None) -> int:
             before = stack.position_qty()
             fills_before = stack.fills_recorded
             filled = stack.submit(fill_proposal)
-            report.note("B_submit", {"submitted": filled.submitted, "rejected": filled.rejected,
+            report.note("B_submit", {"classification": str(stack.adapter.last_submit_outcome.classification.value)
+                                     if stack.adapter.last_submit_outcome else None,
+                                     "adapter_detail": stack.adapter.last_submit_detail,
+                                     "submitted": filled.submitted, "rejected": filled.rejected,
                                      "time_in_force": "IOC", "price": b_price,
                                      "order": None if filled.order is None else filled.order.client_order_id})
             stack.pump_private(seconds=WATCH_SECONDS)
             b_order_id = None if filled.order is None else filled.order.client_order_id
+            if b_order_id is not None and stack.tracker.require_order(b_order_id).status.value == "PENDING_CREATE":
+                report.note("B_unknown_resolution", stack.resolve_unknown(b_order_id))
             order = None if b_order_id is None else stack.tracker.order(b_order_id)
             report.note("B_after_stream", {
                 "status": None if order is None else order.status.value,
@@ -302,14 +333,18 @@ def run(*, out_path: str | None = None) -> int:
         position = stack.position_qty()
         if abs(position) > 1e-9:
             stack.refresh_mark(seconds=2.0)
-            mark = float(stack.mark_price() or mark)
+            bid, ask = stack.book_touch()
             close_side = Side.SELL if position > 0 else Side.BUY
-            close_price = price_for(close_side, mark=mark, tick=tick, offset_ticks=+2)
+            close_reference = float(bid if close_side is Side.SELL and bid is not None
+                                    else (ask if ask is not None else mark))
+            close_price = round(close_reference * (0.98 if close_side is Side.SELL else 1.02), 1)
             close_proposal = OrderProposal(symbol=config.symbol, side=close_side, quantity=abs(position),
                                            price=close_price, post_only=False, reduce_only=True,
                                            correlation=correlation)
             closed = stack.submit(close_proposal)
-            report.note("C_flatten_submit", {"submitted": closed.submitted, "rejected": closed.rejected,
+            report.note("C_flatten_submit", {"classification": str(stack.adapter.last_submit_outcome.classification.value)
+                                             if stack.adapter.last_submit_outcome else None,
+                                             "submitted": closed.submitted, "rejected": closed.rejected,
                                              "side": close_side.value, "quantity": abs(position),
                                              "reduce_only": True})
             stack.pump_private(seconds=FLATTEN_WATCH_SECONDS)
@@ -319,6 +354,7 @@ def run(*, out_path: str | None = None) -> int:
         report.note("health", stack.health())
         report.note("reconciliation", stack.reconciliation())
         report.note("latency_samples", dict(latency.log.samples) if hasattr(latency.log, "samples") else {})
+        report.note("reconciliation_evidence", list(stack.reconciliation_evidence()))
         report.note("correlation", {"decision_id": decision_id,
                                     "orders": [order.client_order_id for order in stack.orders()],
                                     "linked": [order.client_order_id for order in stack.orders()

@@ -22,7 +22,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from connectors.binance.execution.adapter import BinanceExecutionAdapter, ExecutionAuthorityContext
+from connectors.binance.execution.adapter import (BinanceExecutionAdapter, ExecutionAuthorityContext,
+                                                  normalizer_from_rules)
 from connectors.binance.execution.rest import BinanceExecutionRestClient
 from connectors.binance.market_data.runtime import LiveMarketDataConfig, LiveMarketDataRuntime
 from connectors.binance.market_data.snapshot import UrllibJsonClient
@@ -39,7 +40,7 @@ from execution.engine import ExecutionEngine, ExecutionResult
 from execution.manager import OrderManager
 from execution.normalization import OrderNormalizer
 from execution.tracker import OrderTracker
-from execution.types import Order
+from execution.types import Order, OrderStatus
 from market.events.types import Milliseconds, Venue
 from market.readiness import MarketReadinessEvidence, MarketReadinessPolicy, build_market_evidence
 from portfolio.accounting import AccountingCore
@@ -82,6 +83,9 @@ class TestnetConfig:
     acceptance: TestnetAcceptancePermission | None = None
     #: public 行情观察窗口（market evidence 需要真实窗口覆盖，不是"立刻 known"）
     market_window_s: float = 45.0
+    #: 归一化舍入模式（业务选择，必须显式给出；本模块不提供默认值）
+    price_rounding: str = ""
+    quantity_rounding: str = ""
     market_max_feed_age_ms: int = 5_000
     market_max_mark_age_ms: int = 5_000
     income_max_pages: int = 20
@@ -99,6 +103,12 @@ class TestnetConfig:
         if isinstance(self.authority_ttl_ms, bool) or not isinstance(self.authority_ttl_ms, int) \
                 or self.authority_ttl_ms <= 0:
             raise TestnetError("TestnetConfig.authority_ttl_ms must be a positive int (explicit)")
+        for name in ("price_rounding", "quantity_rounding"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise TestnetError(
+                    f"TestnetConfig.{name} must be an explicit rounding mode "
+                    "(normalization is required before any real write)")
         if self.environment is not Environment.TESTNET:
             raise TestnetError(f"this composition is TESTNET only, got {self.environment.value}")
         if self.acceptance is not None and not isinstance(self.acceptance, TestnetAcceptancePermission):
@@ -141,6 +151,7 @@ class TestnetStack:
     _coordinator: BootstrapAuthorityCoordinator | None = field(default=None, init=False)
     _collected_evidence: object | None = field(default=None, init=False)
     _market_baseline: dict[str, int] | None = field(default=None, init=False)
+    _reconciliation_evidence: list[dict[str, object]] = field(default_factory=list, init=False)
     #: adapter 的 authority 提供者（由本 composition 在签发后填充；未签发 ⇒ submit 必被拒）
     authority_slot: dict[str, ExecutionAuthorityContext | None] = field(default_factory=lambda: {"context": None})
 
@@ -382,6 +393,57 @@ class TestnetStack:
         return self.connector.query_order(client_order_id=client_order_id,
                                           timestamp=int(self.clock()) if timestamp is None else timestamp)
 
+    # ------------------------------------------------------------------ UNKNOWN 收敛（§9/§10）
+
+    def resolve_unknown(self, client_order_id: str, *, timestamp: Milliseconds | None = None) -> dict[str, object]:
+        """UNKNOWN submit 的**唯一**收敛入口：query 真实状态 → 由 tracker 收敛。
+
+        - venue 有该订单 ⇒ 把 query 事实喂给 engine/tracker（唯一 Owner）⇒ 收敛为真实状态；
+        - venue 明确没有 / 查询失败 ⇒ **保持 UNKNOWN**（`LOST` + unresolved），**不伪造** REJECTED/ACCEPTED；
+        - **不**重试 submit（只读 query）。
+        """
+        now_ms = int(self.clock()) if timestamp is None else timestamp
+        order = self.tracker.require_order(client_order_id)
+        events: tuple[object, ...] = ()
+        query_error: str | None = None
+        try:
+            events = tuple(self.connector.query_order(client_order_id=client_order_id, timestamp=now_ms))
+        except Exception as exc:  # noqa: BLE001 - 查询失败 ⇒ 仍不确定（不是"不存在"）
+            query_error = f"{type(exc).__name__}"
+        if events:
+            updates = self.manager.on_events(events)          # tracker 唯一 owner
+            current = self.tracker.require_order(client_order_id)
+            record = {"client_order_id": client_order_id, "outcome": "reconciled_from_query",
+                      "venue_events": [type(event).__name__ for event in events],
+                      "status": current.status.value, "updates": len(updates), "at_ms": now_ms}
+        elif query_error is not None:
+            record = {"client_order_id": client_order_id, "outcome": "still_unknown_query_failed",
+                      "query_error": query_error, "status": order.status.value, "at_ms": now_ms}
+        elif order.status is OrderStatus.PENDING_CANCEL:
+            # 撤单 ack 未知：同样只靠 query 收敛（不重发撤单、不假设已撤销）
+            record = {"client_order_id": client_order_id, "outcome": "still_unknown_cancel_unconfirmed",
+                      "status": order.status.value, "at_ms": now_ms}
+        elif order.status is OrderStatus.PENDING_CREATE:
+            # venue 明确没有该订单（或超出查询窗口）⇒ 不猜：LOST + unresolved（P0001.6.1 语义）
+            self.tracker.mark_lost(client_order_id, timestamp=now_ms,
+                                   reason="submit outcome unknown; venue query returned no order")
+            self.tracker.note_unresolved_order(client_order_id, reason="unknown submit unresolved")
+            record = {"client_order_id": client_order_id, "outcome": "still_unknown_no_venue_record",
+                      "status": self.tracker.require_order(client_order_id).status.value, "at_ms": now_ms}
+        else:
+            record = {"client_order_id": client_order_id, "outcome": "unchanged",
+                      "status": order.status.value, "at_ms": now_ms}
+        self._reconciliation_evidence.append(record)
+        return record
+
+    def reconciliation_evidence(self) -> tuple[dict[str, object], ...]:
+        """UNKNOWN 收敛证据（只读；产品/助手可见）。"""
+        return tuple(self._reconciliation_evidence)
+
+    def unknown_submit_pending(self) -> bool:
+        """是否存在 UNKNOWN submit 尚未收敛（adapter 计数 > 已收敛数）。"""
+        return self.adapter.unknown_submit_count > len(self._reconciliation_evidence)
+
     # ------------------------------------------------------------------ 只读事实
 
     def orders(self) -> tuple[Order, ...]:
@@ -395,6 +457,14 @@ class TestnetStack:
 
     def mark_price(self) -> float | None:
         return self.accounting.mark_price(self.config.symbol)
+
+    def book_touch(self) -> tuple[float | None, float | None]:
+        """真实盘口 best bid / best ask（IOC 定价必须基于它；mark ≠ book）。"""
+        history = self.market.history
+        if not history:
+            return (None, None)
+        price = history[-1].price
+        return (price.best_bid, price.best_ask)
 
     def risk_snapshot(self):
         now_ms = int(self.clock())
@@ -472,13 +542,23 @@ def build_testnet_stack(
                                 ws_host=config.ws_host),
         credentials=creds, clock=now)
 
+    # P0001.9.7.2 / D-048：真实写之前必须注入由**真实 exchangeInfo 规则**构造的归一化器；
+    # 不注入 ⇒ float 精度泄漏（venue `-1111 Precision is over the maximum defined for this asset`）。
+    market.load_trading_rules()
+    _rules = market.trading_rules
+    if _rules is None:
+        raise TestnetError("exchangeInfo rules are required before any real write")
+    normalizer = normalizer_from_rules(_rules, price_rounding=config.price_rounding,
+                                       quantity_rounding=config.quantity_rounding)
+
     tracker = OrderTracker(session_id=f"testnet-{int(now())}", venue=Venue.BINANCE)
     accounting = AccountingCore(initial_balance=0.0)
     ledger = FillLedger()
 
     # 与既有无签名/私有路径一致：**带 server-time offset**（签名请求的 timestamp 必须落在 recvWindow 内）
     credential_offset = ServerTimeOffset()
-    rest_client = BinanceExecutionRestClient(credentials=creds, fetcher=UrllibRestFetcher(),
+    rest_client = BinanceExecutionRestClient(credentials=creds,
+                                             fetcher=UrllibRestFetcher(expose_http_errors=True),
                                              base_url=config.rest_base, recv_window_ms=5_000, timeout_s=10.0,
                                              offset=credential_offset, clock=now)
     # adapter 的 authority 由本 composition 提供（readiness 未签发 ⇒ 写边界 fail closed，§5）

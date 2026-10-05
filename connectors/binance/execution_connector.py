@@ -30,6 +30,16 @@ _CONNECTION_STATE_BY_LIFECYCLE: dict[str, ConnectionState] = {
 }
 
 
+def _runtime_lifecycle_state(runtime: object | None) -> str:
+    """listenKey 生命周期状态（真实 runtime 是 property；duck-typed double 可能是方法）。"""
+    if runtime is None:
+        return "STOPPED"
+    state = getattr(runtime, "lifecycle_state", "STOPPED")
+    if callable(state):
+        state = state()
+    return str(state)
+
+
 @dataclass
 class BinancePrivateExecutionConnector:
     """`BinanceExecutionAdapter` + `PrivateAccountRuntime` → `PrivateExecutionConnector`。"""
@@ -135,7 +145,7 @@ class BinancePrivateExecutionConnector:
         telemetry = self.runtime.telemetry if self.runtime is not None else None
         if callable(telemetry):      # 兼容 duck-typed double（真实 runtime 是 property）
             telemetry = telemetry()
-        raw_state = str(self.runtime.lifecycle_state()) if self.runtime is not None else "STOPPED"
+        raw_state = _runtime_lifecycle_state(self.runtime)
         connection_state = _CONNECTION_STATE_BY_LIFECYCLE.get(raw_state, ConnectionState.UNKNOWN)
         if not self._connected:
             connection_state = ConnectionState.DISCONNECTED

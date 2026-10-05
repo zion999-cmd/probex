@@ -144,6 +144,15 @@ class ExternalFactsProvider(Protocol):
         """返回**真实**近期成交（无成交时返回空元组；读取/解析失败必须抛错）。"""
 
 
+def _redacted_error_detail(error: BaseException) -> str:
+    """UNKNOWN 的真实原因（脱敏）：`signature=<...>` 一律替换，避免任何 secret 进入 product/日志。"""
+    import re as _re
+
+    message = str(error) or type(error).__name__
+    message = _re.sub(r"signature=[0-9a-fA-F]+", "signature=<redacted>", message)
+    return f"{type(error).__name__}: {message}"[:400]
+
+
 class SubmitRefusedError(ExecutionAdapterError):
     """submit 被**本地**拒绝（未发送任何请求）；`reason` 为 reason code。"""
 
@@ -224,6 +233,8 @@ class BinanceExecutionAdapter:
     _skipped_transitions: int = 0
     _unknown_submits: int = 0
     _unknown_cancels: int = 0
+    #: 审计（P0001.16 §12/§16）：最近一次 submit 的结构化结果（UNKNOWN 时 detail 给出真实原因）
+    _last_submit: object | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.environment, Environment):
@@ -262,7 +273,34 @@ class BinanceExecutionAdapter:
         return outcome.events
 
     def submit_with_outcome(self, order: Order) -> SubmitOutcome:
-        """与 `submit()` 相同，但返回结构化三分类（供上层审计与 uncertain 处理）。"""
+        """与 `submit()` 相同，但返回结构化三分类（供上层审计与 uncertain 处理）。
+
+        P0001.16 §12/§16：同时记录最近一次结果（`last_submit_outcome`），使 UNKNOWN 的真实原因可被
+        telemetry / Product / Assistant 读取（不吞异常、不改变任何判定语义）。
+        """
+        outcome = self._submit_with_outcome(order)
+        self._last_submit = outcome
+        return outcome
+
+    @property
+    def last_submit_outcome(self) -> object | None:
+        """最近一次 submit 的结构化结果（审计用；UNKNOWN 时 `detail` 是真实原因）。"""
+        return self._last_submit
+
+    @property
+    def last_submit_detail(self) -> str:
+        outcome = self._last_submit
+        if outcome is None:
+            return ""
+        code = getattr(outcome, "rejection_code", None)
+        parts = [str(getattr(outcome, "classification", "")),
+                 "" if code is None else f"rejection_code={code}",
+                 str(getattr(outcome, "rejection_message", "") or ""),
+                 str(getattr(outcome, "detail", "") or "")]
+        return " | ".join(part for part in parts if part and part != "None")
+
+    def _submit_with_outcome(self, order: Order) -> SubmitOutcome:
+        """结构化三分类的实际实现（不直接对外；对外入口是 `submit_with_outcome`）。"""
         if not isinstance(order, Order):
             raise ExecutionAdapterError("submit() requires an Order")
         price: float | Decimal = order.price
@@ -339,7 +377,8 @@ class BinanceExecutionAdapter:
             return SubmitOutcome(
                 classification=SubmitClassification.UNKNOWN,
                 client_order_id=order.client_order_id,
-                detail=type(error).__name__,
+                # 审计：保留**脱敏后**的真实原因（URL 里的 signature 一律遮蔽）
+                detail=_redacted_error_detail(error),
             )
 
         try:

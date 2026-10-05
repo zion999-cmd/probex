@@ -2289,3 +2289,19 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 1. 定位 adapter 路径 UNKNOWN 根因（raw 成功 vs adapter 未知；逐字段对比请求/传输/时钟）。
 2. 实现 UNKNOWN → query/reconciliation 收敛（§9/§10）。
 3. 重跑 §14 A/B/C；4) §15 fault injection；5) SC-16/17/18 + SC-19 guard。
+
+## 2026-10-04（续）：P0001.16 根因定位 + 真实 TESTNET 闭环进展 + Stop Condition
+
+- **根因（已修复）**：写路径的结构化 HTTP 错误映射不可达 —— `UrllibRestFetcher` 把任何 HTTPError 转成裸
+  `PrivateResponseError` 并丢弃业务码，导致 `-5022`（GTX 会成交）/`-1111`（精度）等**明确拒绝**被判为 UNKNOWN。
+  修复：`UrllibRestFetcher.expose_http_errors`（additive，默认不变）+ `_signed_request` 使用既有 `_http_error`；
+  回归测试 3 条。另一真实缺陷：TESTNET 组合未注入 `OrderNormalizer`（float 精度 → `-1111`），现由真实
+  exchangeInfo 规则构造并注入 adapter+engine。
+- **真实进展**：A（GTX）经统一路径 **CONFIRMED_ACCEPTED**（venue orderId 28618831020 → tracker OPEN），
+  该单在 TESTNET **真实成交** 0.001 BTC（≈86 USDT，D-034 限额内）；`resolve_unknown` 收敛入口 + reconciliation
+  evidence 已实现（query → tracker；venue 无记录 ⇒ LOST/unresolved，不伪造）。
+- **Stop Condition（Proposal §21）**：venue `position=0.001`、`open_orders=0`；NORMAL authority 被
+  `PRIVATE_LATENCY_UNOBSERVED` 阻塞（流内无业务事件），BOOTSTRAP 被 `account_flat` 阻塞 ⇒ **无法取得任何写授权**。
+  按人类裁决 §5 已停止写操作并报告；需要三选一授权（一次性 reduce-only 平仓许可 / D-034 仓库外 harness /
+  等待私有流事件）。
+- 已停止：本轮未再发起任何写请求；offline 全量 **2417 passed / 0 failed / 24 skipped**。
