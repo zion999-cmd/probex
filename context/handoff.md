@@ -2321,3 +2321,26 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
   → NORMAL → reduce-only 清仓 → A/B/C → latency 采样 → JSON 报告（`/tmp/probex_p116/resume3.json`）。
 - 未完成：SC-11/SC-12/SC-6/SC-7/SC-15、最终 flat、`currentProposal=null`（⇒ 不得 CLOSED）。
 - 测试：offline 全量 **2426 passed / 0 failed / 24 skipped**。
+
+## 2026-10-04（续 3）：范围纠偏 → P0001.17（本地闭环 + 产品体验），本地交易闭环已跑通
+
+- **纠偏**：停止等待 Binance TESTNET 真实事件（resumer 已终止，未再发任何写请求）；P0001.16 保持
+  **In Progress / Deferred**（不关闭、不改 readiness、不伪造 private event）；`currentProposal = "P0001.17"`。
+- **完整审计（§18）发现 6 个真实缺口**（已全部修复，见 commit `f07cdf4`）：
+  1. `execution/simulation/`（P0001.8 `SimulatedVenue`：队列近似/费率/延迟）**从未接线** ⇒ PAPER 永不自动成交；
+  2. trial profile **没有 `strategy.maker.*` / `risk.*`** ⇒ 产品运行不产生 decision；
+  3. **时钟语义错位**：runtime 用 wall clock，市场/模拟器用数据时间 ⇒ 撤单永不确认、成交错时；
+  4. **回放不节流**：1 小时数据数秒跑完 ⇒ 决策环几乎没有交互机会；
+  5. 测试 fixture 的成交价在**价差内部**（真实市场不存在）⇒ touch 报价永不成交；
+  6. smoke order helper 假设订单非终态；ack latency 只在 submit 路径采样。
+- **修复**：显式 `simulation.enabled` + 既有 `SimulatedVenue` 接入唯一 connector seam（feed 事件 sink 驱动）+
+  LOCAL TRIAL 策略/风险/模拟/loop cadence/`feed.events_per_second` 节流 + 数据时间时钟 + fixture 微观结构 + engine
+  ack 采样 + smoke helper 容错。
+- **证据**：`tests/integration/test_local_paper_loop_e2e.py`（5 秒内确定性通过）——真实 PAPER 运行：
+  decision → Risk allow → 下单 → **2 笔事件级模拟成交** → tracker FILLED → accounting ledger → position==成交净额 /
+  fees>0 / equity 反映成交 → 产品 snapshot + HTTP API + canonical correlation 因果链。
+- **仍阻塞（架构边界，需人类裁决）**：本地闭环缺少 **prediction 来源** ⇒ `MakerPolicy` fail-closed（实测 `NONE` /
+  `PREDICTION_STALE`、0 submit）。可选：(1) 录制并回放真实 provider 响应（需一次外部调用授权）；
+  (2) 授权一个明确标注 `LOCAL_TRIAL` 的确定性 prediction provider（新契约、非生产模型）；
+  (3) 接受本地只有 NONE（无成交，不满足 P0001.17 §3/§17）。
+- 全量：**2428 passed / 0 failed / 24 skipped**；HEAD `f07cdf4` 已 push，工作树 clean。
