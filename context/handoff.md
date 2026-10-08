@@ -2305,3 +2305,19 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
   按人类裁决 §5 已停止写操作并报告；需要三选一授权（一次性 reduce-only 平仓许可 / D-034 仓库外 harness /
   等待私有流事件）。
 - 已停止：本轮未再发起任何写请求；offline 全量 **2417 passed / 0 failed / 24 skipped**。
+
+## 2026-10-04（续 2）：P0001.16 根因修复 + UNKNOWN 收敛 + TESTNET 产品事实完成，等待真实私有流事件
+
+- **根因（已修复）**：写路径 HTTP 错误映射不可达（fetcher 吞掉业务码）⇒ `-5022`/`-1111` 被误判 UNKNOWN；
+  已用 `expose_http_errors` + 既有 `_http_error` 结构化映射修复，并补 `OrderNormalizer` 注入（精度）。
+  实测：A 经统一路径 `CONFIRMED_ACCEPTED`（venue orderId 28618831020）并真实成交 0.001 BTC。
+- **UNKNOWN 收敛**：`TestnetStack.resolve_unknown`（query → tracker；无记录 ⇒ LOST/unresolved；不 retry、不伪造），
+  故障注入验收 3 种情形通过。
+- **TESTNET 产品事实**：`build_testnet_product_service` 接入同一 ProductService（两个 connector health 独立且真实
+  CONNECTED、MARK 来源 `binance.mark_price_update`、有界 history、只读 Assistant）；7 张真实浏览器截图 +
+  `venue_capture.json`（missing 全空）在 `artifacts/p0001.16/`。
+- **等待项**：残余仓位 0.001 BTC；NORMAL authority 需已观测私有流延迟，BOOTSTRAP 需 flat ⇒ 真实死锁（既有规则）。
+  `tests/acceptance/testnet_resume.py` 已运行（有界 360 分钟，未就绪不下单）：等资金费 `ACCOUNT_UPDATE`（≈16:00 UTC）
+  → NORMAL → reduce-only 清仓 → A/B/C → latency 采样 → JSON 报告（`/tmp/probex_p116/resume3.json`）。
+- 未完成：SC-11/SC-12/SC-6/SC-7/SC-15、最终 flat、`currentProposal=null`（⇒ 不得 CLOSED）。
+- 测试：offline 全量 **2426 passed / 0 failed / 24 skipped**。
