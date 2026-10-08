@@ -1,0 +1,74 @@
+{
+ "base": "http://127.0.0.1:8891",
+ "results": [
+  {
+   "name": "01-monitor-instrument-venue",
+   "shot": "01-monitor-instrument-venue.png",
+   "missing": [],
+   "excerpt": "PROBEX Monitor Market Activity Performance System TESTNET · testnet · binance · BTCUSDT · runtime=testnet-1791460026317 · health=HEALTHY · data_ts=1791460094528 READINESS:PRIVATE_LATENCY_UNOBSERVED · READINESS:MARKET_NOT_READY · MARKET:MARKET_NOT_TRADEABLE · ORCHESTRATOR:STREAM INSTRUMENT / VENUE mode / environment TESTNET · TESTNET instrument binance:BTCUSDT · BTCUSDT asset class CRYPTO product t"
+  },
+  {
+   "name": "02-market-instrument-source",
+   "shot": "02-market-instrument-source.png",
+   "missing": [],
+   "excerpt": "PROBEX Monitor Market Activity Performance System TESTNET · testnet · binance · BTCUSDT · runtime=testnet-1791460026317 · health=HEALTHY · data_ts=1791460094528 READINESS:PRIVATE_LATENCY_UNOBSERVED · READINESS:MARKET_NOT_READY · MARKET:MARKET_NOT_TRADEABLE · ORCHESTRATOR:STREAM MARKET VIEW live · replay · run-review K-LINE WORKBENCH · BTCUSDT · TESTNET TIMEFRAME 1m 5m 15m 1h INDICATORS MA EMA VWAP"
+  },
+  {
+   "name": "03-activity-causal-chain",
+   "shot": "03-activity-causal-chain.png",
+   "missing": [],
+   "excerpt": "PROBEX Monitor Market Activity Performance System TESTNET · testnet · binance · BTCUSDT · runtime=testnet-1791460026317 · health=HEALTHY · data_ts=1791460094528 READINESS:PRIVATE_LATENCY_UNOBSERVED · READINESS:MARKET_NOT_READY · MARKET:MARKET_NOT_TRADEABLE · ORCHESTRATOR:STREAM CAUSAL CHAIN (TIME-ORDERED, F-08) ts stage outcome identity (canonical) instrument venue decision → orders reason code de"
+  },
+  {
+   "name": "04-order-detail",
+   "shot": "04-order-detail.png",
+   "missing": [],
+   "excerpt": "PROBEX Monitor Market Activity Performance System TESTNET · testnet · binance · BTCUSDT · runtime=testnet-1791460026317 · health=HEALTHY · data_ts=1791460094528 READINESS:PRIVATE_LATENCY_UNOBSERVED · READINESS:MARKET_NOT_READY · MARKET:MARKET_NOT_TRADEABLE · ORCHESTRATOR:STREAM ACTIVE ORDERS rows 0 EXPOSURE uncertain exposure 0 open order exposure 0 has unknown exposure false Probex Assistant – co"
+  },
+  {
+   "name": "05-system-connector-health",
+   "shot": "05-system-connector-health.png",
+   "missing": [],
+   "excerpt": "PROBEX Monitor Market Activity Performance System TESTNET · testnet · binance · BTCUSDT · runtime=testnet-1791460026317 · health=HEALTHY · data_ts=1791460094528 READINESS:PRIVATE_LATENCY_UNOBSERVED · READINESS:MARKET_NOT_READY · MARKET:MARKET_NOT_TRADEABLE · ORCHESTRATOR:STREAM SYSTEM SURFACES health · risk · readiness · execution · instruments · connections · configuration · capabilities · ops VE"
+  },
+  {
+   "name": "06-system-instrument-spec",
+   "shot": "06-system-instrument-spec.png",
+   "missing": [],
+   "excerpt": "PROBEX Monitor Market Activity Performance System TESTNET · testnet · binance · BTCUSDT · runtime=testnet-1791460026317 · health=HEALTHY · data_ts=1791460094528 READINESS:PRIVATE_LATENCY_UNOBSERVED · READINESS:MARKET_NOT_READY · MARKET:MARKET_NOT_TRADEABLE · ORCHESTRATOR:STREAM SYSTEM SURFACES health · risk · readiness · execution · instruments · connections · configuration · capabilities · ops IN"
+  },
+  {
+   "name": "assistant",
+   "shot": "07-assistant-instrument-venue.png",
+   "questions": [
+    "Spot 还是 Perpetual？",
+    "当前 MARK 从哪里来？",
+    "为什么 MARK UNKNOWN 会 fail-closed？",
+    "订单来自哪个 decision？",
+    "通过哪个 execution connector 执行？"
+   ],
+   "answers": [
+    {
+     "question": "Spot 还是 Perpetual？",
+     "answer": "Spot 还是 Perpetual？\nBTCUSDT 是 PERPETUAL（CRYPTO）；instrument_id=binance:BTCUSDT，结算资产=USDT · supports_short=True，supports_reduce_only=True，has_funding=True（product semantics，由 instrument domain 声明，不由 venue 名称推断） · venue_id=binance（environment=TESTNET）；market connector=binance:market；execution connector=binance:execution（两者 health 独立） · 当前 reference price 来自 binance.mark_price_update（price_type=MARK，price=82538.65189078，as_of=1791460075000，freshness_ms=126443） · private connector=CONNECTED；已观测到私有事件=True；last private event=UNKNOWN · reconciliation 证据 1 条；最近 outcome=absent"
+    },
+    {
+     "question": "当前 MARK 从哪里来？",
+     "answer": "当前 MARK 从哪里来？\nBTCUSDT 是 PERPETUAL（CRYPTO）；instrument_id=binance:BTCUSDT，结算资产=USDT · supports_short=True，supports_reduce_only=True，has_funding=True（product semantics，由 instrument domain 声明，不由 venue 名称推断） · venue_id=binance（environment=TESTNET）；market connector=binance:market；execution connector=binance:execution（两者 health 独立） · 当前 reference price 来自 binance.mark_price_update（price_type=MARK，price=82538.65189078，as_of=1791460075000，freshness_ms=127044） · private connector=CONNECTED；已观测到私有事件=True；last private event=UNKNOWN · reconciliation 证据 1 条；最近 outcome=absent"
+    },
+    {
+     "question": "为什么 MARK UNKNOWN 会 fail-closed？",
+     "answer": "为什么 MARK UNKNOWN 会 fail-closed？\nBTCUSDT 是 PERPETUAL（CRYPTO）；instrument_id=binance:BTCUSDT，结算资产=USDT · supports_short=True，supports_reduce_only=True，has_funding=True（product semantics，由 instrument domain 声明，不由 venue 名称推断） · venue_id=binance（environment=TESTNET）；market connector=binance:market；execution connector=binance:execution（两者 health 独立） · 当前 reference price 来自 binance.mark_price_update（price_type=MARK，price=82538.65189078，as_of=1791460075000，freshness_ms=127648） · private connector=CONNECTED；已观测到私有事件=True；last private event=UNKNOWN · reconciliation 证据 1 条；最近 outcome=absent"
+    },
+    {
+     "question": "订单来自哪个 decision？",
+     "answer": "订单来自哪个 decision？\nUNKNOWN (Error: /api/v1/assistant/explain?kind=order&identity= -> HTTP 400)"
+    },
+    {
+     "question": "通过哪个 execution connector 执行？",
+     "answer": "通过哪个 execution connector 执行？\nBTCUSDT 是 PERPETUAL（CRYPTO）；instrument_id=binance:BTCUSDT，结算资产=USDT · supports_short=True，supports_reduce_only=True，has_funding=True（product semantics，由 instrument domain 声明，不由 venue 名称推断） · venue_id=binance（environment=TESTNET）；market connector=binance:market；execution connector=binance:execution（两者 health 独立） · 当前 reference price 来自 binance.mark_price_update（price_type=MARK，price=82538.65189078，as_of=1791460075000，freshness_ms=128862） · private connector=CONNECTED；已观测到私有事件=True；last private event=UNKNOWN · reconciliation 证据 1 条；最近 outcome=absent"
+    }
+   ]
+  }
+ ]
+}

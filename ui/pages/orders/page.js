@@ -48,6 +48,8 @@ export async function render() {
         ["client order id", escapeHtml(o.client_order_id)],
         ["venue order id", fact(o.venue_order_id)],
         ["prediction id", fact(o.prediction_id)],
+        ["last private event", fact((lastSnapshot.private_connector_health || {}).last_event_ms)],
+        ["connector state", fact((lastSnapshot.private_connector_health || {}).connection_state)],
         ["created / updated", `${o.created_at} / ${o.updated_at}`],
         // §25：Order → Decision / Order → Evidence / Order → Market timestamp
         ["jump to", `<a href="${entityHash("order", o.client_order_id)}">evidence</a>` +

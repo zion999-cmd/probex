@@ -1,0 +1,19 @@
+{
+ "mode": "TESTNET",
+ "venue": "binance",
+ "environment": "TESTNET",
+ "instrument": "binance:BTCUSDT",
+ "reference_price": 82538.65189078,
+ "reference_price_source": "binance.mark_price_update",
+ "position": 0.001,
+ "position_local": 0.001,
+ "active_orders": [],
+ "private_connector": "CONNECTED",
+ "market_connector": "CONNECTED",
+ "readiness": "blocked",
+ "readiness_reasons": [
+  "PRIVATE_LATENCY_UNOBSERVED",
+  "MARKET_NOT_READY"
+ ],
+ "last_submit": null
+}

@@ -31,7 +31,8 @@ class BinanceMarkPriceReferenceSource(MarkPriceReferenceSource):
         self._runtime = runtime
 
     def latest(self, *, now_ms: Milliseconds):  # type: ignore[override]
-        observation = getattr(self._runtime, "latest_mark", lambda: None)()
+        latest = getattr(self._runtime, "latest_mark", None)
+        observation = latest() if callable(latest) else latest
         if observation is not None:
             self.observe_mark_price(price=float(observation.price), exchange_ts=int(observation.exchange_ts),
                                     received_at=int(observation.receive_ts), source=self._source_name)
@@ -135,13 +136,14 @@ class BinanceMarketDataConnector:
     # ------------------------------------------------------------------ 内部
 
     def _telemetry(self) -> object:
-        return self.runtime.telemetry()
+        telemetry = getattr(self.runtime, "telemetry", None)
+        return telemetry() if callable(telemetry) else telemetry
 
     def _latest_state(self) -> object | None:
         history = getattr(self.runtime, "history", None)
         if history is None:
             return None
-        states = history()
+        states = history() if callable(history) else history
         return states[-1] if states else None
 
     def _symbol(self) -> str:

@@ -36,6 +36,7 @@ export async function render() {
   const venue = snapshot.venue || {};
   const reference = snapshot.reference_price || {};
   const identityRow = rows([
+    ["mode / environment", `${fact(snapshot.runtime.mode)} · ${fact(venue.environment)}`],
     ["instrument", `${fact(instrument.instrument_id)} · ${fact(instrument.symbol)}`],
     ["asset class", fact(instrument.asset_class)],
     ["product type", fact(instrument.product_type)],

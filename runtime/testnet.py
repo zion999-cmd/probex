@@ -101,6 +101,25 @@ class ReconciliationFact:
     detail: str
 
 
+@dataclass(frozen=True, slots=True)
+class _BookSnapshotFact:
+    """展示用盘口快照（与既有 market projection 同形；字段搬运，不做推断）。"""
+
+    ts: Milliseconds
+    bids: tuple[tuple[float, float], ...]
+    asks: tuple[tuple[float, float], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _TradePrintFact:
+    """展示用成交（字段搬运）。"""
+
+    ts: Milliseconds
+    price: float
+    quantity: float
+    aggressor: str
+
+
 class _NullLatency:
     """未接线时的空延迟观测（`samples()` 返回空 ⇒ 产品层如实 ABSENT）。"""
 
@@ -206,39 +225,60 @@ class TestnetStack:
     _runtime_id: str = field(default="", init=False)
     _started_at: Milliseconds = field(default=0, init=False)
     _server: object | None = field(default=None, init=False)
+    _market_connector: object | None = field(default=None, init=False)
+    _market_history: object | None = field(default=None, init=False)
+    _projection: object | None = field(default=None, init=False)
     #: adapter 的 authority 提供者（由本 composition 在签发后填充；未签发 ⇒ submit 必被拒）
     authority_slot: dict[str, ExecutionAuthorityContext | None] = field(default_factory=lambda: {"context": None})
 
     # ------------------------------------------------------------------ 生命周期
 
+    @property
+    def market_connector(self) -> object | None:
+        """公开行情 connector（P0001.15 contract；health 与 private 独立上报）。"""
+        return self._market_connector
+
     def start(self) -> None:
-        """连接 public + private，执行 startup recovery（不产生任何写请求）。"""
+        """连接 public + private（两个 connector 各自进入 CONNECTED），执行 startup recovery。"""
+        if self._market_connector is not None:
+            self._market_connector.connect()
+        self.connector.connect()          # 幂等：private runtime 未启动时由 connector 启动
+        self._private_started = True
         self.market.load_trading_rules()
         self.market.measure_server_time_offset()
         self.market.connect()
         self._public_started = True
-        self.private.start()
-        self._private_started = True
         self.private.refresh_clock_calibration()
         self.recovery.run(stream_state=self._stream_state(), snapshot_provider=self.recovery.fetch_snapshot)
 
     def close(self) -> None:
+        try:
+            self.connector.disconnect()
+            if self._market_connector is not None:
+                self._market_connector.disconnect()
+        except Exception:  # noqa: BLE001 - 断开失败不得掩盖停止流程
+            pass
         if self._private_started:
-            self.private.stop()
-            self._private_started = False
+            self._private_started = False      # 停止已由 connector.disconnect() 完成（幂等）
         if self._public_started:
             self.market.close()
             self._public_started = False
 
     # ------------------------------------------------------------------ 事实泵
 
+    @property
+    def market_history(self) -> object | None:
+        """有界展示缓冲（只读；供 Market 工作台/overlays 使用；不是 market truth）。"""
+        return self._market_history
+
     def pump_market(self, *, seconds: float) -> int:
-        """pump public 行情；同时把**正式 mark** 注入 accounting（P0001.15 的 MARK 语义）。"""
+        """pump public 行情；把真实事实喂给有界展示缓冲，并把**正式 mark** 注入 accounting。"""
         deadline = time.time() + max(0.0, seconds)
         events = 0
         while time.time() < deadline:
             batch = self.market.pump_once(timeout_s=0.5, max_messages=64)
             events += len(batch.market_events)
+            self._feed_market_history(batch)
             if batch.mark is not None:
                 self.accounting.update_mark_price(self.config.symbol, float(batch.mark.price),
                                                   timestamp=int(batch.mark.receive_ts))
@@ -265,6 +305,31 @@ class TestnetStack:
         return {"depth_gap_count": int(telemetry.depth_gap_count), "resync_count": int(telemetry.resync_count),
                 "malformed_message_count": int(telemetry.malformed_message_count),
                 "agg_trade_count": int(telemetry.agg_trade_count)}
+
+    def _feed_market_history(self, batch: object) -> None:
+        """把真实 market 事实搬进有界展示缓冲（字段搬运；失败不打断 pump）。"""
+        history = self._market_history
+        if history is None:
+            return
+        try:
+            from market.events.payloads import BookSnapshotPayload, TradePayload
+
+            for state in getattr(batch, "states", ()) or ():
+                history.feed_state(state)
+            for event in getattr(batch, "market_events", ()) or ():
+                payload = getattr(event, "payload", None)
+                if isinstance(payload, BookSnapshotPayload):
+                    history.feed_snapshot(_BookSnapshotFact(
+                        ts=int(event.exchange_ts),
+                        bids=tuple((level.price, level.size) for level in payload.bids),
+                        asks=tuple((level.price, level.size) for level in payload.asks)))
+                elif isinstance(payload, TradePayload):
+                    history.feed_trade(_TradePrintFact(
+                        ts=int(event.exchange_ts), price=float(payload.price),
+                        quantity=float(payload.quantity),
+                        aggressor=str(getattr(payload.aggressor, "value", payload.aggressor))))
+        except Exception:  # noqa: BLE001 - 展示缓冲不得打断真实 pump
+            return
 
     def collect_market_evidence(self, *, baseline: dict[str, int] | None = None) -> MarketReadinessEvidence:
         """由真实 public 事实构造 market evidence（只读取，判定交给 `market.readiness` 既有规则）。"""
@@ -751,7 +816,19 @@ def build_testnet_stack(
         connector=connector, tracker=tracker, manager=manager, engine=engine, accounting=accounting,
         ledger=ledger, recovery=recovery, high_watermark=high_watermark, clock=now,
         gate=LiveReadinessGate(policy=config.readiness_policy))
+    from connectors.binance.market_connector import BinanceMarketDataConnector
+    from domain.instruments import instrument_id_for
+
+    stack._market_connector = BinanceMarketDataConnector(   # noqa: SLF001
+        runtime=market, venue_identity=_binance_venue(config),
+        instrument_id=instrument_id_for(config.symbol, venue_id=_binance_venue(config).venue_id),
+        clock=now)
     stack.authority_slot = authority_holder
+    from product.market_projection import BoundedMarketHistory, MarketProjectionConfig
+
+    stack._market_history = BoundedMarketHistory(capacity=6_000, run_id=stack._runtime_id or None)  # noqa: SLF001
+    stack._projection = MarketProjectionConfig(window_ms=3_600_000, bucket_ms=1_000, max_points=300,  # noqa: SLF001
+                                               price_levels=5)
     stack._latency = ExecutionLatencyObserver(log=BoundedLatencyLog(), clock=now)   # noqa: SLF001
     stack._runtime_id = f"testnet-{int(now())}"                                     # noqa: SLF001
     stack._started_at = int(now())                                                  # noqa: SLF001
@@ -785,6 +862,8 @@ def build_testnet_product_service(stack: TestnetStack, *, host: str = "127.0.0.1
     registry = InstrumentRegistry(instruments=(spec,), current_id=spec.instrument_id)
     mark_source = BinanceMarkPriceReferenceSource(runtime=stack.market, venue_identity=venue,
                                                  instrument_id=spec.instrument_id)
+    # 公开行情 connector 由组合持有（health 与 private 独立；生命周期由 stack 管理）
+    market_connector = stack.market_connector
 
     def reference_price() -> object:
         return mark_source.latest(now_ms=int(now()))
@@ -814,18 +893,28 @@ def build_testnet_product_service(stack: TestnetStack, *, host: str = "127.0.0.1
                 "runtime_state": "RUNNING",
                 "private_stream_state": connector.get("connection_state")}
 
+    from runtime.accounting_facts import AccountingFactsProvider
+
+    accounting_facts = AccountingFactsProvider(
+        accounting=stack.accounting, symbol=stack.config.symbol, clock=now,
+        exposure_provider=lambda: (float(stack.tracker.total_pending_exposure()),
+                                   float(stack.tracker.confirmed_open_exposure)))
+
     service = ProductService(
         identity=RuntimeIdentity(mode=RuntimeMode.TESTNET, environment="testnet", venue=venue.venue_id,
                                  symbol=stack.config.symbol, runtime_id=stack._runtime_id,  # noqa: SLF001
                                  started_at=int(stack._started_at),  # noqa: SLF001
                                  data_timestamp=Fact.of(int(now()))),
         market_state=market_state,
+        market_history=lambda: stack.market_history,
+        projection_config=lambda: getattr(stack, "_projection", None),
         prediction=lambda: None,                       # 未接线 ⇒ 如实 UNKNOWN/ABSENT
         maker_decision=lambda: None,
         risk_snapshot=stack.risk_snapshot,
         risk_limits=lambda: stack.config.risk_policy.to_limits(),
         tracker=lambda: stack.tracker,
         accounting=lambda: stack.accounting,
+        accounting_facts=accounting_facts.facts,
         readiness=readiness,
         authority_id=lambda: getattr(stack.authority, "authority_id", None),
         health=health,
@@ -838,7 +927,8 @@ def build_testnet_product_service(stack: TestnetStack, *, host: str = "127.0.0.1
         instrument_registry=lambda: registry,
         venue=lambda: venue,
         reference_price=reference_price,
-        market_connector_health=lambda: None,
+        market_connector_health=(lambda: None if market_connector is None
+                                 else market_connector.health(now_ms=int(now()))),
         private_connector_health=lambda: stack.connector.health(now_ms=int(now())),
         orders_for_decision=lambda decision_id: tuple(stack.tracker.orders_for_decision(decision_id)),
         fills=stack.fill_facts,
@@ -850,7 +940,16 @@ def build_testnet_product_service(stack: TestnetStack, *, host: str = "127.0.0.1
         adapter_audit=adapter_audit,
         orchestrator_notes=stack.product_notes,
     )
-    service.replay_control = lambda: None
+    service.replay_control = lambda: None          # REPLAY-only；TESTNET 不提供回放控制
+    # Assistant：只读解释（无写型 action；gateway 为空清单 ⇒ 建议动作自然为空）
+    from actions import ActionGateway, ConfirmationRegistry
+    from assistant import AssistantService
+
+    assistant = AssistantService(
+        snapshot_provider=service.snapshot,
+        gateway=ActionGateway(clock=now, confirmations=ConfirmationRegistry(ttl_ms=60_000)),
+        evidence_provider=service.snapshot)
+    service.assistant = lambda: assistant
     return service
 
 

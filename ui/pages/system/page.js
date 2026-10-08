@@ -176,12 +176,17 @@ export async function render(rest = []) {
     const privateRows = rows([
       ["connector id", fact(private_.connector_id)],
       ["connection state", fact(private_.connection_state)],
+      ["user stream", private_.observed.known
+        ? (private_.observed.value ? "observed" : '<span class="unknown">未观测到业务事件（≠ 没有成交）</span>')
+        : '<span class="unknown">UNKNOWN</span>'],
       ["last private event (ms)", fact(private_.last_event_ms)],
       ["private event age (ms)", fact(private_.event_age_ms)],
       ["last order ack (ms)", fact(privateExtras.last_order_ack_ms)],
+      ["clock offset (ms)", fact(snapshot.health.clock_offset_ms)],
       ["reconciliation", fact(privateExtras.reconciliation_state)],
       ["account freshness (ms)", fact(privateExtras.account_state_freshness_ms)],
       ["rate limit", fact(privateExtras.rate_limit_state)],
+      ["latency samples", fact(snapshot.health.latency_samples)],
       ["detail", fact(private_.detail)],
     ]);
     return header + section("Venue", rows([
@@ -190,6 +195,10 @@ export async function render(rest = []) {
       ["environment", fact(venue.environment)],
     ])) + section("Market data connector", marketRows) +
       section("Private execution connector", privateRows) +
+      section("Execution audit (last submit)", rows([
+        ["classification", fact(snapshot.execution.last_submit_classification)],
+        ["reason (redacted)", fact(snapshot.execution.last_submit_reason)],
+      ])) +
       section("Note", rows([["separation",
         "market health 与 private health 独立：行情正常 ≠ 私有交易连接正常（不显示单一 Connected）"]]));
   }

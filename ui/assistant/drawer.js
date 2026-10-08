@@ -86,6 +86,12 @@ async function showAnswer(body, [kind, identity, label]) {
     const order = ((snapshot.execution || {}).active_orders || [])[0];
     const resolvedIdentity = identity || (order && order.client_order_id) ||
       ((order && order.decision_id && order.decision_id.value) || "");
+    if (!resolvedIdentity) {
+      // 没有订单事实时不得伪造 identity，也不发无效请求
+      host.querySelector(".v").innerHTML =
+        '<span class="unknown">UNKNOWN（当前没有订单事实可关联：无挂单/未提交）</span>';
+      return;
+    }
     const explanation = await explain(kind, resolvedIdentity);
     const answers = explanation.answers || {};
     const text = Object.values(answers).join(" · ");

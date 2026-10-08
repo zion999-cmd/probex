@@ -73,8 +73,11 @@ class BinancePrivateExecutionConnector:
     # ------------------------------------------------------------------ lifecycle
 
     def connect(self) -> None:
+        """连接私有链路（幂等）：runtime 已 ACTIVE 时不重复 start（listenKey 状态机不允许 ACTIVE→STARTING）。"""
         if self.runtime is not None:
-            self.runtime.start()
+            state = _runtime_lifecycle_state(self.runtime)
+            if state not in ("ACTIVE", "STARTING", "RENEWING", "RECONNECTING"):
+                self.runtime.start()
         self._connected = True
 
     def disconnect(self) -> None:
@@ -133,15 +136,19 @@ class BinancePrivateExecutionConnector:
     # ------------------------------------------------------------------ private facts
 
     def account_snapshot(self) -> object | None:
+        """真实账户快照（property 或方法均可；未接线 ⇒ None = UNKNOWN，不是空账户）。"""
         if self.runtime is None:
             return None
-        return self.runtime.latest_snapshot()
+        snapshot = getattr(self.runtime, "latest_snapshot", None)
+        return snapshot() if callable(snapshot) else snapshot
 
     def positions(self) -> tuple[object, ...]:
+        """真实持仓（未接线 ⇒ 空元组；调用方据此按 UNKNOWN 处理）。"""
         if self.runtime is None:
             return ()
-        position = self.runtime.latest_position()
-        return () if position is None else (position,)
+        position = getattr(self.runtime, "latest_position", None)
+        resolved = position() if callable(position) else position
+        return () if resolved is None else (resolved,)
 
     def reconciliation_state(self) -> str | None:
         if self.reconciliation_state_provider is None:

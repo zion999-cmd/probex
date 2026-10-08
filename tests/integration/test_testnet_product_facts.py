@@ -148,7 +148,7 @@ class _PrivateDouble:
         self.continuity_assumed = True
         self.latest_snapshot = None
         self.latest_position = None
-        self.lifecycle_state = "ACTIVE"
+        self.lifecycle_state = "ACTIVE"      # 组合在测试中已连接（connect() 幂等）
 
     def start(self) -> None: ...
     def stop(self) -> None: ...

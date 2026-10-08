@@ -109,7 +109,7 @@ class _PrivateTelemetry:
 
 class _PrivateAccountRuntime:
     def __init__(self) -> None:
-        self.lifecycle = "ACTIVE"
+        self.lifecycle = "STOPPED"
         self.started = False
         self.stopped = False
         self._telemetry = _PrivateTelemetry()

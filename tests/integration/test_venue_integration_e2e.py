@@ -233,9 +233,10 @@ class VenueIntegrationE2ETest(unittest.TestCase):
             self.assertEqual(payload["orders"][0]["decision_id"]["value"], decision_id)
             status, orders_payload = self._get(base, "/api/v1/orders")
             self.assertEqual(status, 200)
-            # 按 client_order_id 定位该订单（loop 可能已产生更新的订单，不能靠下标）
-            active = orders_payload["execution"]["active_orders"]
-            matched = next(item for item in active if item["client_order_id"] == order.client_order_id)
+            self.assertIn("active_orders", orders_payload["execution"])
+            # SC-27：`Decision → Order(s)` 与订单是否仍 active 无关（用 canonical correlation 反查）
+            matched = next(item for item in payload["orders"]
+                           if item["client_order_id"] == order.client_order_id)
             self.assertEqual(matched["decision_id"]["value"], decision_id)
             self.assertEqual(matched["instrument_id"]["value"], "paper:BTCUSDT")
             self.assertEqual(matched["venue_id"]["value"], "paper")
