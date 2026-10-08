@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,6 +43,9 @@ class FeedConfig:
     projection: MarketProjectionConfig
     history_capacity: int
     view_depth: int
+    #: P0001.17：显式回放节流（事件/秒）。None ⇒ 不限速（既有行为）；本地闭环需要让决策环
+    #: 有时间与市场交互（否则 1 小时回放在数秒内跑完，策略只有 1–2 次决策机会）。
+    events_per_second: int | None = None
 
     def __post_init__(self) -> None:
         if not str(self.event_store):
@@ -52,6 +56,10 @@ class FeedConfig:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise FeedError(f"FeedConfig.{name} must be a positive int")
+        if self.events_per_second is not None:
+            value = self.events_per_second
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise FeedError("FeedConfig.events_per_second must be None or a positive int")
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +108,8 @@ class MarketFeedProvider:
     on_data_timestamp: Callable[[int], None] | None = None
     #: P0001.15 §11 人类裁决 1A：正式 MARK_PRICE 事件 → reference price source 的只写 sink
     reference_price_sink: Callable[[object], None] | None = None
+    #: P0001.17 §3：本地执行模拟器 sink（每个市场事件都喂给 `SimulatedVenue` ⇒ 事件级模拟成交）
+    market_event_sink: Callable[[object], None] | None = None
     _thread: threading.Thread | None = field(default=None, init=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False)
     _stats: dict[str, object] = field(default_factory=dict, init=False)
@@ -158,10 +168,26 @@ class MarketFeedProvider:
     def _consume(self) -> None:
         try:
             source = ReplaySource(JsonlEventReader(Path(self.config.event_store)))
-            for event in source.iter_events():
+            rate = self.config.events_per_second
+            started_at = time.monotonic()
+            for consumed, event in enumerate(source.iter_events()):
+                if rate is not None:
+                    # 显式节流：按事件数推算应到的 wall 时刻（不改变数据顺序/内容）
+                    target = started_at + (consumed + 1) / float(rate)
+                    delay = target - time.monotonic()
+                    if delay > 0:
+                        time.sleep(min(delay, 1.0))
                 if self._stop.is_set():
                     self._stats["stopped_early"] = True
                     return
+                # P0001.17：本地执行模拟器消费**每一个**市场事件（book + trade）
+                if self.market_event_sink is not None:
+                    try:
+                        self.market_event_sink(event)
+                    except Exception as exc:  # noqa: BLE001 - 模拟器失败不得打断真实 feed
+                        self._stats["simulation_sink_errors"] = int(
+                            self._stats.get("simulation_sink_errors", 0)) + 1
+                        self._stats["simulation_sink_last_error"] = type(exc).__name__
                 # 按事件类型路由：TRADE / MARK_PRICE 都不是盘口 mutation（MarketBook 会拒绝）。
                 is_trade = event.event_type is EventType.TRADE
                 is_mark = event.event_type is EventType.MARK_PRICE

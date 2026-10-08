@@ -59,6 +59,8 @@ class ReadModelPolishE2E(unittest.TestCase):
         store = self.tmp / "events.jsonl"
         write_store(store, scenarios.reference_events())
         values = json.loads((PROJECT_ROOT / "profiles" / "trial-local.json").read_text(encoding="utf-8"))
+        # 本套件验证"手工注入 fill"的读模型路径 ⇒ 显式关闭事件级模拟（P0001.17）
+        values["simulation.enabled"] = False
         entries = tuple(ConfigEntry(name=str(k), source=ConfigSource.FILE, value=Fact.of(v))
                         for k, v in values.items())
         return ProductRuntime(profile=RuntimeProfile(

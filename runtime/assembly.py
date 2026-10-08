@@ -301,6 +301,7 @@ class ProductRuntime:
     _reference_prices: object | None = field(default=None, init=False)
     _market_connector: object | None = field(default=None, init=False)
     _execution_connector: object | None = field(default=None, init=False)
+    _simulated_venue: object | None = field(default=None, init=False)
     _reconciliation_events: list[object] = field(default_factory=list, init=False)
     _retention_policy: RetentionPolicy = field(default_factory=RetentionPolicy, init=False)
     _last_prune: dict[str, object] | None = field(default=None, init=False)
@@ -308,6 +309,21 @@ class ProductRuntime:
     _feed_error: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
+        self._local_data_clock: dict[str, int | None] = {"ms": None}
+        if self.profile.feed is not None:
+            # P0001.17 §3：本地 Replay/PAPER 的时间必须与**市场数据时间**一致（确定性、可复现），
+            # 否则引擎订单时间（wall clock）与市场/模拟成交时间（event time）不在同一时间轴，
+            # 会导致撤单永不确认、模拟成交错时。数据时间在首个事件到达后可用（此前回退 wall clock）。
+            from dataclasses import replace as _replace
+
+            wall = self.profile.clock
+            data_clock = self._local_data_clock
+
+            def _local_clock() -> int:
+                data_ms = data_clock["ms"]
+                return int(data_ms) if data_ms is not None else int(wall())
+
+            self.profile = _replace(self.profile, clock=_local_clock)
         now = int(self.profile.clock())
         self._registry = JsonRunRegistry(pathlib_path(self.profile.run_registry_dir))
         # F-13：唯一次解析（provenance resolver）；后续所有消费方只读这个结果
@@ -623,9 +639,15 @@ class ProductRuntime:
         order = submitted.order
         if order is None:
             return {"submitted": False, "reason": "rejected"}
-        # PaperBroker 的 ack 已在 submit 路径经 engine 处理；这里只撤销并记录真实延迟样本
+        # ack 已在 submit 路径经 engine 处理；这里撤销并记录真实延迟样本。
+        # P0001.17：本地事件级模拟可能已经把该单成交（终态）⇒ 不做无意义撤销，如实报告终态。
+        current = getattr(order, "status", None)
+        if current is not None and bool(getattr(current, "is_terminal", False)):
+            return {"submitted": True, "client_order_id": order.client_order_id,
+                    "cancelled": False, "terminal_status": str(getattr(current, "value", current)),
+                    "observed": dict(self._latency_observer.observed)}
         cancelled = self._execution.cancel(order.client_order_id, now_ms=now)
-        return {"submitted": True, "client_order_id": order.client_order_id,
+        return {"submitted": True, "client_order_id": order.client_order_id, "cancelled": True,
                 "cancel_updates": len(cancelled.updates),
                 "observed": dict(self._latency_observer.observed)}
 
@@ -802,10 +824,35 @@ class ProductRuntime:
             from risk.gate import RiskGate
             from risk.limits import RiskLimits
 
-            paper = PaperBroker()
-            # P0001.15 §9：唯一 PaperBroker 由统一执行 connector 持有（engine 只依赖 connector seam）
+            # P0001.17 §3：本地 Replay/PAPER 的执行适配器。
+            #   simulation.enabled=true ⇒ 使用既有 `SimulatedVenue`（P0001.8 事件级模拟成交：队列近似/费率/延迟），
+            #   由市场事件驱动真实成交 → FillLedger/Accounting；否则保持既有 PaperBroker（手工注入 fill）。
+            local_adapter: object
+            self._simulated_venue = None
+            if values.get("simulation.enabled") is True:
+                from execution.simulation.fees import FeeSchedule
+                from execution.simulation.latency import LatencyModel
+                from execution.simulation.venue import SimulatedVenue
+
+                submit_ms = values.get("simulation.latency.submit_ms")
+                cancel_ms = values.get("simulation.latency.cancel_ms")
+                maker_fee = values.get("simulation.fees.maker_fee_rate")
+                fee_asset = values.get("simulation.fees.fee_asset")
+                if None in (submit_ms, cancel_ms, maker_fee, fee_asset):
+                    raise AssemblyError(
+                        "simulation.enabled requires explicit simulation.latency.* / simulation.fees.* values "
+                        "(no invented defaults)")
+                self._simulated_venue = SimulatedVenue(
+                    symbol=self.profile.symbol,
+                    latency=LatencyModel(submit_latency_ms=int(submit_ms), cancel_latency_ms=int(cancel_ms)),
+                    fee_schedule=FeeSchedule(maker_fee_rate=float(maker_fee), fee_asset=str(fee_asset)),
+                    venue=Venue(self.profile.venue.lower()))
+                local_adapter = self._simulated_venue
+            else:
+                local_adapter = PaperBroker()
+            # P0001.15 §9：本地执行适配器由统一 connector 持有（engine 只依赖 connector seam）
             self._execution_connector = PaperExecutionConnector(
-                broker=paper, venue_identity=self._resolve_venue_identity(), symbol=self.profile.symbol,
+                broker=local_adapter, venue_identity=self._resolve_venue_identity(), symbol=self.profile.symbol,
                 clock=self.profile.clock)
             self._execution_connector.connect()      # P0001.15 §9：paper 执行 connector 在本进程内就绪
             manager = OrderManager(tracker=self._tracker_owner, adapter=self._execution_connector)
@@ -1062,7 +1109,8 @@ class ProductRuntime:
                                                                 max_points=profile.max_points,
                                                                 price_levels=profile.price_levels),
                               history_capacity=profile.history_capacity,
-                              view_depth=profile.view_depth),
+                              view_depth=profile.view_depth,
+                              events_per_second=self._feed_events_per_second()),
             venue=Venue(self.profile.venue.lower()),
             symbol=self.profile.symbol, mode=self.profile.mode, run_id=self._session.run_id,
             clock=self.profile.clock)
@@ -1071,6 +1119,8 @@ class ProductRuntime:
         # P0001.15 §11 / 人类裁决 1A：正式 MARK_PRICE 事件驱动 reference price（只接受 MARK_PRICE）
         reference_prices = self._resolve_reference_prices()
         provider.reference_price_sink = reference_prices.observe_market_event
+        if self._simulated_venue is not None:
+            provider.market_event_sink = self._simulated_venue.on_market_event
         venue = self._resolve_venue_identity()
         registry = self._resolve_instrument_registry()
         instrument = None if registry is None else registry.current
@@ -1248,6 +1298,13 @@ class ProductRuntime:
             return None
         return exchange_ts, process_ts
 
+    def _feed_events_per_second(self) -> int | None:
+        """回放节流（显式配置才生效；未配置 ⇒ 不限速，保持既有行为）。"""
+        value = self._config_values().get("feed.events_per_second")
+        if value is None:
+            return None
+        return int(value)
+
     def _market_connector_health(self) -> object | None:
         connector = getattr(self, "_market_connector", None)
         if connector is None:
@@ -1419,7 +1476,11 @@ class ProductRuntime:
         return tuple(evidence()) if callable(evidence) else ()
 
     def note_data_timestamp(self, ts_ms: int) -> None:
-        """运行时推进 data timestamp（由真实 market/runtime event 驱动；不等 stop）。"""
+        """运行时推进 data timestamp（由真实 market/runtime event 驱动；不等 stop）。
+
+        P0001.17：本地 Replay/PAPER 的 runtime 时钟同步推进到数据时间（单一时间轴）。
+        """
+        self._local_data_clock["ms"] = int(ts_ms) if hasattr(self, "_local_data_clock") else None
         self._identity = dataclasses_replace(self._identity, data_timestamp=Fact.of(int(ts_ms)))
         service = getattr(self, "_service", None)
         if service is not None:

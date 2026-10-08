@@ -43,10 +43,13 @@ def build_market_events(*, hours: int = DEFAULT_HOURS, step_ms: int = DEFAULT_ST
         bid = round(price - spread / 2, 1)
         ask = round(price + spread / 2, 1)
         quantity = round(abs(rng.gauss(0.6, 0.35)) + 0.05, 4)
-        events.append(trade_event(trade_id, price=round(price, 1), quantity=quantity,
-                                  aggressor=(AggressorSide.BUY if rng.random() > 0.5
-                                             else AggressorSide.SELL),
-                                  exchange_ts=ts, receive_ts=ts, process_ts=ts))
+        # 真实微观结构：主动方**打到盘口**成交（buy 吃 ask / sell 砸 bid），而不是在价差内部成交。
+        # 这一点很重要：P0001.17 的本地模拟成交（队列近似）按"成交价穿越挂单价"判定，
+        # 若成交价恒在价差内部，touch 报价永远不会成交（本地闭环会假性无成交）。
+        aggressor = AggressorSide.BUY if rng.random() > 0.5 else AggressorSide.SELL
+        trade_price = ask if aggressor is AggressorSide.BUY else bid
+        events.append(trade_event(trade_id, price=round(trade_price, 1), quantity=quantity,
+                                  aggressor=aggressor, exchange_ts=ts, receive_ts=ts, process_ts=ts))
         trade_id += 1
         bids = [(round(bid - offset * 0.1, 1), round(abs(rng.gauss(1.0, 0.5)) + 0.05, 4))
                 for offset in range(5)]

@@ -19,6 +19,7 @@ from pathlib import Path
 
 from connectors.paper import PaperExecutionConnector
 from execution.adapters.paper import PaperBroker
+from execution.simulation.venue import SimulatedVenue
 from product import reason_catalog
 from product.provenance import ConfigEntry, ConfigSource
 from product.types import Fact, RuntimeMode
@@ -91,6 +92,10 @@ class DecisionLoopE2ETest(unittest.TestCase):
         write_market_store(store, hours=3)
         values: dict[str, object] = json.loads(
             (Path(__file__).resolve().parents[2] / "profiles" / "trial-local.json").read_text())
+        if not maker:                     # 显式移除（trial profile 可能自带 strategy.maker.*）
+            values = {k: v for k, v in values.items() if not k.startswith("strategy.maker.")}
+        if not limits:
+            values = {k: v for k, v in values.items() if not k.startswith("risk.")}
         for key, options in ((MAKER_VALUES, maker), (RISK_VALUES, limits)):
             if options:
                 values.update(key)
@@ -146,11 +151,14 @@ class DecisionLoopE2ETest(unittest.TestCase):
         self.assertEqual(loop.status.risk_rejects, 0)
         self.assertIsNotNone(loop.latest_prediction)
 
-        # 订单真实进入 execution（唯一 PaperBroker）+ RiskGate 逐单 allow
+        # 订单真实进入 execution（唯一本地适配器）+ RiskGate 逐单 allow
         orders = tuple(snapshot.execution.active_orders)
-        self.assertEqual(len(orders), 2)
-        self.assertEqual({order.side for order in orders}, {"buy", "sell"})
-        self.assertTrue(all(order.status == "OPEN" for order in orders))
+        self.assertGreaterEqual(len(orders), 1)
+        self.assertTrue(all(order.status in ("OPEN", "PARTIALLY_FILLED") for order in orders))
+        # P0001.17：事件级模拟成交可能已经把其中一侧打掉 ⇒ 用 Risk allow 证据证明两单都过了 RiskGate
+        submitted_ids = [str(stage.identity.value) for stage in snapshot.evidence.trace
+                         if stage.stage == "order"]
+        self.assertGreaterEqual(len(submitted_ids), 2)
         risk_stages = [stage for stage in snapshot.evidence.trace if stage.stage == "risk"]
         self.assertEqual([str(stage.outcome) for stage in risk_stages], ["allow", "allow"])
         order_stages = [stage for stage in snapshot.evidence.trace if stage.stage == "order"]
@@ -255,11 +263,13 @@ class DecisionLoopE2ETest(unittest.TestCase):
         # P0001.15 §9：engine 依赖统一 connector seam，唯一 PaperBroker 由 connector 持有
         adapter = runtime._execution.manager.adapter                          # noqa: SLF001
         self.assertIsInstance(adapter, PaperExecutionConnector)
-        self.assertIsInstance(adapter.broker, PaperBroker)
+        # P0001.17：本地适配器 = SimulatedVenue（事件级模拟成交）或 PaperBroker（手工 fill），且只有一个
+        self.assertIsInstance(adapter.broker, (PaperBroker, SimulatedVenue))
 
         sources = {path.name: path.read_text(encoding="utf-8")
                    for path in (Path(__file__).resolve().parents[2] / "runtime").glob("*.py")}
-        construction = sorted(name for name, text in sources.items() if "PaperBroker(" in text)
+        construction = sorted(name for name, text in sources.items()
+                              if "PaperBroker(" in text or "SimulatedVenue(" in text)
         self.assertEqual(construction, ["assembly.py"])                         # 唯一构造点
 
     def test_decision_loop_has_no_venue_connector_coupling(self) -> None:

@@ -202,6 +202,13 @@ class ExecutionEngine:
         updates = self.manager.poll()
         for update in updates:
             self._note_latency(f"update:{type(update).__name__}", int(now_ms))
+            # P0001.17：本地事件级模拟的 ack 经 poll 到达（submit 返回时仍是 PENDING_CREATE）
+            # ⇒ 在 poll 路径同样记录 accept 边界，保证 submit_to_ack 有真实样本（不伪造）。
+            order = getattr(update, "order", None)
+            status = getattr(order, "status", None)
+            if status in (OrderStatus.OPEN, OrderStatus.PARTIALLY_FILLED, OrderStatus.FILLED):
+                self._note_latency("event:OrderAccepted",
+                                   int(getattr(order, "updated_at", now_ms)))
         return ExecutionResult(timestamp=now_ms, updates=updates, fills=self._account(updates))
 
     # ------------------------------------------------------------------ 快照

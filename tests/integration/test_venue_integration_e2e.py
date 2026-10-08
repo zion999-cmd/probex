@@ -299,11 +299,13 @@ class VenueIntegrationE2ETest(unittest.TestCase):
     def test_b_paper_execution_goes_through_the_unified_connector_with_one_broker(self) -> None:
         from connectors.paper import PaperExecutionConnector
         from execution.adapters.paper import PaperBroker
+        from execution.simulation.venue import SimulatedVenue
 
         runtime = self.started_runtime(mark_price=MARK_PRICE)
         adapter = runtime._execution.manager.adapter                            # noqa: SLF001
         self.assertIsInstance(adapter, PaperExecutionConnector)
-        self.assertIsInstance(adapter.broker, PaperBroker)
+        # P0001.17：本地适配器 = SimulatedVenue（事件级模拟成交）或 PaperBroker（手工 fill），且只有一个
+        self.assertIsInstance(adapter.broker, (PaperBroker, SimulatedVenue))
         self.assertEqual(adapter.venue_identity.venue_id, runtime._venue_identity.venue_id)  # noqa: SLF001
         self.assertFalse(hasattr(runtime._feed_provider, "paper_broker"))       # noqa: SLF001
 

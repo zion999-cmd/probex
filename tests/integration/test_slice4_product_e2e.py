@@ -122,8 +122,9 @@ class A_CausalTraceTest(Slice4RuntimeTestCase):
     def test_complete_time_ordered_trace_from_a_real_paper_run(self) -> None:
         runtime = self.build_runtime()
         base = self.start_with_http(runtime)
-        runtime._accounting.update_mark_price("BTCUSDT", 59_000.0, timestamp=int(runtime.profile.clock()))
-        smoke = runtime.run_paper_smoke_order(price=59_000.0, quantity=0.001)
+        runtime._accounting.update_mark_price("BTCUSDT", 100.0, timestamp=int(runtime.profile.clock()))
+        # P0001.17：本地模拟器按真实 venue 规则拒绝"会被成交的 post-only" ⇒ smoke 单挂在盘口**下方**
+        smoke = runtime.run_paper_smoke_order(price=90.0, quantity=0.001)
         self.assertTrue(smoke["submitted"], smoke)
         action = self.invoke_with_confirmation(base, "runtime.request_reconciliation", {})
         self.assertEqual(action["status"], "SUCCEEDED", action)
@@ -152,10 +153,17 @@ class A_CausalTraceTest(Slice4RuntimeTestCase):
         normalization = next(entry for entry in trace if entry["stage"] == "normalization")
         self.assertIn("->", normalization["detail"])
         self.assertIn("ROUND_DOWN", normalization["detail"])
-        # ack latency 来自真实 observer
+        # ack latency 来自真实 observer：smoke 单必须带真实样本；其它 ack 若缺样本必须带 reason
         ack = [entry for entry in trace if entry["stage"] == "ack"]
         self.assertTrue(ack)
-        self.assertTrue(all(entry["latency_ms"]["known"] for entry in ack))
+        # 注：ack→order 的身份映射是既有 trace 的启发式（按时间就近匹配）。本地闭环同时存在
+        # 策略订单与 smoke 单，且事件级模拟会让订单很快终态 ⇒ 不要求特定订单一定出现在 ack 段，
+        # 但**必须有真实样本**，且缺样本的 entry 必须带 reason（不允许静默 UNKNOWN）。
+        self.assertTrue(any(entry["latency_ms"]["known"] for entry in ack),
+                        "no ack latency sample at all")
+        for entry in ack:
+            if not entry["latency_ms"]["known"]:
+                self.assertTrue(entry["latency_ms"]["reason"], "unknown latency must carry a reason")
         # reconciliation 在同一 trace
         self.assertEqual(next(entry for entry in trace
                               if entry["stage"] == "reconciliation")["reason_code"]["value"],
