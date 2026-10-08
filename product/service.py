@@ -143,6 +143,10 @@ class ProductService:
     orders_for_decision: Callable[[str], tuple[object, ...]] = lambda decision_id: ()
     #: 用于把 ActiveOrder 的 correlation 关联到产生它的 decision（只读）
     trader_orders: Callable[[], tuple[object, ...]] = tuple
+    #: P0001.16 §16：写边界审计（最近一次 submit 的分类/原因；未接线 ⇒ UNKNOWN）
+    adapter_audit: Callable[[], object | None] = lambda: None
+    #: P0001.16 §16：写边界审计（最近一次 submit 的分类/原因；未接线 ⇒ UNKNOWN）
+    adapter_audit: Callable[[], object | None] = lambda: None
     #: G4：prediction provider 状态 / accounting 健康
     prediction_provider_status: Callable[[], object | None] = lambda: None
     accounting_health: Callable[[], object | None] = lambda: None
@@ -472,6 +476,7 @@ class ProductService:
                     fee=Fact.of(_get(fill, "fee")),
                     trade_id=Fact.of(_get(fill, "trade_id")),
                 ))
+        audit = self.adapter_audit()
         return ExecutionView(
             recent_fills=tuple(fills),
             recent_fill_limit=limit,
@@ -481,6 +486,10 @@ class ProductService:
             has_unknown_exposure=bool(getattr(tracker, "has_unknown_exposure", False)),
             unknown_submit_count=Fact.of(_get(tracker, "unknown_submit_count")),
             unknown_cancel_count=Fact.of(_get(tracker, "unknown_cancel_count")),
+            last_submit_classification=Fact.of(_get(audit, "classification"),
+                                               unknown_reason="no submit has been attempted"),
+            last_submit_reason=Fact.of(_get(audit, "detail"),
+                                       unknown_reason="submit carries no audit detail"),
         )
 
     @staticmethod

@@ -94,6 +94,18 @@ class BinancePrivateExecutionConnector:
     def poll(self) -> tuple[ExecutionEvent, ...]:
         return self._note(self.adapter.poll())
 
+    def bridge_user_event(self, observation: object) -> tuple[ExecutionEvent, ...]:
+        """私有 user-stream 事实 → 执行事件（P0001.16 §8/§9）。
+
+        connector 是**唯一**桥接点：真实 `ORDER_TRADE_UPDATE`（NEW/PARTIALLY_FILLED/FILLED/CANCELED/
+        EXPIRED/REJECTED）与成交都经这里进入 `ExecutionEngine → OrderTracker / FillLedger / AccountingCore`。
+        账户类事实（ACCOUNT_UPDATE）由 private runtime 的既有 provider（snapshot/telemetry）承载，不在此重复。
+        """
+        bridge = getattr(self.adapter, "bridge_user_event", None)
+        if bridge is None:
+            return ()
+        return self._note(tuple(bridge(observation)))
+
     def query_order(self, *, client_order_id: str, timestamp: Milliseconds) -> tuple[ExecutionEvent, ...]:
         """`query order`（§2/§3）：用于 UNKNOWN 收敛 / reconciliation（**不**自动 retry 写请求）。"""
         query = getattr(self.adapter, "query_order", None)

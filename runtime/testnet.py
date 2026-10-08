@@ -18,7 +18,9 @@ ExecutionEngine → PrivateExecutionConnector → BinancePrivateExecutionConnect
 
 from __future__ import annotations
 
+import json as _json
 import time
+from builtins import ValueError as _ValueError  # noqa: F401 - 保持导入稳定性
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -59,6 +61,51 @@ from risk.types import KillSwitchMode, OrderProposal
 from readiness.bootstrap import (BootstrapActivation, BootstrapAuthority, BootstrapAuthorityCoordinator,
                                   BootstrapEligibility, BootstrapWriteGate)
 from storage.high_watermark import JsonHighWatermarkStore
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleFact:
+    """F-08 订单生命周期事实（字段搬运自 OrderTracker；不新建 event store）。"""
+
+    client_order_id: str
+    timestamp: Milliseconds
+    event_name: str
+    reason: str = ""
+
+    @property
+    def ts(self) -> Milliseconds:
+        return self.timestamp
+
+
+@dataclass(frozen=True, slots=True)
+class FillFact:
+    """F-08 成交事实（`Fill.order_id` 即 client_order_id）。"""
+
+    client_order_id: str
+    ts: Milliseconds
+    price: float
+    quantity: float
+    fee: float
+    trade_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReconciliationFact:
+    """UNKNOWN 收敛 / reconciliation 证据（P0001.16 §10；产品/助手可见）。"""
+
+    ts: Milliseconds
+    identity: str
+    identity_kind: str
+    outcome: str
+    reason_code: str
+    detail: str
+
+
+class _NullLatency:
+    """未接线时的空延迟观测（`samples()` 返回空 ⇒ 产品层如实 ABSENT）。"""
+
+    def samples(self, *, stage: str | None = None) -> tuple[object, ...]:
+        return ()
 
 
 class TestnetError(RuntimeError):
@@ -152,6 +199,13 @@ class TestnetStack:
     _collected_evidence: object | None = field(default=None, init=False)
     _market_baseline: dict[str, int] | None = field(default=None, init=False)
     _reconciliation_evidence: list[dict[str, object]] = field(default_factory=list, init=False)
+    #: 产品读模型事实（字段搬运；不新建第二套 store）
+    _transitions: list[LifecycleFact] = field(default_factory=list, init=False)
+    _reconciliation_facts: list[ReconciliationFact] = field(default_factory=list, init=False)
+    _latency: object | None = field(default=None, init=False)
+    _runtime_id: str = field(default="", init=False)
+    _started_at: Milliseconds = field(default=0, init=False)
+    _server: object | None = field(default=None, init=False)
     #: adapter 的 authority 提供者（由本 composition 在签发后填充；未签发 ⇒ submit 必被拒）
     authority_slot: dict[str, ExecutionAuthorityContext | None] = field(default_factory=lambda: {"context": None})
 
@@ -244,6 +298,7 @@ class TestnetStack:
                 if hasattr(event, "order_status") or type(event).__name__ == "OrderUpdateObservation":
                     self.connector.bridge_user_event(event)
             result = self.engine.poll(now_ms=int(self.clock()))
+            self._note_updates(result.updates)
             delivered += len(result.updates)
             for update in result.updates:
                 fill = getattr(update, "fill", None)
@@ -383,15 +438,72 @@ class TestnetStack:
 
     def submit(self, proposal: OrderProposal, *, now_ms: Milliseconds | None = None) -> ExecutionResult:
         """经 RiskGate 提交（Risk 判定在 engine 内；readiness 由 adapter 写边界校验）。"""
-        return self.engine.submit(proposal, now_ms=int(self.clock()) if now_ms is None else now_ms)
+        result = self.engine.submit(proposal, now_ms=int(self.clock()) if now_ms is None else now_ms)
+        self._note_updates(result.updates)
+        return result
 
     def cancel(self, client_order_id: str, *, now_ms: Milliseconds | None = None) -> ExecutionResult:
-        return self.engine.cancel(client_order_id, now_ms=int(self.clock()) if now_ms is None else now_ms)
+        result = self.engine.cancel(client_order_id, now_ms=int(self.clock()) if now_ms is None else now_ms)
+        self._note_updates(result.updates)
+        return result
+
+    def _note_updates(self, updates: tuple[object, ...]) -> None:
+        """把 owner 产生的状态转换记录为只读事实（供 Activity/Orders trace；不改状态）。"""
+        for update in updates:
+            order = getattr(update, "order", None)
+            if order is None:
+                continue
+            status = getattr(order, "status", None)
+            name = str(getattr(status, "value", status))
+            self._transitions.append(LifecycleFact(
+                client_order_id=str(order.client_order_id), timestamp=int(order.updated_at),
+                event_name=f"OrderStatus:{name}", reason=str(getattr(update, "detail", "") or "")))
 
     def query_order(self, *, client_order_id: str, timestamp: Milliseconds | None = None) -> tuple[object, ...]:
         """REST query：只用于 recovery / reconciliation / UNKNOWN 收敛（§9）。"""
         return self.connector.query_order(client_order_id=client_order_id,
                                           timestamp=int(self.clock()) if timestamp is None else timestamp)
+
+    # ------------------------------------------------------------------ 产品读模型事实
+
+    def lifecycle_facts(self) -> tuple[LifecycleFact, ...]:
+        """订单生命周期事实：owner 产生的状态转换 + 终态/LOST 快照（不新建 store）。"""
+        facts = list(self._transitions)
+        for order in self.tracker.orders:
+            status = getattr(order, "status", None)
+            if not (bool(getattr(status, "is_terminal", False)) or bool(getattr(status, "is_lost", False))):
+                continue
+            name = str(getattr(status, "value", status))
+            facts.append(LifecycleFact(client_order_id=str(order.client_order_id),
+                                       timestamp=int(order.updated_at), event_name=f"OrderStatus:{name}",
+                                       reason="local uncertainty is not a terminal fact" if
+                                       bool(getattr(status, "is_lost", False)) else ""))
+        return tuple(sorted(facts, key=lambda fact: fact.timestamp))
+
+    def fill_facts(self) -> tuple[FillFact, ...]:
+        """成交事实（来自唯一账本 Owner 的 fills；`Fill.order_id` 即 client_order_id）。"""
+        return tuple(FillFact(client_order_id=str(fill.order_id), ts=int(fill.exchange_ts),
+                              price=float(fill.price), quantity=float(fill.quantity),
+                              fee=float(fill.fee), trade_id=str(fill.trade_id))
+                     for fill in self.ledger.fills)
+
+    @property
+    def latency_observer(self) -> object:
+        """执行延迟观测（五阶段；engine 边界 + 私有流 lag）。"""
+        return self._latency if self._latency is not None else _NullLatency()
+
+    def product_notes(self) -> tuple[str, ...]:
+        """产品 blocker/说明 notes：UNKNOWN 真实原因、reconciliation 状态、user stream 健康（只读事实）。"""
+        notes: list[str] = []
+        detail = self.adapter.last_submit_detail
+        if detail:
+            notes.append(f"execution:submit_audit={detail}")
+        for record in self._reconciliation_evidence:
+            notes.append(f"reconciliation:{record.get('outcome')}:{record.get('client_order_id')}")
+        health = self.health()
+        notes.append(f"stream:listen_key={health.get('connection_state')}:"
+                     f"observed={health.get('private_events_observed')}")
+        return tuple(notes)
 
     # ------------------------------------------------------------------ UNKNOWN 收敛（§9/§10）
 
@@ -434,7 +546,16 @@ class TestnetStack:
             record = {"client_order_id": client_order_id, "outcome": "unchanged",
                       "status": order.status.value, "at_ms": now_ms}
         self._reconciliation_evidence.append(record)
+        self._reconciliation_facts.append(ReconciliationFact(
+            ts=now_ms, identity=client_order_id, identity_kind="client_order_id",
+            outcome=str(record.get("outcome", "")),
+            reason_code=str(record.get("query_error", "") or ""),
+            detail=json_dumps(record)))
         return record
+
+    def reconciliation_facts(self) -> tuple[ReconciliationFact, ...]:
+        """reconciliation / UNKNOWN 收敛证据（产品 trace 直接消费）。"""
+        return tuple(self._reconciliation_facts)
 
     def reconciliation_evidence(self) -> tuple[dict[str, object], ...]:
         """UNKNOWN 收敛证据（只读；产品/助手可见）。"""
@@ -623,13 +744,122 @@ def build_testnet_stack(
     store_path.parent.mkdir(parents=True, exist_ok=True)
     hwm_store = JsonHighWatermarkStore(store_path)
     high_watermark = HighWatermarkTracker(state=hwm_store.load(), store=hwm_store)
+    from runtime.latency_observer import BoundedLatencyLog, ExecutionLatencyObserver
+
     stack = TestnetStack(
         config=config, market=market, private=private, private_rest=private_rest, adapter=adapter,
         connector=connector, tracker=tracker, manager=manager, engine=engine, accounting=accounting,
         ledger=ledger, recovery=recovery, high_watermark=high_watermark, clock=now,
         gate=LiveReadinessGate(policy=config.readiness_policy))
     stack.authority_slot = authority_holder
+    stack._latency = ExecutionLatencyObserver(log=BoundedLatencyLog(), clock=now)   # noqa: SLF001
+    stack._runtime_id = f"testnet-{int(now())}"                                     # noqa: SLF001
+    stack._started_at = int(now())                                                  # noqa: SLF001
+    engine.latency_observer = lambda kind, ts: stack._latency.note(kind, ts)        # noqa: SLF001
     return stack
+
+
+def build_testnet_product_service(stack: TestnetStack, *, host: str = "127.0.0.1", port: int = 0) -> object:
+    """把 TESTNET stack 接入 `ProductService`（只读事实；不新增写能力）。
+
+    产品层只消费 Owner 事实：market/tracker/accounting/readiness/connector health/correlation/latency。
+    未接线的能力（prediction / maker decision / bounded market history）**如实 UNKNOWN/ABSENT**。
+    """
+    from connectors.binance.market_connector import BinanceMarkPriceReferenceSource
+    from domain.instruments import InstrumentRegistry, PriceType, instrument_id_for, perpetual_crypto_spec
+    from product.service import ProductService
+    from product.types import Fact, RuntimeIdentity, RuntimeMode
+    from venue import binance_venue, VenueEnvironment
+
+    now = stack.clock
+    venue = binance_venue(environment=VenueEnvironment.TESTNET)
+    rules = stack.market.trading_rules
+    if rules is None:
+        raise TestnetError("trading rules are required to build the product service")
+    base, quote = (stack.config.symbol[:-4], stack.config.symbol[-4:])
+    spec = perpetual_crypto_spec(instrument_id=instrument_id_for(stack.config.symbol, venue_id=venue.venue_id),
+                                 symbol=stack.config.symbol, base_asset=base, quote_asset=quote,
+                                 settlement_asset=quote, price_tick=float(rules.tick_size),
+                                 quantity_step=float(rules.step_size), min_quantity=float(rules.min_qty),
+                                 min_notional=float(rules.min_notional))
+    registry = InstrumentRegistry(instruments=(spec,), current_id=spec.instrument_id)
+    mark_source = BinanceMarkPriceReferenceSource(runtime=stack.market, venue_identity=venue,
+                                                 instrument_id=spec.instrument_id)
+
+    def reference_price() -> object:
+        return mark_source.latest(now_ms=int(now()))
+
+    def market_state() -> object | None:
+        history = stack.market.history
+        return history[-1] if history else None
+
+    def readiness() -> object | None:
+        return stack.readiness_result
+
+    def adapter_audit() -> object | None:
+        outcome = stack.adapter.last_submit_outcome
+        if outcome is None:
+            return None
+        from types import SimpleNamespace
+
+        # 注意：产品层用属性访问读取 Owner 事实 ⇒ 返回带属性的对象（不是 dict）
+        return SimpleNamespace(classification=str(outcome.classification.value),
+                               detail=stack.adapter.last_submit_detail)
+
+    def health() -> dict[str, object]:
+        connector = stack.health()
+        return {"notes": (f"mode={stack.config.environment.value}",
+                          f"private_connector={connector.get('connection_state')}",
+                          f"stream_observed={connector.get('private_events_observed')}"),
+                "runtime_state": "RUNNING",
+                "private_stream_state": connector.get("connection_state")}
+
+    service = ProductService(
+        identity=RuntimeIdentity(mode=RuntimeMode.TESTNET, environment="testnet", venue=venue.venue_id,
+                                 symbol=stack.config.symbol, runtime_id=stack._runtime_id,  # noqa: SLF001
+                                 started_at=int(stack._started_at),  # noqa: SLF001
+                                 data_timestamp=Fact.of(int(now()))),
+        market_state=market_state,
+        prediction=lambda: None,                       # 未接线 ⇒ 如实 UNKNOWN/ABSENT
+        maker_decision=lambda: None,
+        risk_snapshot=stack.risk_snapshot,
+        risk_limits=lambda: stack.config.risk_policy.to_limits(),
+        tracker=lambda: stack.tracker,
+        accounting=lambda: stack.accounting,
+        readiness=readiness,
+        authority_id=lambda: getattr(stack.authority, "authority_id", None),
+        health=health,
+        risk_rejects=lambda: tuple(str(getattr(getattr(r, "reason_code", None), "value", ""))
+                                   for r in stack.engine.rejections),
+        execution_events=stack.lifecycle_facts,
+        clock=now,
+        prediction_fresh=lambda: None,
+        instrument=lambda: spec,
+        instrument_registry=lambda: registry,
+        venue=lambda: venue,
+        reference_price=reference_price,
+        market_connector_health=lambda: None,
+        private_connector_health=lambda: stack.connector.health(now_ms=int(now())),
+        orders_for_decision=lambda decision_id: tuple(stack.tracker.orders_for_decision(decision_id)),
+        fills=stack.fill_facts,
+        recent_fill_limit=50,
+        risk_decisions=lambda: tuple(getattr(stack.engine, "decision_log", ()) or ()),
+        normalization_evidence=lambda: (),
+        reconciliation_events=stack.reconciliation_facts,
+        ack_latency=lambda: stack.latency_observer,
+        adapter_audit=adapter_audit,
+        orchestrator_notes=stack.product_notes,
+    )
+    service.replay_control = lambda: None
+    return service
+
+
+def json_dumps(value: object) -> str:
+    """canonical-ish 紧凑 JSON（只用于只读 evidence 展示）。"""
+    try:
+        return _json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:  # noqa: BLE001
+        return str(value)
 
 
 def _binance_venue(config: TestnetConfig):

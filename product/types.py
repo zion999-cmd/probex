@@ -384,6 +384,11 @@ class ExecutionView:
     recent_fills: tuple[FillView, ...] = ()
     #: G1：成交上限（0 = 未接线，显式表达"不暴露成交"）
     recent_fill_limit: int = 0
+    #: P0001.16 §16：最近一次 submit 的三分类与**脱敏后**的真实原因（UNKNOWN 必须可解释）
+    last_submit_classification: Fact = field(
+        default_factory=lambda: Fact.unknown("no submit has been attempted"))
+    last_submit_reason: Fact = field(
+        default_factory=lambda: Fact.unknown("no submit has been attempted"))
 
 
 @dataclass(frozen=True, slots=True)

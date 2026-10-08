@@ -274,6 +274,48 @@ class AssistantService:
         if kind in ("order", "decision") and identity:
             answers["order_decision_link"] = self._order_decision_answer(snapshot, kind=kind,
                                                                         identity=identity)
+        answers.update(self._testnet_execution_answers(snapshot))
+        return answers
+
+    def _testnet_execution_answers(self, snapshot: object) -> dict[str, str]:
+        """P0001.16 §16：真实供应商执行的确定性解释（只读既有事实；不推断、不调用 LLM）。"""
+        answers: dict[str, str] = {}
+        execution = getattr(snapshot, "execution", None)
+        connector = getattr(snapshot, "private_connector_health", None)
+        evidence = getattr(snapshot, "evidence", None)
+        if execution is not None:
+            classification = execution.last_submit_classification
+            reason = execution.last_submit_reason
+            if classification.known:
+                answers["submit_outcome"] = (
+                    f"最近一次 submit 分类={classification.value}"
+                    + (f"；原因：{reason.value}" if reason.known else "；无审计原因"))
+                if str(classification.value) == "UNKNOWN":
+                    answers["why_unknown"] = (
+                        "提交结果**未知**（不是拒绝也不是接受）：不重试写请求；由 query/reconciliation 收敛。"
+                        + (f" 真实原因：{reason.value}" if reason.known else ""))
+        if connector is not None:
+            state = connector.connection_state
+            observed = connector.observed
+            last = connector.last_event_ms
+            answers["user_stream_health"] = (
+                f"private connector={state.value if state.known else 'UNKNOWN'}；"
+                f"已观测到私有事件={observed.value if observed.known else 'UNKNOWN'}；"
+                f"last private event={last.value if last.known else 'UNKNOWN'}"
+                + ("" if (observed.known and observed.value) else "（未观测到业务事件 ≠ 没有成交）"))
+        trace = tuple(getattr(evidence, "trace", ()) or ())
+        reconciliation = [entry for entry in trace if getattr(entry, "stage", "") == "reconciliation"]
+        answers["reconciliation_state"] = (
+            f"reconciliation 证据 {len(reconciliation)} 条"
+            + (f"；最近 outcome={reconciliation[-1].outcome}" if reconciliation else "（尚未发生）"))
+        fills = tuple(getattr(execution, "recent_fills", ()) or ()) if execution is not None else ()
+        if fills:
+            fill = fills[-1]
+            answers["fill_decision_link"] = (
+                f"最近成交 {fill.client_order_id.value if fill.client_order_id.known else 'UNKNOWN'}"
+                f"（price={fill.price.value if fill.price.known else 'UNKNOWN'}，"
+                f"qty={fill.quantity.value if fill.quantity.known else 'UNKNOWN'}）"
+                "；decision 关联见该订单的 correlation（OrderTracker 反查）")
         return answers
 
     def _order_decision_answer(self, snapshot: object, *, kind: str, identity: str) -> str:
