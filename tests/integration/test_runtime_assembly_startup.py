@@ -107,6 +107,13 @@ class ProductRuntimeTest(unittest.TestCase):
         self.assertTrue(snap.health.runtime_detail.value)
         self.assertIsNotNone(runtime.service.run_registry_view().load(runtime.run_id))
 
+    def test_testnet_and_live_start_are_refused_without_the_dedicated_stack(self) -> None:
+        # G-A4：产品装配不持有真实 venue connector；不允许吃本地文件却显示 binance:market CONNECTED
+        for mode in (RuntimeMode.TESTNET, RuntimeMode.LIVE):
+            with self.assertRaises(AssemblyError) as caught:
+                self.runtime(mode=mode).start()
+            self.assertIn("does not own a real venue connector", str(caught.exception))
+
     def test_graceful_stop_completes_the_run_and_sets_stopped(self) -> None:
         runtime = self.runtime()
         runtime.start()

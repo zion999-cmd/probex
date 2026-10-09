@@ -1081,6 +1081,15 @@ class ProductRuntime:
 
     def start(self) -> RuntimeStatus:
         """建立 run、写 active marker，并把 runtime 标为 RUNNING。"""
+        # G-A4 诚实性护栏：产品装配在 TESTNET/LIVE 模式下不构造交易所 connector；
+        # 不允许“吃本地 event store 却显示 binance:market CONNECTED” ⇒ 显式拒绝并指向授权路径。
+        if self.profile.mode in (RuntimeMode.TESTNET, RuntimeMode.LIVE):
+            raise AssemblyError(
+                "runtime.assembly does not own a real venue connector for mode "
+                f"{self.profile.mode.value}: no live TESTNET/LIVE data or write path is wired here. "
+                "Use the dedicated authorised TESTNET stack (runtime.testnet / "
+                "tests/acceptance/testnet_acceptance_run.py with explicit confirm flags); "
+                "see docs/RUNBOOK.md section 8")
         now = int(self.profile.clock())
         self._tracker.mark_starting(now_ms=now, detail="assembling runtime")
         self._host.start()

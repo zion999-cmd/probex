@@ -2460,3 +2460,14 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 
 - G-A4：`--mode testnet/live` + event store 时 UI 误报 `binance:market CONNECTED` 的诚实性修正（只改产品投影/启动校验，不下单）。
 - Batch 3（G-A2/G-B2）：把既有真实公网 connector 经产品入口接线；**Batch 4（P0001.16 收口）需人类单独授权 TESTNET 写入**。
+
+## 2026-10-10（全局补齐任务 · Batch 2：诚实性修正 G-A4）
+
+- `ProductRuntime.start()` 新增 fail-fast：mode 为 TESTNET/LIVE 且产品装配没有专用真实 venue connector 时
+  直接 `AssemblyError`，并指向授权栈（`runtime.testnet` / acceptance driver）与 RUNBOOK §8。
+- 根因回顾：此前 `--mode testnet` + event store 会无条件用模式派生的 binance identity 构造
+  PaperMarketDataConnector ⇒ UI 显示 `binance:market CONNECTED`（数据源实为本地文件）。
+- 新增 5 条集成测试（两模式 start 均拒绝）；profile 层构造仍允许（保留模式可用性断言）。
+- 全量 **2459 passed / 0 failed / 24 skipped**；无业务能力变化、无新依赖、NOT Included 未触碰。
+- 下一步 Batch 3：G-A2/G-B2 把既有真实公网 connector 经产品入口接线（只读公网无需凭据）。
+  Batch 4（P0001.16 收口）仍需人类单独授权 TESTNET 写入。
