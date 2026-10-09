@@ -2376,3 +2376,14 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - **测试**：全量 **2435 passed / 0 failed / 24 skipped**。
 - **状态**：P0001.17 **已完成**；`currentProposal = null`（未获切换授权，不自行启动下一阶段）；
   P0001.16 保持 **In Progress / Deferred**（未关闭）。
+
+## 2026-10-04（收口后核查）：§5 偏差修正 + Performance trade statistics
+
+- **发现并修正真实偏差**：UI 侧自算 VWAP/ATR（违反 §5）。核查后端：`FeatureEngine` 不消费 TRADE 事件
+  （`trade.vwap=None`）且无 ATR 实现 ⇒ 后端无该事实。已移除 UI 自算，改为 `NOT_AVAILABLE + reason`，
+  并新增守卫测试 `tests/unit/test_chart_indicators.py`；审计文档中"VWAP/ATR 由 FeatureEngine 接入"的错误表述已更正。
+- **补齐 §8**：Performance 增加 Trade statistics（真实：窗口成交数/手续费/realized/unrealized/equity/drawdown；
+  `win/loss`、`avg pnl/trade` 显式 `NOT_AVAILABLE + 原因`）。
+- **复验**：`verify_chart.mjs` 对真实本地运行全 PASS（181 candles / 454 semantic markers / drawings / zoom-pan /
+  timeframe / replay sync）→ `artifacts/p0001.17/chart_verify.json`；`capture_local_loop.mjs` 8/8；
+  全量 **2434 passed / 0 failed / 24 skipped**。

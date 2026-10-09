@@ -1,4 +1,8 @@
-"""Indicator math（renderer-independent）—— 用 Node 真实执行 `ui/pages/market/indicators.js`。"""
+"""P0001.17 §5：UI **不得**自行计算业务指标（MA/EMA/VOL 由成熟图表库计算）。
+
+本测试同时是**架构守卫**：`ui/pages/market/indicators.js` 只能声明指标能力与"后端无该事实"的原因，
+不得导出任何本地业务指标计算函数（VWAP/ATR 曾在此自算 —— 人类裁决明确禁止）。
+"""
 
 from __future__ import annotations
 
@@ -12,25 +16,23 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 INDICATORS = PROJECT_ROOT / "ui" / "pages" / "market" / "indicators.js"
 
 NODE_SCRIPT = """
-import { sma, ema, vwap, atr } from %s;
-const bars = [
-  { open: 10, high: 12, low: 9, close: 11, volume: 2 },
-  { open: 11, high: 13, low: 10, close: 12, volume: 3 },
-  { open: 12, high: 14, low: 11, close: 13, volume: 5 },
-  { open: 13, high: 15, low: 12, close: 14, volume: 0 },
-];
+import * as mod from %s;
 console.log(JSON.stringify({
-  sma: sma([1, 2, 3, 4], 2),
-  ema: ema([1, 2, 3], 2),
-  vwap: vwap(bars, 3),
-  atr: atr(bars, 2),
-  vwapNoVolume: vwap([{ open: 1, high: 12, low: 9, close: 11, volume: 0 }], 1),
+  exports: Object.keys(mod).sort(),
+  available: mod.PROBEX_INDICATORS.map((i) => i.name),
+  unavailable: mod.UNAVAILABLE_INDICATORS.map((i) => ({ name: i.name, reason: i.reason })),
+  registers: mod.registerProbexIndicators(),
 }));
 """
 
+#: 允许出现在 UI 的指标（由图表库计算/绘制）
+ALLOWED_LIBRARY_INDICATORS = {"MA", "EMA", "VOL"}
+#: 禁止在 UI 计算的指标（后端无事实 ⇒ 只能 NOT_AVAILABLE + reason）
+FORBIDDEN_LOCAL_COMPUTATION = ("vwap", "atr")
 
-@unittest.skipIf(shutil.which("node") is None, "node is required for indicator math tests")
-class IndicatorMathTest(unittest.TestCase):
+
+@unittest.skipIf(shutil.which("node") is None, "node is required for the UI indicator contract test")
+class IndicatorContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         script = NODE_SCRIPT % json.dumps(str(INDICATORS))
@@ -40,33 +42,25 @@ class IndicatorMathTest(unittest.TestCase):
             raise AssertionError(f"node failed: {result.stderr[-400:]}")
         cls.values = json.loads(result.stdout.strip().splitlines()[-1])
 
-    def test_sma(self) -> None:
-        self.assertEqual(self.values["sma"], [None, 1.5, 2.5, 3.5])
+    def test_no_self_computed_business_indicators_are_exported(self) -> None:
+        """§5 守卫：不得导出 vwap/atr 之类的本地业务计算。"""
+        for name in FORBIDDEN_LOCAL_COMPUTATION:
+            with self.subTest(indicator=name):
+                self.assertNotIn(name, self.values["exports"])
 
-    def test_ema_seeds_with_first_value(self) -> None:
-        ema = self.values["ema"]
-        self.assertAlmostEqual(ema[0], 1.0)
-        self.assertAlmostEqual(ema[1], 1.6666666666666667, places=6)
-        self.assertAlmostEqual(ema[2], 2.5555555555555554, places=6)
+    def test_only_library_indicators_are_offered(self) -> None:
+        self.assertEqual(set(self.values["available"]), ALLOWED_LIBRARY_INDICATORS)
 
-    def test_vwap_uses_volume_weights(self) -> None:
-        vwap = self.values["vwap"]
-        # typical = (high+low+close)/3: bar0 10.6667(v2), bar1 11.6667(v3), bar2 12.6667(v5), bar3 13.6667(v0)
-        self.assertAlmostEqual(vwap[2], (10.666666666666666 * 2 + 11.666666666666666 * 3
-                                         + 12.666666666666666 * 5) / 10, places=6)
-        # 窗口 [1,2,3]：总量 8（bar3 volume=0 不计权）
-        self.assertAlmostEqual(vwap[3], (11.666666666666666 * 3 + 12.666666666666666 * 5) / 8, places=6)
+    def test_backend_unavailable_indicators_carry_a_reason(self) -> None:
+        unavailable = {item["name"]: item["reason"] for item in self.values["unavailable"]}
+        self.assertEqual(set(unavailable), {"VWAP", "ATR"})
+        for name, reason in unavailable.items():
+            with self.subTest(indicator=name):
+                self.assertTrue(reason and len(reason) > 10, "reason must explain the backend gap")
 
-    def test_vwap_falls_back_to_typical_when_no_volume(self) -> None:
-        # 全 0 成交量的窗口 ⇒ 退化为 typical 均价（不产生 NaN/0）
-        self.assertAlmostEqual(self.values["vwapNoVolume"][0], (12 + 9 + 11) / 3, places=6)
-
-    def test_atr_is_positive_and_seeded_after_period(self) -> None:
-        atr = self.values["atr"]
-        self.assertIsNone(atr[0])
-        self.assertIsNotNone(atr[1])
-        self.assertGreater(atr[1], 0)
+    def test_registration_is_a_noop(self) -> None:
+        self.assertFalse(self.values["registers"])
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
     unittest.main()

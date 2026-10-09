@@ -9,6 +9,7 @@ import { HEATMAP_NOTE, drawHeatmap } from "/ui/pages/market/heatmap.js";
 import { boundsNote, decisionTable, executionTable, tradesTable } from "/ui/pages/market/overlays.js";
 import { replayControls } from "/ui/pages/market/replay.js";
 import { featurePanels, healthStrip } from "/ui/pages/market/timeline.js";
+import { UNAVAILABLE_INDICATORS } from "/ui/pages/market/indicators.js";
 import { mountWorkbench, TIMEFRAMES, toolbarHtml } from "/ui/pages/market/workbench.js";
 import { mountPredictionPanel, predictionSection } from "/ui/pages/market/prediction_panel.js";
 import { updateSelection } from "/ui/client/selection.js";
@@ -131,7 +132,10 @@ export async function render(rest = []) {
     `<section><h2>Execution</h2>${executionTable(overlays.overlays)}</section>` +
     `<section><h2>Replay controls</h2><div id="replay-controls"></div>` +
       '<div class="muted">play / pause / step / speed / seek 与 K 线 cursor/time window 同步</div></section>' +
-    section("Projection bounds", boundsNote(depth)) + instrumentVenueSection(snapshot);
+    section("Projection bounds", boundsNote(depth)) + instrumentVenueSection(snapshot) +
+    section("Indicators not available (backend has no such fact)", rows(
+      UNAVAILABLE_INDICATORS.map((item) => [item.name,
+        `<span class="unknown">NOT_AVAILABLE</span> <span class="muted">${escapeHtml(item.reason)}</span>`])));
 
   lastMarket = { candles1m, trace, focusTs, depth, symbol: snapshot.runtime.symbol };
   return header + body;

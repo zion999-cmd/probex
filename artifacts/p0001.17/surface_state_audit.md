@@ -25,8 +25,16 @@
 - Loading：全局 shell；图表数据异步加载时工具条/图表区保持 loading 段。
 - Error：`/api/v1/runs/<id>/market` 404 ⇒ 显示 `UNKNOWN (HTTP…)`；`#/market/live` 请求失败走全局 error 段。
 - Empty：无 K 线（未接线 market 缓冲）时显示 UNKNOWN 说明，不画假图。
-- **图表数据链**：实测 181 根真实 1m K 线（API 与图表同源，末收 61095.4）；指标 MA/VOL 由库计算，VWAP/ATR 由 FeatureEngine 事实接入。
-- **语义叠加**：决策/订单/成交事实经有界缓冲进入 overlays（实测 47 decisions / 113 executions），与价格同时间轴。
+- **图表数据链**：实测 181 根真实 1m K 线（API 与图表同源，末收 61095.4）；指标 **MA/EMA/VOL 由成熟图表库（klinecharts）计算**。
+- **VWAP / ATR：NOT_AVAILABLE（真实原因）** —— 后端**没有**这两个事实：`FeatureEngine` 不消费 TRADE 事件
+  （实测 `trade_stream_available=False`、`trade.vwap=None`），且不存在 ATR 实现。按人类裁决 §5
+  「不要在 UI 重新计算业务指标」，本轮**移除了 UI 侧自算的 VWAP/ATR**，页面显式显示
+  `NOT_AVAILABLE + reason`（守卫测试 `tests/unit/test_chart_indicators.py`）。
+  > 更正记录：本文件早期版本曾写"VWAP/ATR 由 FeatureEngine 事实接入"，该表述**不成立**，已更正。
+  若后续要让 VWAP 可用，需让 FeatureEngine 消费 TRADE 事件（会改变 MarketState/状态指纹语义）——
+  属新架构变更，未获授权，故未实施。
+- **语义叠加**：决策/订单/成交事实经有界缓冲进入 overlays（实测 47 decisions / 113 executions）；浏览器实测
+  K 线上 **354 个 semantic markers**，与价格同时间轴。
 
 ## Activity（"系统做了什么？为什么？"）
 
@@ -38,6 +46,8 @@
 ## Performance（"做得怎么样？"）
 
 - 真实 account timeline 驱动 equity/PnL/exposure（实测 231–232 点，非 mock）。
+- **Trade statistics（§8）**：展示真实事实（窗口内成交笔数 / 手续费 / realized / unrealized / equity / drawdown）；
+  `win/loss counts` 与 `average pnl per trade` 显式 `NOT_AVAILABLE` + 原因（读模型没有逐笔平仓 PnL）。
 - 无数据时显示 UNKNOWN 原因（timeline unavailable 字段透传），不用 0 冒充。
 - Run selector → Run Review 跳转；跨页携带 run。
 

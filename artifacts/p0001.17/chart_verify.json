@@ -1,0 +1,19 @@
+{
+ "chartMounted": true,
+ "candles": 181,
+ "indicators": [
+  "MA",
+  "VOL"
+ ],
+ "semanticMarkers": 454,
+ "drawingCreated": 3,
+ "drawingMoved": true,
+ "drawingDeleted": true,
+ "cleared": true,
+ "drawingRendered": true,
+ "zoomPan": true,
+ "timeframeSwitched": true,
+ "replaySync": true,
+ "assistantSelection": true,
+ "assistantContext": "5m"
+}

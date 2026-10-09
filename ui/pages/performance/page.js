@@ -1,5 +1,5 @@
 /** Performance：以 Run 为第一组织单位（§4）。F-19：run 列表按分页读取。 */
-import { ENDPOINTS, fetchJson, fetchOrUnavailable } from "/ui/client/api.js";
+import { ENDPOINTS, fetchJson, fetchOrUnavailable, fetchSnapshot } from "/ui/client/api.js";
 import { escapeHtml, fact, factRows, rows, section, table } from "/ui/client/render.js";
 import { mountPerformanceCharts, performanceChartsSection } from "/ui/pages/performance/charts.js";
 
@@ -68,8 +68,25 @@ export async function render(rest = []) {
     : table(["ts", "equity", "balance", "position", "exposure (total)"],
         (timeline.timeline.points || []).map((p) => [String(p.ts), fact(p.equity), fact(p.balance),
           fact(p.position_qty), fact(p.exposure_total)]));
+  // P0001.17 §8：Trade statistics —— 只展示**真实存在**的事实；无事实的指标显式 NOT_AVAILABLE + 原因
+  const snapshot = await fetchSnapshot();
+  const fills = snapshot.execution.recent_fills || [];
+  const fees = fills.reduce((sum, f) => sum + (f.fee.known ? Number(f.fee.value) : 0), 0);
+  const tradeStats = rows([
+    ["trades (bounded window)", fills.length
+      ? `${fills.length} <span class="muted">(recent_fill_limit=${snapshot.execution.recent_fill_limit}；账本总量见 /api/v1/orders)</span>`
+      : '<span class="unknown">UNKNOWN（当前窗口无成交）</span>'],
+    ["fees (window)", fills.length ? escapeHtml(String(Number(fees.toFixed(8)))) : '<span class="unknown">UNKNOWN（无成交事实）</span>'],
+    ["realized pnl", fact(snapshot.portfolio.realized_pnl)],
+    ["unrealized pnl", fact(snapshot.portfolio.unrealized_pnl)],
+    ["equity", fact(snapshot.portfolio.equity)],
+    ["drawdown", fact(snapshot.risk.drawdown)],
+    ["win / loss counts", '<span class="unknown">NOT_AVAILABLE</span> <span class="muted">读模型没有"逐笔平仓 PnL"事实（Fill 只有单笔成交量/价，未按开平配对）</span>'],
+    ["average pnl per trade", '<span class="unknown">NOT_AVAILABLE</span> <span class="muted">同上：缺少逐笔平仓 PnL ⇒ 不计算、不猜</span>'],
+  ]);
   lastPerformance = { timeline, summary, comparison: comparisonPayload };
-  return section("Runs (run is the unit)", runList) +
+  return section("Trade statistics (real facts only)", tradeStats) +
+    section("Runs (run is the unit)", runList) +
     section("Run selector", rows([
       ["selected run", selected ? `<code>${escapeHtml(selected)}</code>` : "none"],
       ["select", runs.map((run) => `<a href="#/performance/run/${encodeURIComponent(run.run_id)}">${escapeHtml(run.run_id)}</a>`).join(" · ") || "none"],
