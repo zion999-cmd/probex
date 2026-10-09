@@ -307,6 +307,8 @@ class PredictionView:
     freshest: Fact
     #: closure Slice：多 horizon 未来收益分布（既有 `Prediction.future_return` 事实；无记录 ⇒ UNKNOWN）
     horizons: Fact = field(default_factory=lambda: Fact.unknown("no prediction record yet"))
+    #: P0001.17：本地试验预测标记（provider=LOCAL_TRIAL ⇒ True；UI/Assistatn 必须标注，不得称真实模型）
+    is_local_trial: Fact = field(default_factory=lambda: Fact.unknown("no prediction record yet"))
 
 
 @dataclass(frozen=True, slots=True)

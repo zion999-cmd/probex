@@ -16,6 +16,17 @@ function horizonLabel(ms) {
 }
 
 /** Market/Activity 共用的 prediction 摘要 + 多 horizon 面板。 */
+function providerLabel(view) {
+  if (!view || !view.provider || !view.provider.known) {
+    return '<span class="unknown">UNKNOWN</span>';
+  }
+  const provider = escapeHtml(String(view.provider.value));
+  if (view.is_local_trial && view.is_local_trial.known && view.is_local_trial.value) {
+    return `<span class="warn">LOCAL_TRIAL</span> <span class="muted">本地试验规则，非真实模型</span>`;
+  }
+  return provider;
+}
+
 export function predictionSection(prediction, { decision = null, id = "prediction-horizons" } = {}) {
   const view = prediction || {};
   const horizons = view.horizons && view.horizons.known ? view.horizons.value : null;
@@ -25,7 +36,7 @@ export function predictionSection(prediction, { decision = null, id = "predictio
       : "none (no maker decision)"],
     ["freshness", fact(view.freshest)],
     ["derived confidence", fact(view.derived_confidence)],
-    ["provider / model", `${fact(view.provider)} / ${fact(view.model)}`],
+    ["provider / model", `${providerLabel(view)} / ${fact(view.model)}`],
     ["as_of / expires_at", `${fact(view.as_of)} / ${fact(view.expires_at)}`],
     ["market state hash", fact(view.market_state_hash)],
   ]);

@@ -329,6 +329,9 @@ class ProductService:
             market_state_hash=Fact.of(_get(record, "market_state_hash")),
             freshest=(Fact.unknown("freshness not evaluated") if fresh is None else Fact.of(fresh)),
             horizons=Fact.of(horizons, unknown_reason="prediction has no horizon distributions"),
+            is_local_trial=Fact.of(str(_get(record, "provider") or "") == "LOCAL_TRIAL"
+                                   if record is not None else None,
+                                   unknown_reason="no prediction record yet"),
         )
 
     # ------------------------------------------------------------------ P0001.15 投影
@@ -727,6 +730,86 @@ class ProductService:
         spec = self.instrument()
         identity = self.venue()
         return _get(spec, "instrument_id"), _get(identity, "venue_id")
+
+    def decision_detail(self, decision_id: str) -> dict[str, object]:
+        """P0001.17 §7：一条 decision 的完整因果链（只读投影，全部来自既有 Owner 事实）。
+
+        `market → prediction → decision → risk → order → fill → accounting`：
+        用于 Activity 的 drill-down；缺失环节如实 `None`/`unknown`，不推断。
+        """
+        if not isinstance(decision_id, str) or not decision_id:
+            raise ValueError("decision_detail requires a non-empty decision_id")
+        from product.serialization import to_jsonable
+
+        decision = self.maker_decision()
+        decision_matches = (_get(decision, "decision_id") == decision_id) if decision is not None else False
+        prediction = self.prediction()
+        orders = self.orders_for_decision(decision_id)
+        order_views = self._order_views(orders)
+        client_ids = {view.client_order_id for view in order_views}
+        fills: list[dict[str, object]] = []
+        for fill in tuple(self.fills()):
+            order_id = _get(fill, "client_order_id") or _get(fill, "order_id")
+            if order_id is None or str(order_id) not in client_ids:
+                continue
+            fills.append({"client_order_id": str(order_id), "ts": _get(fill, "ts") or _get(fill, "exchange_ts"),
+                          "price": _get(fill, "price"), "quantity": _get(fill, "quantity"),
+                          "fee": _get(fill, "fee"), "trade_id": _get(fill, "trade_id")})
+        risk: list[dict[str, object]] = []
+        for observation in tuple(self.risk_decisions()):
+            client_id = _get(observation, "client_order_id")
+            if client_id is None or str(client_id) not in client_ids:
+                continue
+            outcome = _get(observation, "decision")
+            risk.append({
+                "client_order_id": str(client_id),
+                "decision": str(getattr(_get(outcome, "decision"), "value", None)),
+                "reason_code": str(getattr(_get(outcome, "reason_code"), "value", "") or ""),
+                "timestamp": _get(observation, "timestamp"),
+            })
+        accounting = self.accounting()
+        position = None
+        if accounting is not None:
+            position_fn = getattr(accounting, "position", None)
+            position = position_fn(self.identity.symbol) if callable(position_fn) else position_fn
+        correlation = orders[0].correlation if orders else None
+        return to_jsonable({
+            "decision_id": decision_id,
+            "instrument_id": _get(correlation, "instrument_id") or _get(self.instrument(), "instrument_id"),
+            "venue_id": _get(correlation, "venue_id") or _get(self.venue(), "venue_id"),
+            "market_state_hash": _get(correlation, "market_state_hash"),
+            "prediction": (None if prediction is None else {
+                "request_id": _get(prediction, "request_id"),
+                "provider": str(_get(prediction, "provider") or ""),
+                "model": _get(prediction, "model"),
+                "is_local_trial": str(_get(prediction, "provider") or "") == "LOCAL_TRIAL",
+                "derived_confidence": _get(prediction, "derived_confidence"),
+                "as_of": _get(prediction, "as_of"),
+                "market_state_hash": _get(prediction, "market_state_hash"),
+            }),
+            "decision": (None if not decision_matches else {
+                "at_ms": _get(decision, "at_ms"),
+                "mode": str(getattr(_get(decision, "mode"), "value", None)),
+                "reason": _maker_reason(decision),
+                "detail": _get(decision, "detail"),
+                "bid_action": str(getattr(_get(_get(decision, "bid"), "action"), "value", None)),
+                "ask_action": str(getattr(_get(_get(decision, "ask"), "action"), "value", None)),
+                "bid_price": _get(_get(decision, "bid"), "price"),
+                "ask_price": _get(_get(decision, "ask"), "price"),
+            }),
+            "decision_is_latest": decision_matches,
+            "risk": risk,
+            "orders": [to_jsonable(view) for view in order_views],
+            "fills": [to_jsonable(view) for view in fills],
+            "accounting": (None if accounting is None else {
+                "position_qty": _get(position, "qty"),
+                "equity": (getattr(accounting, "equity")() if callable(getattr(accounting, "equity", None))
+                           else getattr(accounting, "equity", None)),
+                "realized_pnl": (getattr(accounting, "realized_trade_pnl")()
+                                 if callable(getattr(accounting, "realized_trade_pnl", None))
+                                 else getattr(accounting, "realized_trade_pnl", None)),
+            }),
+        })
 
     def decision_orders(self, decision_id: str) -> tuple[OrderView, ...]:
         """`Decision → Order(s)`（SC-27）：由 OrderTracker 的 canonical correlation 反查。"""

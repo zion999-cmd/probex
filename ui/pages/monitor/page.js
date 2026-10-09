@@ -58,6 +58,7 @@ export async function render() {
     ["best bid / ask", `${fact(snapshot.market.best_bid)} / ${fact(snapshot.market.best_ask)}`],
     ["spread (bps)", fact(snapshot.market.spread_bps)],
     ["prediction fresh", fact(snapshot.prediction.freshest)],
+    ["prediction source", predictionSourceLabel(snapshot.prediction)],
     ["strategy mode", fact(snapshot.strategy.mode)],
     ["blocked by", fact(snapshot.strategy.blocked_by)],
     ["kill switch", fact(snapshot.risk.kill_switch_mode)],
@@ -117,6 +118,18 @@ export async function render() {
     section("Position / active orders", orderRows) +
     section("Recent activity", recent) +
     section("Surfaces", surfaceNav);
+}
+
+/** P0001.17：LOCAL_TRIAL 必须显式标注（不得描述为真实模型预测）。 */
+function predictionSourceLabel(prediction) {
+  if (!prediction || !prediction.provider || !prediction.provider.known) {
+    return '<span class="unknown">UNKNOWN</span>';
+  }
+  const provider = escapeHtml(String(prediction.provider.value));
+  if (prediction.is_local_trial && prediction.is_local_trial.known && prediction.is_local_trial.value) {
+    return `<span class="warn">LOCAL_TRIAL</span> <span class="muted">${provider} · 本地试验规则，非真实模型</span>`;
+  }
+  return provider;
 }
 
 export function mount() {

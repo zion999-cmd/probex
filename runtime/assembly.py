@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import dataclasses
+from types import SimpleNamespace
 import os
 import signal
 import threading
@@ -1321,6 +1322,39 @@ class ProductRuntime:
         registry = self._resolve_instrument_registry()
         return None if registry is None else registry.current
 
+    def _note_decision_overlay(self, decision: object | None) -> None:
+        """决策 → 展示缓冲（只读叠加；字段搬运，不推测状态）。"""
+        if decision is None or self._history is None:
+            return
+        bid = getattr(decision, "bid", None)
+        ask = getattr(decision, "ask", None)
+        side = "buy" if getattr(bid, "action", None) is not None else "sell"
+        chosen = bid if getattr(bid, "action", None) is not None else ask
+        self._history.feed_decision(SimpleNamespace(
+            ts=int(getattr(decision, "at_ms", 0)),
+            side=side,
+            action=getattr(chosen, "action", None),
+            price=getattr(chosen, "price", None),
+            quantity=getattr(chosen, "quantity", None),
+            decision_id=getattr(decision, "decision_id", None),
+            reason=str(getattr(getattr(decision, "blocked_by", None), "value", "") or "")
+            or str(getattr(decision, "detail", "") or ""),
+        ))
+
+    def _note_execution_overlay(self, update: object) -> None:
+        """订单/成交事实 → 展示缓冲（K 线上的 order/fill 标记）。字段搬运，不推测状态。"""
+        if self._history is None or update is None:
+            return
+        order = getattr(update, "order", None)
+        if order is None:
+            return
+        status = getattr(order, "status", None)
+        self._history.feed_execution(SimpleNamespace(
+            ts=int(getattr(order, "updated_at", 0)),
+            client_order_id=str(getattr(order, "client_order_id", "")),
+            event=str(getattr(status, "value", status) or type(update).__name__),
+            detail=str(getattr(update, "detail", "") or "")))
+
     def _orders_for_decision(self, decision_id: str) -> tuple[object, ...]:
         execution = getattr(self, "_execution", None)
         if execution is None:
@@ -1347,8 +1381,28 @@ class ProductRuntime:
             return None
 
     def _build_prediction_runtime(self, values: dict[str, object]) -> object | None:
-        """仅在显式配置 + credential 可用时构造正式 `PredictionRuntime`；否则 None（诚实 UNAVAILABLE）。"""
-        if values.get("prediction.provider") != "systemone":
+        """按显式配置构造 `PredictionRuntime`；未配置/不可用 ⇒ None（诚实 UNAVAILABLE）。
+
+        P0001.17：`prediction.provider = "local_trial"` ⇒ 使用**授权**的 `LOCAL_TRIAL` 确定性 provider，
+        仅在 REPLAY/PAPER 允许；TESTNET/LIVE 显式拒绝（不静默回退到其它 provider）。
+        """
+        provider_name = values.get("prediction.provider")
+        if provider_name == "local_trial":
+            if self.profile.mode not in (RuntimeMode.REPLAY, RuntimeMode.PAPER):
+                raise AssemblyError(
+                    "prediction.provider=local_trial is a LOCAL TRIAL provider and is refused for "
+                    f"{self.profile.mode.value} (TESTNET/LIVE must use a real provider)")
+            timeout_ms = values.get("prediction.timeout_ms")
+            ttl_ms = values.get("prediction.ttl_ms")
+            if timeout_ms is None or ttl_ms is None:
+                raise AssemblyError(
+                    "prediction.provider=local_trial requires explicit prediction.timeout_ms / ttl_ms")
+            from prediction.providers.local_trial import LocalTrialProvider
+            from prediction.runtime import PredictionRuntime
+
+            return PredictionRuntime(provider=LocalTrialProvider(), clock=_CallableClock(self.profile.clock),
+                                     timeout_ms=int(timeout_ms), ttl_ms=int(ttl_ms))
+        if provider_name != "systemone":
             return None
         threshold = values.get("prediction.adverse_selection_threshold_bps")
         timeout_ms = values.get("prediction.timeout_ms")
@@ -1396,7 +1450,10 @@ class ProductRuntime:
             clock=self.profile.clock, policy=self._maker_policy,
             prediction_runtime=self._prediction_runtime,
             kill_switch_provider=self._kill_switch,
-            pre_snapshot=self._apply_reference_price)
+            pre_snapshot=self._apply_reference_price,
+            # P0001.17 §6/§7：真实 decision/execution 事实进入有界展示缓冲（chart/Activity overlays）
+            on_decision=self._note_decision_overlay,
+            on_execution=self._note_execution_overlay)
         self._decision_loop = loop
         loop.start()
         log_event("runtime", "decision_loop_start", runtime_id=self._identity.runtime_id,

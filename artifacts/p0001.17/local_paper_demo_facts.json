@@ -1,0 +1,28 @@
+{
+ "mode": "PAPER",
+ "prediction_provider": "LOCAL_TRIAL",
+ "prediction_is_local_trial": true,
+ "decisions": 2,
+ "submits": 2,
+ "orders": [
+  [
+   "probex-paper-1791523252744-000001",
+   "FILLED",
+   0.0002
+  ],
+  [
+   "probex-paper-1791523252744-000002",
+   "PENDING_CANCEL",
+   0.0
+  ]
+ ],
+ "fills": 1,
+ "position_qty": 0.0002,
+ "equity": 9999.97149478,
+ "realized_pnl": 0.0,
+ "decision_ids": [
+  "d-f4de98a89659-1700000460000",
+  "d-f4de98a89659-1700000460000"
+ ],
+ "url": "http://127.0.0.1:8894"
+}

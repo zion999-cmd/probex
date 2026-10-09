@@ -303,6 +303,17 @@ class AssistantService:
                 f"已观测到私有事件={observed.value if observed.known else 'UNKNOWN'}；"
                 f"last private event={last.value if last.known else 'UNKNOWN'}"
                 + ("" if (observed.known and observed.value) else "（未观测到业务事件 ≠ 没有成交）"))
+        prediction = getattr(snapshot, "prediction", None)
+        if prediction is not None and getattr(prediction, "provider", None) is not None \
+                and prediction.provider.known:
+            provider_name = str(prediction.provider.value)
+            if provider_name == "LOCAL_TRIAL":
+                answers["prediction_source"] = (
+                    "prediction 来源 = **LOCAL_TRIAL**（本地试验确定性规则，仅 REPLAY/PAPER；"
+                    "**不是**真实模型预测，不得据此判断模型有效性）；model="
+                    f"{prediction.model.value if prediction.model.known else 'UNKNOWN'}")
+            else:
+                answers["prediction_source"] = f"prediction 来源 = {provider_name}"
         trace = tuple(getattr(evidence, "trace", ()) or ())
         reconciliation = [entry for entry in trace if getattr(entry, "stage", "") == "reconciliation"]
         answers["reconciliation_state"] = (

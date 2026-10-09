@@ -113,5 +113,8 @@
   "runtime.loop.tick_ms": 500,
   "runtime.loop.decision_interval_ms": 30000,
   "runtime.loop.prediction_min_interval_ms": 1000,
-  "feed.events_per_second": 200
+  "feed.events_per_second": 200,
+  "prediction.provider": "local_trial",
+  "prediction.timeout_ms": 1000,
+  "prediction.ttl_ms": 120000
 }

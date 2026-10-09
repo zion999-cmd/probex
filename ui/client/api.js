@@ -12,6 +12,7 @@ export const ENDPOINTS = {
   readiness: "/api/v1/readiness",
   instrument: "/api/v1/instrument",
   decisionOrders: "/api/v1/decisions/orders",
+  decisionDetail: "/api/v1/decisions/detail",
   assistantContext: "/api/v1/assistant/context",
   assistantExplain: "/api/v1/assistant/explain",
   evidence: "/api/v1/evidence",
@@ -107,4 +108,9 @@ export async function explain(kind, identity) {
 /** P0001.15 §15/SC-27：`Decision → Order(s)` 反查（由 canonical correlation 提供）。 */
 export async function fetchDecisionOrders(decisionId) {
   return fetchJson(`${ENDPOINTS.decisionOrders}?decision_id=${encodeURIComponent(decisionId)}`);
+}
+
+/** P0001.17 §7：一条 decision 的完整因果链（market → prediction → decision → risk → order → fill → accounting）。 */
+export async function fetchDecisionDetail(decisionId) {
+  return fetchJson(`${ENDPOINTS.decisionDetail}?decision_id=${encodeURIComponent(decisionId)}`);
 }

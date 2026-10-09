@@ -36,6 +36,7 @@ from api.routes import (
     MARKET_OVERLAYS_PATH,
     MARKET_TIMELINE_PATH,
     MARKET_TRADES_PATH,
+    DECISION_DETAIL_PATH,
     DECISION_ORDERS_PATH,
     REPLAY_PATH,
     METRICS_PATH,
@@ -561,6 +562,20 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE, "decision_id": decision_id,
                               "count": len(orders), "orders": to_jsonable(list(orders))})
 
+    def _serve_decision_detail(self, query: str) -> None:
+        """`GET /api/v1/decisions/detail?decision_id=...`：一条 decision 的完整因果链（P0001.17 §7）。"""
+        params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
+        decision_id = params.get("decision_id", "")
+        if not decision_id:
+            self._error(400, "missing_decision_id", "decision_id query parameter is required")
+            return
+        try:
+            payload = self.service.decision_detail(decision_id)
+        except ValueError as exc:
+            self._error(400, "invalid_decision_id", str(exc))
+            return
+        self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE, "detail": payload})
+
     def _serve_assistant_context(self, query: str) -> None:
         assistant = self.service.assistant_view()
         if assistant is None:
@@ -746,6 +761,9 @@ class ProductApiHandler(BaseHTTPRequestHandler):
             return
         if path == DECISION_ORDERS_PATH:
             self._serve_decision_orders(query)
+            return
+        if path == DECISION_DETAIL_PATH:
+            self._serve_decision_detail(query)
             return
         if path == ASSISTANT_CONTEXT_PATH:
             self._serve_assistant_context(query)

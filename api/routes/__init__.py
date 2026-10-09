@@ -35,6 +35,8 @@ from api.routes import (
 
 #: `Decision → Order(s)` 反查端点（P0001.15 §15 / SC-27；带 query 参数，由 server 直接处理）
 DECISION_ORDERS_PATH = "/api/v1/decisions/orders"
+#: P0001.17 §7：decision 完整因果链（drill-down）
+DECISION_DETAIL_PATH = "/api/v1/decisions/detail"
 
 MODULES = (status, market, prediction, strategy, risk, execution, portfolio, readiness, evidence, instrument,
            blockers, ops)
@@ -64,7 +66,8 @@ OPS_PATH = ops.PATH
 #: path -> 模块（第一版全部为 GET，只读）
 ROUTES = {module.PATH: module for module in MODULES}
 #: 带 query 参数、由 server 直接处理的只读端点（不是 snapshot 切片）
-QUERY_ROUTES = (DECISION_ORDERS_PATH, ASSISTANT_CONTEXT_PATH, ASSISTANT_EXPLAIN_PATH)
+QUERY_ROUTES = (DECISION_ORDERS_PATH, DECISION_DETAIL_PATH, ASSISTANT_CONTEXT_PATH,
+                ASSISTANT_EXPLAIN_PATH)
 #: 全部已注册只读路径（snapshot 切片 + 别名 + query 端点）；UI 只允许引用这些路径
 READ_PATHS = tuple(ROUTES) + QUERY_ROUTES
 #: 兼容别名（同一只读切片）
@@ -72,4 +75,5 @@ for _module in MODULES:
     for _alias in getattr(_module, "ALIASES", ()):
         ROUTES[_alias] = _module
 
-__all__ = ["DECISION_ORDERS_PATH", "MODULES", "QUERY_ROUTES", "READ_PATHS", "ROUTES"]
+__all__ = ["DECISION_DETAIL_PATH", "DECISION_ORDERS_PATH", "MODULES", "QUERY_ROUTES",
+           "READ_PATHS", "ROUTES"]

@@ -96,6 +96,8 @@ class DecisionLoopE2ETest(unittest.TestCase):
             values = {k: v for k, v in values.items() if not k.startswith("strategy.maker.")}
         if not limits:
             values = {k: v for k, v in values.items() if not k.startswith("risk.")}
+        if not provider:                  # 显式移除 prediction 配置（trial profile 配了 local_trial）
+            values = {k: v for k, v in values.items() if not k.startswith("prediction.")}
         for key, options in ((MAKER_VALUES, maker), (RISK_VALUES, limits)):
             if options:
                 values.update(key)

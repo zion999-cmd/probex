@@ -1,0 +1,87 @@
+{
+ "base": "http://127.0.0.1:8894",
+ "results": [
+  {
+   "name": "01-monitor-local-trial",
+   "shot": "01-monitor-local-trial.png",
+   "missing": [],
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791523252744 · health=HEALTHY · data_ts=1700010795000 RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · STRATEGY:SIZE_BELOW_MINIMUM · VENUE:V"
+  },
+  {
+   "name": "02-market-kline-real-data",
+   "shot": "02-market-kline-real-data.png",
+   "missing": [],
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791523252744 · health=HEALTHY · data_ts=1700010795000 RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · STRATEGY:SIZE_BELOW_MINIMUM · VENUE:V",
+   "chart": {
+    "canvases": 16,
+    "apiCount": 181,
+    "apiLastClose": 61095.4,
+    "apiTimestamps": [
+     1699999980000,
+     1700010780000
+    ]
+   }
+  },
+  {
+   "name": "03-activity-causal-chain-drilldown",
+   "shot": "03-activity-causal-chain-drilldown.png",
+   "missing": [],
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791523252744 · health=HEALTHY · data_ts=1700010795000 RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · STRATEGY:SIZE_BELOW_MINIMUM · VENUE:V",
+   "drilldown": {
+    "clicked": true,
+    "decisionId": "d-0ed743bf6541-1700010795000",
+    "text": "DECISION D-0ED743BF6541-1700010795000\ninstrument / venue\npaper:BTCUSDT · paper\nmarket state hash\nUNKNOWN\nprediction\nLOCAL_TRIAL LOCAL_TRIAL · model=local-trial-v1 · confidence=UNKNOWN · request=BTCUSDT-00000046\ndecision\nask_only @ 1700010795000 · bid=none@UNKNOWN · ask=replace@61095.4\ndecision reason\nSIZE_BELOW_MINIMUM\nrisk\nUNKNOWN（无 risk 判定记录）\norders\nUNKNOWN（该 decision 未产生订单）\nfills\nUNKNOWN（该 decision 尚无成交）\naccounting\nposition=-5.421010862427522e-20 · equity=9999.616060404 · realized=-0.3549400000000038"
+   }
+  },
+  {
+   "name": "04-performance-equity-curve",
+   "shot": "04-performance-equity-curve.png",
+   "missing": [],
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791523252744 · health=HEALTHY · data_ts=1700010795000 RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · STRATEGY:SIZE_BELOW_MINIMUM · VENUE:V",
+   "performance": {
+    "canvases": 3,
+    "timelinePoints": 232,
+    "timelineUnavailable": null
+   }
+  },
+  {
+   "name": "05-system-connectors",
+   "shot": "05-system-connectors.png",
+   "missing": [],
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791523252744 · health=HEALTHY · data_ts=1700010795000 RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · STRATEGY:SIZE_BELOW_MINIMUM · VENUE:V"
+  },
+  {
+   "name": "assistant",
+   "shot": "06-assistant-context.png",
+   "questions": [
+    "Spot 还是 Perpetual？",
+    "当前 MARK 从哪里来？",
+    "为什么 MARK UNKNOWN 会 fail-closed？",
+    "订单来自哪个 decision？",
+    "通过哪个 execution connector 执行？"
+   ],
+   "answers": [
+    {
+     "q": "Spot 还是 Perpetual？",
+     "a": "Spot 还是 Perpetual？\nBTCUSDT 是 PERPETUAL（CRYPTO）；instrument_id=paper:BTCUSDT，结算资产=USDT · supports_short=True，supports_reduce_only=True，has_funding=True（product semantics，由 instrument domain 声明，不由 venue 名称推断） · venue_id=paper（environment=PAPER）；market connector=paper:market；execution connector=paper:ex"
+    },
+    {
+     "q": "当前 MARK 从哪里来？",
+     "a": "当前 MARK 从哪里来？\nBTCUSDT 是 PERPETUAL（CRYPTO）；instrument_id=paper:BTCUSDT，结算资产=USDT · supports_short=True，supports_reduce_only=True，has_funding=True（product semantics，由 instrument domain 声明，不由 venue 名称推断） · venue_id=paper（environment=PAPER）；market connector=paper:market；execution connector=paper:executi"
+    },
+    {
+     "q": "为什么 MARK UNKNOWN 会 fail-closed？",
+     "a": "为什么 MARK UNKNOWN 会 fail-closed？\nBTCUSDT 是 PERPETUAL（CRYPTO）；instrument_id=paper:BTCUSDT，结算资产=USDT · supports_short=True，supports_reduce_only=True，has_funding=True（product semantics，由 instrument domain 声明，不由 venue 名称推断） · venue_id=paper（environment=PAPER）；market connector=paper:market；execution conne"
+    },
+    {
+     "q": "订单来自哪个 decision？",
+     "a": "订单来自哪个 decision？\nBTCUSDT 是 PERPETUAL（CRYPTO）；instrument_id=paper:BTCUSDT，结算资产=USDT · supports_short=True，supports_reduce_only=True，has_funding=True（product semantics，由 instrument domain 声明，不由 venue 名称推断） · venue_id=paper（environment=PAPER）；market connector=paper:market；execution connector=paper:exec"
+    },
+    {
+     "q": "通过哪个 execution connector 执行？",
+     "a": "通过哪个 execution connector 执行？\nBTCUSDT 是 PERPETUAL（CRYPTO）；instrument_id=paper:BTCUSDT，结算资产=USDT · supports_short=True，supports_reduce_only=True，has_funding=True（product semantics，由 instrument domain 声明，不由 venue 名称推断） · venue_id=paper（environment=PAPER）；market connector=paper:market；execution connecto"
+    }
+   ]
+  }
+ ]
+}

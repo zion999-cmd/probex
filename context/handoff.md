@@ -2344,3 +2344,17 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
   (2) 授权一个明确标注 `LOCAL_TRIAL` 的确定性 prediction provider（新契约、非生产模型）；
   (3) 接受本地只有 NONE（无成交，不满足 P0001.17 §3/§17）。
 - 全量：**2428 passed / 0 failed / 24 skipped**；HEAD `f07cdf4` 已 push，工作树 clean。
+
+## 2026-10-04（续 4）：P0001.17 本地闭环跑通 + LOCAL_TRIAL provider + 真实浏览器 E2E
+
+- 修复 6 个本地闭环缺口（模拟器接线、策略/风险配置、数据时间时钟、回放节流、fixture 微观结构、ack 采样）；
+  `tests/integration/test_local_paper_loop_e2e.py` 5 秒确定性通过（decision→risk→order→**模拟成交**→accounting→API）。
+- 新增授权的 `LOCAL_TRIAL` prediction provider（`prediction/providers/local_trial.py`）：确定性、可审计、仅 REPLAY/PAPER、
+  TESTNET/LIVE 拒绝、fail-closed；UI/API/Assistant 明确标注"本地试验，非真实模型"。
+- 新增 `GET /api/v1/decisions/detail`（完整因果链）+ Activity drill-down；决策/成交事实接入展示缓冲（overlays 47/113）；
+  Performance 真实 timeline（231 点）；Assistant 五问。
+- 真实浏览器 E2E：`tests/ui/local_paper_demo.py` + `tests/ui/capture_local_loop.mjs` 6/6 通过，
+  证据在 `artifacts/p0001.17/`（6 张截图 + 断言 JSON）。
+- 全量：**2435 passed / 0 failed / 24 skipped**。
+- 未完成（下一轮）：Run Review 深度定位、Surface loading/error/空状态逐页审计、图表选中态 → Assistant 全贯通。
+- P0001.16 保持 In Progress / Deferred；`currentProposal = "P0001.17"`。

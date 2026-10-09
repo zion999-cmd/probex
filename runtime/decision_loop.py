@@ -117,6 +117,8 @@ class RuntimeDecisionLoop:
     pre_snapshot: Callable[[], None] | None = None
     on_prediction: Callable[[object | None], None] | None = None
     on_decision: Callable[[object | None], None] | None = None
+    #: P0001.17：owner 产生的订单/成交事实 → 展示缓冲（K 线/Activity 标记；只读）
+    on_execution: Callable[[object], None] | None = None
     on_readiness: Callable[[object | None], None] | None = None
     status: DecisionLoopStatus = field(default_factory=DecisionLoopStatus)
     _thread: threading.Thread | None = field(default=None, init=False)
@@ -220,7 +222,10 @@ class RuntimeDecisionLoop:
         self._publish_readiness(self._readiness_fact())
         if tradeable and self._decision_due(state, now):
             self._decide_and_execute(state, now)
-        self.engine.poll(now_ms=now)
+        polled = self.engine.poll(now_ms=now)
+        if self.on_execution is not None:
+            for update in getattr(polled, "updates", ()) or ():
+                self.on_execution(update)
 
     # ---------------------------------------------------------------- prediction
 
@@ -328,6 +333,9 @@ class RuntimeDecisionLoop:
             self.status.submits += 1
         elif getattr(result, "rejected", False):
             self.status.risk_rejects += 1
+        if self.on_execution is not None:
+            for update in getattr(result, "updates", ()) or ():
+                self.on_execution(update)
 
     def _cancel(self, client_order_id: object, now: Milliseconds) -> bool:
         if not client_order_id:

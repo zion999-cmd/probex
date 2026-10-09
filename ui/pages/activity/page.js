@@ -1,5 +1,5 @@
 /** Activity：F-08 完整因果链（按时间排序的单一 trace；缺阶段显式 ABSENT + reason）。 */
-import { ENDPOINTS, fetchJson, fetchSnapshot, reasonCatalog } from "/ui/client/api.js";
+import { ENDPOINTS, fetchDecisionDetail, fetchJson, fetchSnapshot, reasonCatalog } from "/ui/client/api.js";
 import { escapeHtml, fact, reasonCell, rows, section, table, valueView } from "/ui/client/render.js";
 import { entityHash, marketPointHash } from "/ui/app/navigation.js";
 import { mountPredictionPanel, predictionSection } from "/ui/pages/market/prediction_panel.js";
@@ -43,6 +43,67 @@ function decisionOrderCell(entry) {
   if (!match) return '<span class="unknown">UNKNOWN</span>';
   const decisionId = match[1];
   return `<a href="#/orders?decision=${encodeURIComponent(decisionId)}">${escapeHtml(decisionId)}</a>`;
+}
+
+/** decision id → 可点击的 drill-down（拉取 /api/v1/decisions/detail）。 */
+function decisionLink(decisionFact) {
+  if (!decisionFact || !decisionFact.known || !decisionFact.value) return fact(decisionFact);
+  const value = String(decisionFact.value);
+  return `<a href="#" data-decision="${escapeHtml(value)}">${escapeHtml(value)}</a>`;
+}
+
+async function mountDecisionDrilldown(host) {
+  const panel = document.getElementById("decision-detail");
+  if (!panel) return;
+  // decision 链接位于 "Decisions" 表（不在 drill-down 区域内）⇒ 必须在整个文档范围内绑定
+  (host || document).querySelectorAll("a[data-decision]").forEach((link) => {
+    link.addEventListener("click", async (event) => {
+      event.preventDefault();
+      const decisionId = link.dataset.decision;
+      panel.innerHTML = `<div class="unknown">loading ${escapeHtml(decisionId)}…</div>`;
+      try {
+        const payload = await fetchDecisionDetail(decisionId);
+        panel.innerHTML = renderDecisionDetail(payload.detail);
+      } catch (error) {
+        panel.innerHTML = `<div class="bad">ERROR: ${escapeHtml(String(error))}</div>`;
+      }
+    });
+  });
+}
+
+/** 因果链渲染：market → prediction → decision → risk → order → fill → accounting（缺项如实 UNKNOWN）。 */
+function renderDecisionDetail(detail) {
+  if (!detail) return '<div class="unknown">UNKNOWN (no detail)</div>';
+  const decision = detail.decision;
+  const prediction = detail.prediction;
+  const risk = (detail.risk || []).map((r) =>
+    `${escapeHtml(r.client_order_id)}: ${escapeHtml(r.decision)}${r.reason_code ? " (" + escapeHtml(r.reason_code) + ")" : ""}`);
+  const orders = (detail.orders || []).map((o) =>
+    `${escapeHtml(o.client_order_id)} · ${escapeHtml(o.side)} · ${escapeHtml(o.status)} · filled=${fact(o.filled_quantity)} · venue_order_id=${fact(o.venue_order_id)}`);
+  const fills = (detail.fills || []).map((f) =>
+    `${escapeHtml(f.client_order_id)} · price=${fact(f.price)} · qty=${fact(f.quantity)} · fee=${fact(f.fee)}`);
+  const predictionLine = prediction
+    ? `${escapeHtml(String(prediction.provider))}${prediction.is_local_trial ? ' <span class="warn">LOCAL_TRIAL</span>' : ""}` +
+      ` · model=${escapeHtml(String(prediction.model))} · confidence=${prediction.derived_confidence === null ? "UNKNOWN" : escapeHtml(String(prediction.derived_confidence))}` +
+      ` · request=${escapeHtml(String(prediction.request_id))}`
+    : '<span class="unknown">UNKNOWN（该 decision 无 prediction 记录）</span>';
+  return section(`Decision ${escapeHtml(detail.decision_id)}`, rows([
+    ["instrument / venue", `${escapeHtml(String(detail.instrument_id))} · ${escapeHtml(String(detail.venue_id))}`],
+    ["market state hash", escapeHtml(String(detail.market_state_hash || "UNKNOWN"))],
+    ["prediction", predictionLine],
+    ["decision", decision === null
+      ? '<span class="unknown">UNKNOWN（该 decision 不是当前最新一轮；订单/成交仍可反查）</span>'
+      : `${escapeHtml(String(decision.mode))} @ ${escapeHtml(String(decision.at_ms))} · bid=${escapeHtml(String(decision.bid_action))}@${decision.bid_price === null ? "UNKNOWN" : escapeHtml(String(decision.bid_price))}` +
+        ` · ask=${escapeHtml(String(decision.ask_action))}@${decision.ask_price === null ? "UNKNOWN" : escapeHtml(String(decision.ask_price))}`],
+    ["decision reason", decision === null ? "UNKNOWN" : escapeHtml(String(decision.reason || "—"))],
+    ["risk", risk.length ? risk.join("<br>") : '<span class="unknown">UNKNOWN（无 risk 判定记录）</span>'],
+    ["orders", orders.length ? orders.join("<br>") : '<span class="unknown">UNKNOWN（该 decision 未产生订单）</span>'],
+    ["fills", fills.length ? fills.join("<br>") : '<span class="unknown">UNKNOWN（该 decision 尚无成交）</span>'],
+    ["accounting", detail.accounting === null ? '<span class="unknown">UNKNOWN</span>'
+      : `position=${detail.accounting.position_qty === null ? "UNKNOWN" : escapeHtml(String(detail.accounting.position_qty))}` +
+        ` · equity=${detail.accounting.equity === null ? "UNKNOWN" : escapeHtml(String(detail.accounting.equity))}` +
+        ` · realized=${detail.accounting.realized_pnl === null ? "UNKNOWN" : escapeHtml(String(detail.accounting.realized_pnl))}`],
+  ]));
 }
 
 function identityCell(entry) {
@@ -105,9 +166,10 @@ export async function render(rest = []) {
     ["readiness", fact(snapshot.readiness.status)],
     ["readiness blockers", escapeHtml((snapshot.readiness.reasons || []).join(", ") || "none")],
   ]);
+  // P0001.17 §7：decision → order → fill → accounting 的 drill-down（点击 decision id）
   const decisionTable = table(["ts", "side", "action", "price", "qty", "decision id", "reason"],
     decisions.map((d) => [String(d.ts), escapeHtml(d.side), escapeHtml(d.action), fact(d.price),
-      fact(d.quantity), fact(d.decision_id), fact(d.reason)]));
+      fact(d.quantity), decisionLink(d.decision_id), fact(d.reason)]));
   const executionTable = table(["ts", "order", "event", "detail"],
     executions.map((e) => [String(e.ts), escapeHtml(e.client_order_id), escapeHtml(e.event),
       escapeHtml(e.detail || "")]));
@@ -138,6 +200,9 @@ export async function render(rest = []) {
   ]);
   return section("Causal chain (time-ordered, F-08)", timeline) +
     section("Stages without a fact (explicit, not skipped)", missingBlock) +
+    `<section class="wide"><h2>Decision drill-down</h2>` +
+      `<div id="decision-detail"><div class="muted">click a decision id below to expand ` +
+      `market → prediction → decision → risk → order → fill → accounting</div></div></section>` +
     strategyPanel +
     section("Inputs / gates", flow) +
     section("Decisions", decisionTable) +
@@ -158,6 +223,13 @@ export async function render(rest = []) {
 
 export function mount() {
   updateSelection({ surface: "activity" });
+  const drillHost = document.getElementById("decision-detail");
+  if (drillHost) {
+    void mountDecisionDrilldown(document);          // 文档级绑定（链接在 Decisions 表里）
+    // 首次进入自动展开最近一条 decision（真实记录里存在的 decision id）
+    const first = document.querySelector("a[data-decision]");
+    if (first) first.click();
+  }
   const snapshot = lastActivity;
   const host = document.getElementById("activity-prediction");
   if (host && snapshot) {

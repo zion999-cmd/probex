@@ -10,9 +10,9 @@ Replay 市场数据 → MarketState → MakerPolicy 决策 → RiskGate → PAPE
 
 并验证因果链可反查：任取一笔成交 → 其订单 → 其 canonical correlation → decision_id 与 market state hash。
 
-说明（诚实标注）：本测试为 **wiring 级 E2E**，prediction 由 `tests/fakes.py::FakeProvider` 注入
-（P0001.16 裁决：FakeProvider 允许用于 unit/integration wiring test，禁止用于产品级验收）。
-产品级（真实外部 prediction provider）尚未接入，属 P0001.17 待裁决项——本测试不据此声称产品已具备真实预测。
+说明：prediction 由**产品配置**的授权 `LOCAL_TRIAL` 确定性 provider 提供
+（`prediction.provider=local_trial`，人类裁决 2026-10-04，仅 REPLAY/PAPER）。它**不是**真实模型预测：
+`provider="LOCAL_TRIAL"` / `model="local-trial-v1"` 会在 API/UI 中明确标注。
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ from pathlib import Path
 from product.provenance import ConfigEntry, ConfigSource
 from product.types import Fact, RuntimeMode
 from runtime.assembly import FeedProfile, ProductRuntime, RuntimeProfile
-from tests.fakes import FakeProvider
 from tests.support import TempDirTestCase
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -51,7 +50,7 @@ class LocalPaperLoopE2ETest(TempDirTestCase):
             run_registry_dir=str(self.tmp_path / "runs"),
             feed=FeedProfile(event_store=str(store), window_ms=3_600_000, bucket_ms=1_000,
                              max_points=200, price_levels=5, history_capacity=6_000, view_depth=10)))
-        runtime.attach_prediction_provider(FakeProvider(), timeout_ms=1_000, ttl_ms=120_000)
+        # 不注入 FakeProvider：使用产品配置构造的 LOCAL_TRIAL provider（裁决授权）
         return runtime
 
     def test_local_loop_produces_real_decision_order_fill_and_pnl(self) -> None:
@@ -65,6 +64,14 @@ class LocalPaperLoopE2ETest(TempDirTestCase):
                     break
                 __import__("time").sleep(0.25)
             snapshot = runtime.service.snapshot()
+
+            # 0) prediction 来自产品配置的 LOCAL_TRIAL provider（可审计、非真实模型）
+            record = runtime.service.snapshot().prediction
+            self.assertTrue(record.provider.known)
+            self.assertEqual(record.provider.value, "LOCAL_TRIAL")
+            self.assertTrue(record.model.known)
+            self.assertEqual(record.model.value, "local-trial-v1")
+            self.assertTrue(record.is_local_trial.value)
 
             # 1) 真实策略决策（不是 fixture 拼出来的结果）
             self.assertGreaterEqual(loop.status.decisions, 1)
