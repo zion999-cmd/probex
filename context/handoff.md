@@ -2486,3 +2486,11 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
   此前真实验收依赖人类的不同地区隧道。产品行为本身不伪造（connector 会变 FAILED）。
 - 全量 **2461 passed / 0 failed / 24 skipped**；无新依赖、NOT Included 未触碰。
 - **Batch 4（P0001.16 收口）阻塞中：需要人类单独授权 TESTNET 写入 / 处理 0.001 BTC 残留仓位。**
+
+## 2026-10-10（修复）：docs/RUNBOOK.md 纳入版本控制
+
+- 全局 gitignore（`~/.gitignore_global`）的 `docs` 规则使 RUNBOOK 在前三个批次都未被提交，
+  clean checkout 缺文件、守卫测试失败；已 `git add -f docs/RUNBOOK.md`（commit 已 push）。
+- detached checkout 复核：**2461 passed / 0 failed / 24 skipped**。
+- 全局任务可执行范围到此耗尽：Batch 4（P0001.16 收口）与 Batch 5（策略/模型效果标定/多标的）
+  需要人类新的明确授权。

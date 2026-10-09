@@ -147,3 +147,4 @@
 - 2026-10-10 Batch 1 完成：4 个陈旧 Proposal 状态纠正；roadmap/current_state/decisions 补正；启动脚本合并为单个 `scripts/probex.sh`（up/demo/status/data）；陈旧 capture 证据重跑归档（missing=NONE）。
 - 2026-10-10 Batch 2 完成：`runtime.assembly` 在 TESTNET/LIVE 模式无专用栈时 fail-fast 拒绝（消除‘本地文件冒充 binance:market CONNECTED’的标注缺陷）。
 - 2026-10-10 Batch 3 完成：`--market-source binance-public` 把产品入口接到既有真实公网 connector（pump 线程 + 既有 run registry 持久化）；新增 `runtime/public_market.py` 与离线集成测试；真实公网验收因当前网络被 Binance 451 geo-block（NOT RUN，诚实标注）。
+- 2026-10-10 修正：`docs/RUNBOOK.md` 被全局 gitignore 的 `docs` 规则静默排除（clean checkout 缺文件）⇒ force-track 该交付物；detached checkout 复核 2461 全绿。
