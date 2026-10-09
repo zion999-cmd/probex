@@ -148,3 +148,4 @@
 - 2026-10-10 Batch 2 完成：`runtime.assembly` 在 TESTNET/LIVE 模式无专用栈时 fail-fast 拒绝（消除‘本地文件冒充 binance:market CONNECTED’的标注缺陷）。
 - 2026-10-10 Batch 3 完成：`--market-source binance-public` 把产品入口接到既有真实公网 connector（pump 线程 + 既有 run registry 持久化）；新增 `runtime/public_market.py` 与离线集成测试；真实公网验收因当前网络被 Binance 451 geo-block（NOT RUN，诚实标注）。
 - 2026-10-10 修正：`docs/RUNBOOK.md` 被全局 gitignore 的 `docs` 规则静默排除（clean checkout 缺文件）⇒ force-track 该交付物；detached checkout 复核 2461 全绿。
+- 2026-10-10 第二轮全局复核：重新抽取全部 38 个 Acceptance 段逐条核对（澄清 P0001.1 §2 的 10 项是原总架构文本、明确不属实施范围）；分层实测 unit 1591 / integration 489 / fault 308 / replay 49 全绿；detached clean checkout 2461 全绿；无空壳页面、无遗留进程。结论：无需新增授权的缺口已全部闭合。

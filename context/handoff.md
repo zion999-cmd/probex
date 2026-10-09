@@ -2494,3 +2494,15 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - detached checkout 复核：**2461 passed / 0 failed / 24 skipped**。
 - 全局任务可执行范围到此耗尽：Batch 4（P0001.16 收口）与 Batch 5（策略/模型效果标定/多标的）
   需要人类新的明确授权。
+
+## 2026-10-10（第二轮全局查漏收口）
+
+- 重新抽取全部 38 个 Acceptance 段逐条核对，确认无遗漏；澄清 P0001.1 顶部 10 项"成功标准"
+  属 §2 原 P0001 总架构文本（文件 §0 明确不构成实施范围；已拆到 P0001.2–.10+）。
+- 分层实测：**unit 1591 / integration 489 / fault 308 / replay 49 = 2437 全绿**（+ guard/acceptance，
+  24 live 跳过）；**detached clean checkout 2461 passed / 0 failed / 24 skipped**。
+- 13 个 UI page 全部可达（5 Surface + detail routes；无空壳/孤儿，守卫固定）。
+- 无工作树改动、无遗留进程；真实外部状态未变（TESTNET 残留 0.001 BTC 依旧，未写入）。
+- **结论**：所有"无需新增授权、属原始 Proposal 交付范围"的缺口均已修复并逐条验收。
+  剩余仅：Batch 4（P0001.16 收口，需 TESTNET 写/平仓授权）、Batch 5（策略有效性标定/多标的，需新提案）、
+  真实公网 451（需非受限出口）。
