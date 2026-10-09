@@ -2,27 +2,63 @@
  "mode": "PAPER",
  "prediction_provider": "LOCAL_TRIAL",
  "prediction_is_local_trial": true,
- "decisions": 2,
- "submits": 2,
+ "decisions": 6,
+ "submits": 8,
  "orders": [
   [
-   "probex-paper-1791524572760-000001",
+   "probex-paper-1791530304610-000001",
+   "FAILED",
+   0.0
+  ],
+  [
+   "probex-paper-1791530304610-000002",
+   "CANCELED",
+   0.0
+  ],
+  [
+   "probex-paper-1791530304610-000003",
+   "CANCELED",
+   0.0
+  ],
+  [
+   "probex-paper-1791530304610-000004",
+   "CANCELED",
+   0.0
+  ],
+  [
+   "probex-paper-1791530304610-000005",
+   "FAILED",
+   0.0
+  ],
+  [
+   "probex-paper-1791530304610-000006",
    "FILLED",
    0.0002
   ],
   [
-   "probex-paper-1791524572760-000002",
-   "PENDING_CANCEL",
+   "probex-paper-1791530304610-000007",
+   "FAILED",
    0.0
+  ],
+  [
+   "probex-paper-1791530304610-000008",
+   "FILLED",
+   0.0002
   ]
  ],
- "fills": 1,
- "position_qty": 0.0002,
- "equity": 9999.97149478,
- "realized_pnl": 0.0,
+ "fills": 2,
+ "position_qty": 0.0,
+ "equity": 9999.995322592,
+ "realized_pnl": 0.00011999999999970896,
  "decision_ids": [
-  "d-f4de98a89659-1700000460000",
-  "d-f4de98a89659-1700000460000"
+  "d-b8c9a943bb08-1700000460000",
+  "d-b8c9a943bb08-1700000460000",
+  "d-cff138c1468f-1700000695000",
+  "d-b92610aa7dad-1700001160000",
+  "d-cff138c1468f-1700000695000",
+  "d-c9942d08730f-1700001390000",
+  "d-9cd840932c87-1700000930000",
+  "d-c9942d08730f-1700001390000"
  ],
- "url": "http://127.0.0.1:8895"
+ "url": "http://127.0.0.1:8905"
 }

@@ -64,3 +64,22 @@
   （修复前 drawer 把选中嵌套传递导致后端收不到；现已展平并实测命中）。
 - 进入 Market（live/replay/run-review）与 Orders 时写入 `run/symbol/timestamp/order` 并**清空** `decision/order/fill`，
   避免串 run；Activity 选中 decision 时写入 `decision` 与当前 `run`。
+
+## 逐页状态**注入验证**（P0001.17 §2/§16B，真实故障注入 + 真实空数据）
+
+测试资产：`tests/ui/fault_server.py`（两种模式）+ `tests/ui/capture_states.mjs`（真实 Chrome）。
+结果：`surface_states.json`（与本文件同目录）。
+
+| Surface | fault 模式（provider 真实抛错 ⇒ 503） | empty 模式（真实空 event store） |
+| --- | --- | --- |
+| Monitor | error 文案 + **恢复入口**（Monitor / System health / retry）+ UNKNOWN+reason ✔ | `health=UNKNOWN`、`data_ts=UNKNOWN (no market data consumed yet)`（带 reason）✔ |
+| Market | 同上（error + recovery）✔ | K 线/事实全 UNKNOWN（不画假图）✔ |
+| Activity | 同上 ✔ | 各 canonical 阶段显式 ABSENT/UNKNOWN + reason ✔ |
+| Performance | 同上 ✔ | equity timeline UNKNOWN（带原因），不显示 0 ✔ |
+| System | 同上 ✔ | connector/execution facts UNKNOWN（不显示 connected/健康）✔ |
+
+- fault 模式真实响应：`/api/v1/snapshot -> HTTP 503`、`/api/v1/market -> HTTP 503`（provider 抛 `InjectedFailure`）；
+  header banner `snapshot unavailable: …`、blockers `UNKNOWN`、页面 error 段含 recovery 链接。
+- empty 模式：事件存储为**空文件**（真实无数据，不是 mock）⇒ 全部状态为 UNKNOWN/ABSENT 且**都带 reason**；
+  5/5 Surface 导航仍可用（`navOk=true`）。
+- 两模式 5/5 Surface 均通过（`errHint` / `unknown+reason` / `nav`），fault 模式另含 5/5 recovery。

@@ -55,6 +55,8 @@ VENDOR_ROOT = Path(__file__).resolve().parent.parent / "node_modules"
 VENDOR_PREFIX = "/vendor/"
 VENDOR_PACKAGES = ("klinecharts", "@klinecharts/extension", "echarts")
 SCHEMA_VERSION_VALUE = SCHEMA_VERSION
+#: 服务端 ATR 周期（显式；标准 Wilder 定义，无业务默认值语义）
+CANDLE_ATR_PERIOD = 14
 UI_PATH = UI_ROOT / "app" / "index.html"
 REPORT_MARKDOWN = "markdown"
 REPORT_JSON = "json"
@@ -367,12 +369,18 @@ class ProductApiHandler(BaseHTTPRequestHandler):
                 self._error(400, "invalid_candle_params", "limit must be an integer")
                 return
             try:
+                from product.indicators import wilder_atr
+
                 series = aggregate_candles(trades=history.trades(), snapshots=history.snapshots(),
                                            interval=interval, limit=limit)
             except CandleError as exc:
                 self._error(400, "invalid_candle_params", str(exc))
                 return
+            atr_period = CANDLE_ATR_PERIOD
+            atr = wilder_atr(series.candles, period=atr_period)
             payload = {"candles": to_jsonable(series), "counts": history.counts,
+                       "indicators": {"atr": {"period": atr_period,
+                                              "points": to_jsonable(atr)}},
                        "bounds": self._bounds(config), "max_limit": MAX_CANDLE_LIMIT}
         else:
             overlays = project_overlays(history.decisions(), history.executions(),
@@ -391,22 +399,56 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         """`GET /api/v1/runs/<run_id>/market`：RUN REVIEW 视图（必须有该 run 的有界历史）。"""
         run_id = path[len(f"{RUNS_PATH}/"):-len("/market")]
         resolved = self._workbench()
-        if resolved is None:
-            return
-        history, _config = resolved
-        if not run_id or history.run_id != run_id:
-            self._error(NOT_FOUND, "no_recorded_market_for_run",
-                        "the wired bounded history belongs to a different run (or none)")
-            return
+        history, _config = resolved if resolved is not None else (None, None)
         from product.serialization import to_jsonable
-        from product.market_timeline import project_timeline
+
+        if run_id and history is not None and history.run_id == run_id:
+            # 当前接线 run：实时有界缓冲（事实最新）
+            from product.market_timeline import project_timeline
+
+            config = self.service.projection_config_view()
+            timeline = project_timeline(history.states(), bucket_ms=config.bucket_ms,
+                                        max_points=config.max_points, window_ms=config.window_ms)
+            self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE, "run_id": run_id,
+                                  "source": "live", "timeline": to_jsonable(timeline),
+                                  "counts": history.counts, "bounds": self._bounds(config)})
+            return
+        # P0001.17：历史 run ⇒ 读该 run 的**持久化事实**（真实记录；缺失 ⇒ 明确原因）
+        registry = self.service.run_registry_view()
+        if registry is None or not run_id:
+            self._error(NOT_FOUND, "no_recorded_market_for_run",
+                        "no run registry wired and the bounded history belongs to another run")
+            return
+        try:
+            points, unavailable = registry.load_run_facts(run_id, "market", limit=5_000)
+            facts, facts_unavailable = registry.load_run_facts(run_id, "facts", limit=2_000)
+        except Exception as exc:  # noqa: BLE001 - 损坏 ⇒ 明确报错，不猜
+            self._error(BAD_REQUEST, "run_facts_unreadable", f"{type(exc).__name__}: {exc}")
+            return
+        if unavailable is not None:
+            self._error(NOT_FOUND, "no_recorded_market_for_run", unavailable)
+            return
+        from product.candles import aggregate_candles
 
         config = self.service.projection_config_view()
-        timeline = project_timeline(history.states(), bucket_ms=config.bucket_ms,
-                                    max_points=config.max_points, window_ms=config.window_ms)
+        bucket_ms = int(getattr(config, "bucket_ms", 1_000) or 1_000)
+        # 记录点只有盘口 mid（无逐笔）⇒ 服务端按 SOURCE_MID 聚合（volume=0，如实标注来源）
+        from types import SimpleNamespace
+
+        # 既有聚合器以盘口 `bids`/`asks` 计算 mid ⇒ 把**记录到的** best_bid/best_ask 映射成同形事实
+        recorded = tuple(SimpleNamespace(ts=int(p["ts"]),
+                                        bids=((p["best_bid"], 0.0),) if p.get("best_bid") else None,
+                                        asks=((p["best_ask"], 0.0),) if p.get("best_ask") else None)
+                         for p in points
+                         if isinstance(p, dict) and p.get("ts") is not None and p.get("best_bid")
+                         and p.get("best_ask"))
+        series = aggregate_candles(trades=(), snapshots=recorded, interval="1m", limit=240)
         self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE, "run_id": run_id,
-                              "timeline": to_jsonable(timeline), "counts": history.counts,
-                              "bounds": self._bounds(config)})
+                              "source": "durable", "points": len(points),
+                              "candles": to_jsonable(series), "facts": list(facts),
+                              "facts_unavailable": facts_unavailable,
+                              "note": "recorded run facts (book mid only; no trades persisted => volume omitted)",
+                              "bounds": self._bounds(config) if config is not None else {}})
 
     def _serve_replay_control(self, verb: str, body: dict) -> None:
         """local replay control：只转发意图给 REPLAY owner（绝不作用于 LIVE/TESTNET execution）。"""

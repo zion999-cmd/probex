@@ -39,6 +39,9 @@ class Candle:
     close: float
     volume: float
     source: str
+    #: P0001.17 §5：由**真实成交**在服务端计算的成交均价（Σ(price*qty)/Σqty）；
+    #: 该桶没有成交（OHLC 由盘口 mid 补足）⇒ None（UNKNOWN，不是 0）。
+    vwap: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,8 +124,11 @@ def aggregate_candles(*, trades: object, snapshots: object, interval: str,
             points = sorted(points)
             prices = [price for _, price, _ in points]
             volume = sum(qty for _, _, qty in points)
+            # 服务端 VWAP（真实成交）：Σ(price*qty)/Σqty；volume > 0 由构造保证
+            vwap = sum(price * qty for _, price, qty in points) / volume
             candles.append(Candle(ts=bucket, open=prices[0], high=max(prices), low=min(prices),
-                                  close=prices[-1], volume=volume, source=SOURCE_TRADES))
+                                  close=prices[-1], volume=volume, source=SOURCE_TRADES,
+                                  vwap=vwap))
             used_trades = True
             continue
         mids = sorted(mids_by_bucket.get(bucket) or ())

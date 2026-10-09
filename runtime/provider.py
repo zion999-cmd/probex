@@ -198,6 +198,10 @@ class MarketFeedProvider:
                     state = self.engine.on_market_event(event)
                     self.history.feed_snapshot(self._book_snapshot(event.exchange_ts))
                     self.history.feed_state(state)
+                elif is_trade:
+                    # P0001.17：成交事件进入 FeatureEngine 的成交域累积（真实 vwap/cvd/主动量），
+                    # 不进盘口（MarketBook 会拒绝 trade）；同时进入展示用成交历史。
+                    state = self.engine.on_market_event(event)
                 # 账户采样：只转发既有 AccountingFactsProvider 的事实（不重算、不伪造 0、失败不打断 feed）
                 if self.account_provider is not None and self.history_account is not None:
                     try:

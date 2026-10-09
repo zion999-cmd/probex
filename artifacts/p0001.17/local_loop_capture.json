@@ -1,17 +1,17 @@
 {
- "base": "http://127.0.0.1:8896",
+ "base": "http://127.0.0.1:8905",
  "results": [
   {
    "name": "01-monitor-local-trial",
    "shot": "01-monitor-local-trial.png",
    "missing": [],
-   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791528030828 · health=HEALTHY · data_ts=1700010795000 RISK:REDUCE_ONLY_WOULD_INCREASE · VENUE:VENUE_FACTS_UNAVAILABLE INSTRUMENT / VENUE mode / environment PAP"
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791530304610 · health=HEALTHY · data_ts=1700008105000 RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · MAR"
   },
   {
    "name": "02-market-kline-real-data",
    "shot": "02-market-kline-real-data.png",
    "missing": [],
-   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791528030828 · health=HEALTHY · data_ts=1700010795000 RISK:REDUCE_ONLY_WOULD_INCREASE · VENUE:VENUE_FACTS_UNAVAILABLE MARKET VIEW live · replay · run-review K-",
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791530304610 · health=HEALTHY · data_ts=1700000250000 RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · MAR",
    "chart": {
     "canvases": 16,
     "apiCount": 181,
@@ -26,25 +26,25 @@
    "name": "03-activity-causal-chain-drilldown",
    "shot": "03-activity-causal-chain-drilldown.png",
    "missing": [],
-   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791528030828 · health=HEALTHY · data_ts=1700010795000 RISK:REDUCE_ONLY_WOULD_INCREASE · VENUE:VENUE_FACTS_UNAVAILABLE CAUSAL CHAIN (TIME-ORDERED, F-08) ts stag",
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791530304610 · health=HEALTHY · data_ts=1700005590000 RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · MAR",
    "drilldown": {
     "clicked": true,
-    "decisionId": "d-ce43334ffde3-1700010795000",
-    "text": "DECISION D-CE43334FFDE3-1700010795000\ninstrument / venue\npaper:BTCUSDT · paper\nmarket state hash\nUNKNOWN\nprediction\nLOCAL_TRIAL LOCAL_TRIAL · model=local-trial-v1 · confidence=UNKNOWN · request=BTCUSDT-00000046\ndecision\nboth @ 1700010795000 · bid=replace@61094 · ask=replace@61095.4\ndecision reason\n—\nrisk\nUNKNOWN（无 risk 判定记录）\norders\nUNKNOWN（该 decision 未产生订单）\nfills\nUNKNOWN（该 decision 尚无成交）\naccounting\nposition=-0.001 · equity=10000.233369516 · realized=-0.3812916049382839"
+    "decisionId": "d-8dcdac30c5d8-1700010740000",
+    "text": "DECISION D-8DCDAC30C5D8-1700010740000\ninstrument / venue\npaper:BTCUSDT · paper\nmarket state hash\nsha256:8dcdac30c5d859db90858bd9eb1f2c17a4e9755cc7d4004243835d0fc73f6ba8\nprediction\nLOCAL_TRIAL LOCAL_TRIAL · model=local-trial-v1 · confidence=UNKNOWN · request=BTCUSDT-00000044\ndecision\nUNKNOWN（该 decision 不是当前最新一轮；订单/成交仍可反查）\ndecision reason\nUNKNOWN\nrisk\nprobex-paper-1791530304610-000070: allow\nprobex-paper-1791530304610-000073: allow\norders\nprobex-paper-1791530304610-000070 · sell · CANCELED · filled=0 · venue_order_id=sim-000050 · market @ 1700010740000\nprobex-paper-1791530304610-000073 · buy · F"
    }
   },
   {
    "name": "07-run-review-current",
    "shot": "07-run-review-current.png",
    "missing": [],
-   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791528030828 · health=HEALTHY · data_ts=1700010795000 RISK:REDUCE_ONLY_WOULD_INCREASE · VENUE:VENUE_FACTS_UNAVAILABLE MARKET VIEW live · replay · run-review ru",
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791530304610 · health=HEALTHY · data_ts=1700008440000 RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · MAR",
    "runReview": {
-    "runId": "paper-1791528030828",
+    "runId": "paper-1791530304610",
     "currentRunStatus": 200,
     "unknownRunStatus": 404,
     "unknownRunBody": {
      "error": "no_recorded_market_for_run",
-     "detail": "the wired bounded history belongs to a different run (or none)",
+     "detail": "no market facts recorded for run 'run-does-not-exist'",
      "status": 404
     }
    }
@@ -53,70 +53,47 @@
    "name": "08-run-review-unknown",
    "shot": "08-run-review-unknown.png",
    "missing": [],
-   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791528030828 · health=HEALTHY · data_ts=1700010795000 RISK:REDUCE_ONLY_WOULD_INCREASE · VENUE:VENUE_FACTS_UNAVAILABLE MARKET VIEW live · replay · run-review ru"
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791530304610 · health=HEALTHY · data_ts=1700010000000 RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · MAR"
   },
   {
    "name": "04-performance-equity-curve",
    "shot": "04-performance-equity-curve.png",
    "missing": [],
-   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791528030828 · health=HEALTHY · data_ts=1700010795000 RISK:REDUCE_ONLY_WOULD_INCREASE · VENUE:VENUE_FACTS_UNAVAILABLE TRADE STATISTICS (REAL FACTS ONLY) trades",
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791530304610 · health=HEALTHY · data_ts=1700002040000 RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · MAR",
    "performance": {
-    "canvases": 3,
-    "timelinePoints": 232,
+    "canvases": 0,
+    "timelinePoints": 231,
     "timelineUnavailable": null
    }
   },
   {
    "name": "05-system-connectors",
    "shot": "05-system-connectors.png",
-   "missing": [],
-   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791528030828 · health=HEALTHY · data_ts=1700010795000 RISK:REDUCE_ONLY_WOULD_INCREASE · VENUE:VENUE_FACTS_UNAVAILABLE SYSTEM SURFACES health · risk · readiness"
+   "missing": [
+    "Market data connector",
+    "Private execution connector",
+    "connection state"
+   ],
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791530304610 · health=HEALTHY · data_ts=1700003625000 RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · RISK:REDUCE_ONLY_WOULD_INCREASE · MAR"
   },
   {
    "name": "assistant-selected",
    "shot": "09-assistant-selected-object.png",
    "selected": {
     "selected": true,
-    "decisionId": "d-ce43334ffde3-1700010795000",
-    "panel": "DECISION D-CE43334FFDE3-1700010795000\ninstrument / venue\npaper:BTCUSDT · paper\nmarket state hash\nUNKNOWN\nprediction\nLOCAL_TRIAL LOCAL_TRIAL · model=local-trial-v1 · confidence=UNKNOWN · request=BTCUSD"
+    "decisionId": "d-8dcdac30c5d8-1700010740000",
+    "panel": "DECISION D-8DCDAC30C5D8-1700010740000\ninstrument / venue\npaper:BTCUSDT · paper\nmarket state hash\nsha256:8dcdac30c5d859db90858bd9eb1f2c17a4e9755cc7d4004243835d0fc73f6ba8\nprediction\nLOCAL_TRIAL LOCAL_TR"
    },
    "assistantSelected": {
     "answered": true,
-    "text": "订单来自哪个 decision？\n当前**已选**对象：decision=d-ce43334ffde3-1700010795000；order=—；fill=—。以下解释针对**已选对象**；`latest_*` 指的是系统当前最新一轮，两者不同。 · order probex-paper-1791528030828-000075 来自 decision_id=d-9ce100243681-1700010500000（instrument=paper:BTCUSDT，venue=paper）；关联来自订单自身的 canonical correlation metadata · private connector=CONNECTED；已观测到私有事件=True；last private event=1700010570000 · reconciliation 证据 1 条；最近 outcome=absent · prediction 来源 = **LOCAL_TRIAL**（本地试验确定性规则，仅 REPLAY/PAPER；**不是**真实模型预测，不得据此判断模型有效性）；model=local-trial-v1 · BTCUSDT 是 PERPETUAL（CRYPTO）；instrument_id=paper:BTCUSDT，结算资产=USDT · supports_short="
+    "text": "订单来自哪个 decision？\n…"
    }
   },
   {
    "name": "assistant",
    "shot": "06-assistant-context.png",
-   "questions": [
-    "Spot 还是 Perpetual？",
-    "当前 MARK 从哪里来？",
-    "为什么 MARK UNKNOWN 会 fail-closed？",
-    "订单来自哪个 decision？",
-    "通过哪个 execution connector 执行？"
-   ],
-   "answers": [
-    {
-     "q": "Spot 还是 Perpetual？",
-     "a": "Spot 还是 Perpetual？\n当前**没有选中对象**（未从图表/Activity/Run Review 传入 decision/order/fill）；回答只覆盖当前最新事实：latest decision at_ms=1700010795000 · private connector=CONNECTED；已观测到私有事件=True；last private event=1700010570000 · reconciliation 证据 1 条；最近 outcome=absent · prediction 来源 = **LOCAL_TRIAL**（本地试验确定性规则，仅 REPLAY"
-    },
-    {
-     "q": "当前 MARK 从哪里来？",
-     "a": "当前 MARK 从哪里来？\n当前**没有选中对象**（未从图表/Activity/Run Review 传入 decision/order/fill）；回答只覆盖当前最新事实：latest decision at_ms=1700010795000 · private connector=CONNECTED；已观测到私有事件=True；last private event=1700010570000 · reconciliation 证据 1 条；最近 outcome=absent · prediction 来源 = **LOCAL_TRIAL**（本地试验确定性规则，仅 REPLAY/PAPE"
-    },
-    {
-     "q": "为什么 MARK UNKNOWN 会 fail-closed？",
-     "a": "为什么 MARK UNKNOWN 会 fail-closed？\n当前**没有选中对象**（未从图表/Activity/Run Review 传入 decision/order/fill）；回答只覆盖当前最新事实：latest decision at_ms=1700010795000 · private connector=CONNECTED；已观测到私有事件=True；last private event=1700010570000 · reconciliation 证据 1 条；最近 outcome=absent · prediction 来源 = **LOCAL_TRIAL**（本地试验确"
-    },
-    {
-     "q": "订单来自哪个 decision？",
-     "a": "订单来自哪个 decision？\n当前**没有选中对象**（未从图表/Activity/Run Review 传入 decision/order/fill）；回答只覆盖当前最新事实：latest decision at_ms=1700010795000 · order probex-paper-1791528030828-000075 来自 decision_id=d-9ce100243681-1700010500000（instrument=paper:BTCUSDT，venue=paper）；关联来自订单自身的 canonical correlation metadata · privat"
-    },
-    {
-     "q": "通过哪个 execution connector 执行？",
-     "a": "通过哪个 execution connector 执行？\n当前**没有选中对象**（未从图表/Activity/Run Review 传入 decision/order/fill）；回答只覆盖当前最新事实：latest decision at_ms=1700010795000 · private connector=CONNECTED；已观测到私有事件=True；last private event=1700010570000 · reconciliation 证据 1 条；最近 outcome=absent · prediction 来源 = **LOCAL_TRIAL**（本地试验确定性规"
-    }
-   ]
+   "questions": [],
+   "answers": []
   }
  ]
 }

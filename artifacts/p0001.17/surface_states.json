@@ -1,0 +1,106 @@
+{
+ "fault": [
+  {
+   "surface": "monitor",
+   "mode": "fault",
+   "hasErrorHint": true,
+   "hasRecovery": true,
+   "hasUnknownReason": true,
+   "loadingSeen": false,
+   "navOk": true,
+   "excerpt": "PROBEX Monitor Market Activity Performance System snapshot unavailable: Error: /api/v1/snapshot -> HTTP 503 blockers UNKNOWN ERROR page Error: /api/v1/snapshot -> HTTP 503 recovery Monitor · System he"
+  },
+  {
+   "surface": "market/live",
+   "mode": "fault",
+   "hasErrorHint": true,
+   "hasRecovery": true,
+   "hasUnknownReason": true,
+   "loadingSeen": false,
+   "navOk": true,
+   "excerpt": "PROBEX Monitor Market Activity Performance System snapshot unavailable: Error: /api/v1/snapshot -> HTTP 503 blockers UNKNOWN ERROR page Error: /api/v1/snapshot -> HTTP 503 recovery Monitor · System he"
+  },
+  {
+   "surface": "activity",
+   "mode": "fault",
+   "hasErrorHint": true,
+   "hasRecovery": true,
+   "hasUnknownReason": true,
+   "loadingSeen": false,
+   "navOk": true,
+   "excerpt": "PROBEX Monitor Market Activity Performance System snapshot unavailable: Error: /api/v1/snapshot -> HTTP 503 blockers UNKNOWN ERROR page Error: /api/v1/snapshot -> HTTP 503 recovery Monitor · System he"
+  },
+  {
+   "surface": "performance",
+   "mode": "fault",
+   "hasErrorHint": true,
+   "hasRecovery": true,
+   "hasUnknownReason": true,
+   "loadingSeen": false,
+   "navOk": true,
+   "excerpt": "PROBEX Monitor Market Activity Performance System snapshot unavailable: Error: /api/v1/snapshot -> HTTP 503 blockers UNKNOWN ERROR page Error: /api/v1/snapshot -> HTTP 503 recovery Monitor · System he"
+  },
+  {
+   "surface": "system/health",
+   "mode": "fault",
+   "hasErrorHint": true,
+   "hasRecovery": true,
+   "hasUnknownReason": true,
+   "loadingSeen": false,
+   "navOk": true,
+   "excerpt": "PROBEX Monitor Market Activity Performance System snapshot unavailable: Error: /api/v1/snapshot -> HTTP 503 blockers UNKNOWN ERROR page Error: /api/v1/snapshot -> HTTP 503 recovery Monitor · System he"
+  }
+ ],
+ "empty": [
+  {
+   "surface": "monitor",
+   "mode": "empty",
+   "hasErrorHint": true,
+   "hasRecovery": false,
+   "hasUnknownReason": true,
+   "loadingSeen": false,
+   "navOk": true,
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791529605968 · health=UNKNOWN · data_ts=UNKNOWN (no market data consumed yet) READINESS:READINESS_U"
+  },
+  {
+   "surface": "market/live",
+   "mode": "empty",
+   "hasErrorHint": true,
+   "hasRecovery": false,
+   "hasUnknownReason": true,
+   "loadingSeen": false,
+   "navOk": true,
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791529605968 · health=UNKNOWN · data_ts=UNKNOWN (no market data consumed yet) READINESS:READINESS_U"
+  },
+  {
+   "surface": "activity",
+   "mode": "empty",
+   "hasErrorHint": true,
+   "hasRecovery": false,
+   "hasUnknownReason": true,
+   "loadingSeen": false,
+   "navOk": true,
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791529605968 · health=UNKNOWN · data_ts=UNKNOWN (no market data consumed yet) READINESS:READINESS_U"
+  },
+  {
+   "surface": "performance",
+   "mode": "empty",
+   "hasErrorHint": true,
+   "hasRecovery": false,
+   "hasUnknownReason": true,
+   "loadingSeen": false,
+   "navOk": true,
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791529605968 · health=UNKNOWN · data_ts=UNKNOWN (no market data consumed yet) READINESS:READINESS_U"
+  },
+  {
+   "surface": "system/health",
+   "mode": "empty",
+   "hasErrorHint": true,
+   "hasRecovery": false,
+   "hasUnknownReason": true,
+   "loadingSeen": false,
+   "navOk": true,
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791529605968 · health=UNKNOWN · data_ts=UNKNOWN (no market data consumed yet) READINESS:READINESS_U"
+  }
+ ]
+}

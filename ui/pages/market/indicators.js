@@ -6,14 +6,31 @@
  *   且不存在 ATR 实现）⇒ 按裁决"不要在 UI 重新计算业务指标"，**不在 UI 自算**，由页面以
  *   `NOT_AVAILABLE` + reason 呈现（见 `market/indicators.js` 的 `UNAVAILABLE_INDICATORS`）。
  */
+/**
+ * 注册 **后端事实** 驱动的指标 overlay：数据由 `/api/v1/market/candles` 返回
+ * （candle.vwap = 真实成交均价；indicators.atr = 服务端 Wilder ATR）。本函数只做**对齐与绘制**，
+ * 不做任何指标计算（§5）。
+ */
 export function registerProbexIndicators() {
-  return false;                       // 不注册任何自算指标（避免 UI 侧业务计算）
+  return false;                       // 不注册自算指标；后端事实通过 createOverlay 直接绘制
 }
 
-//: 后端无事实的指标（页面必须显示真实原因，不得自算或留空）
-export const UNAVAILABLE_INDICATORS = [
-  { name: "VWAP", reason: "后端无 VWAP 事实：FeatureEngine 不消费 TRADE 事件（trade.vwap = UNAVAILABLE）" },
-  { name: "ATR", reason: "后端无 ATR 实现（本阶段不存在该事实）" },
+/** 把后端指标事实按 candle 时间对齐成 overlay 数据点（仅映射，不计算）。 */
+export function overlayPointsFromBackend(candles, key) {
+  return (candles || []).filter((c) => c[key] !== null && c[key] !== undefined)
+    .map((c) => ({ timestamp: c.ts, value: c[key] }));
+}
+
+/** 后端 ATR 序列 → overlay 数据点（`indicators.atr.points`）。 */
+export function atrPointsFromBackend(atrPoints) {
+  return (atrPoints || []).filter((p) => p.atr !== null && p.atr !== undefined)
+    .map((p) => ({ timestamp: p.ts, value: p.atr }));
+}
+
+//: 后端事实指标（页面从 API 读取；缺失时显示 NOT_AVAILABLE + 原因，绝不在 UI 自算）
+export const BACKEND_FACT_INDICATORS = [
+  { name: "VWAP", source: "candles[].vwap（真实成交均价，服务端聚合）" },
+  { name: "ATR", source: "indicators.atr.points（服务端 Wilder ATR, period=14）" },
 ];
 
 /** 页面工具栏可选的指标集合（overlay / pane 两栏）。 */

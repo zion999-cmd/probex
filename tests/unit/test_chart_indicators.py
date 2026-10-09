@@ -20,7 +20,7 @@ import * as mod from %s;
 console.log(JSON.stringify({
   exports: Object.keys(mod).sort(),
   available: mod.PROBEX_INDICATORS.map((i) => i.name),
-  unavailable: mod.UNAVAILABLE_INDICATORS.map((i) => ({ name: i.name, reason: i.reason })),
+  backendFacts: mod.BACKEND_FACT_INDICATORS.map((i) => ({ name: i.name, source: i.source })),
   registers: mod.registerProbexIndicators(),
 }));
 """
@@ -51,12 +51,13 @@ class IndicatorContractTest(unittest.TestCase):
     def test_only_library_indicators_are_offered(self) -> None:
         self.assertEqual(set(self.values["available"]), ALLOWED_LIBRARY_INDICATORS)
 
-    def test_backend_unavailable_indicators_carry_a_reason(self) -> None:
-        unavailable = {item["name"]: item["reason"] for item in self.values["unavailable"]}
-        self.assertEqual(set(unavailable), {"VWAP", "ATR"})
-        for name, reason in unavailable.items():
+    def test_backend_fact_indicators_declare_their_source(self) -> None:
+        """VWAP/ATR 必须声明**后端事实来源**（而不是在 UI 计算）。"""
+        facts = {item["name"]: item["source"] for item in self.values["backendFacts"]}
+        self.assertEqual(set(facts), {"VWAP", "ATR"})
+        for name, source in facts.items():
             with self.subTest(indicator=name):
-                self.assertTrue(reason and len(reason) > 10, "reason must explain the backend gap")
+                self.assertTrue(source and len(source) > 10, "source must name the backend fact")
 
     def test_registration_is_a_noop(self) -> None:
         self.assertFalse(self.values["registers"])

@@ -18,8 +18,10 @@ from market.book.market_book import BookUpdate, MarketBook
 from market.events.types import MarketEvent, Milliseconds, Venue
 from market.features.depth import DEPTH_LEVELS, compute_depth_features
 from market.features.flow import FlowFeaturesCalculator
+from market.features.trade import TradeFeatureAccumulator
 from market.features.price import compute_price_features
 from market.features.returns import (
+    HISTORY_WINDOW_MS,
     HISTORY_WINDOW_MS,
     PRICE_HISTORY_HORIZON_MS,
     compute_returns,
@@ -64,6 +66,9 @@ class FeatureEngine:
         self._max_book_age_ms = max_book_age_ms
         self._history = TimeSeries(horizon_ms=PRICE_HISTORY_HORIZON_MS)
         self._flow = FlowFeaturesCalculator()
+        # 成交域累积窗口 = 既有最大收益窗口（同一时间尺度，不另造窗口语义）
+        self._trades = TradeFeatureAccumulator(window_ms=HISTORY_WINDOW_MS)
+        self._last_state: MarketState | None = None
         self._event_ordinal = -1
         self._healthy = False
         self._sequence_contiguous = True
@@ -83,7 +88,16 @@ class FeatureEngine:
         return self._book.health
 
     def on_market_event(self, event: MarketEvent) -> MarketState:
-        """消费一条市场事件，返回该时刻的 immutable `MarketState`。"""
+        """消费一条市场事件，返回该时刻的 immutable `MarketState`。
+
+        P0001.17：TRADE 事件进入**成交域累积器**（`TradeFeatureAccumulator`），不喂给盘口；
+        这样 `MarketState.trade`（vwap / cvd / trade_count / trade_intensity / 主动买卖量）是真实事实。
+        """
+        from market.events.payloads import TradePayload
+
+        if isinstance(event.payload, TradePayload):
+            return self._on_trade(event)
+
         update = self._book.on_market_event(event)
         self._event_ordinal += 1
         healthy = self._track_health(update, event)
@@ -111,7 +125,7 @@ class FeatureEngine:
             returns=returns,
             volatility=volatility,
         )
-        return build_market_state(
+        state = build_market_state(
             identity=self._identity,
             time=StateTime(
                 as_of_exchange_ts=event.exchange_ts,
@@ -122,10 +136,48 @@ class FeatureEngine:
             price=price,
             depth=depth,
             flow=flow,
-            trade=UNAVAILABLE_TRADE_FEATURES,
+            # P0001.17：成交域来自真实 TRADE 事件累积（无成交 ⇒ None/UNAVAILABLE 语义保持）
+            trade=self._trades.snapshot(at=event.exchange_ts),
             returns=returns,
             volatility=volatility,
         )
+        self._last_state = state
+        return state
+
+    def _on_trade(self, event: MarketEvent) -> MarketState:
+        """成交事件：只更新成交域累积，盘口/收益/波动率沿用上一个已知事实。"""
+        self._trades.on_trade(event.payload, timestamp=event.exchange_ts)
+        self._event_ordinal += 1
+        previous = self._last_state
+        trade = self._trades.snapshot(at=event.exchange_ts)
+        if previous is None:
+            # 首条事件就是成交：盘口事实仍 UNKNOWN（不伪造 mid/深度），但成交事实是真实的
+            state = build_market_state(
+                identity=self._identity,
+                time=StateTime(as_of_exchange_ts=event.exchange_ts, as_of_receive_ts=event.receive_ts,
+                               event_ordinal=self._event_ordinal),
+                quality=self._build_quality(event=event, price=compute_price_features(None),
+                                            depth=compute_depth_features(None),
+                                            flow=self._flow.snapshot(at=event.exchange_ts, best_bid_size=None,
+                                                                     best_ask_size=None),
+                                            returns=compute_returns(self._history, at=event.exchange_ts,
+                                                                    current_mid=None),
+                                            volatility=UNAVAILABLE_VOLATILITY),
+                price=compute_price_features(None), depth=compute_depth_features(None),
+                flow=self._flow.snapshot(at=event.exchange_ts, best_bid_size=None, best_ask_size=None),
+                trade=trade,
+                returns=compute_returns(self._history, at=event.exchange_ts, current_mid=None),
+                volatility=UNAVAILABLE_VOLATILITY)
+            self._last_state = state
+            return state
+        state = build_market_state(
+            identity=self._identity,
+            time=StateTime(as_of_exchange_ts=event.exchange_ts, as_of_receive_ts=event.receive_ts,
+                           event_ordinal=self._event_ordinal),
+            quality=previous.quality, price=previous.price, depth=previous.depth, flow=previous.flow,
+            trade=trade, returns=previous.returns, volatility=previous.volatility)
+        self._last_state = state
+        return state
 
     def request_resync(self) -> None:
         """在检测到 sequence gap 后请求重新同步（重订阅 / 重新拉取快照）。

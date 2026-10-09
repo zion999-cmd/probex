@@ -23,6 +23,29 @@ export const SEMANTIC_STAGES = {
 
 export const SEMANTIC_OVERLAY_NAME = "probexSemantic";
 
+/** 注册后端事实指标 overlay（VWAP / ATR 线；**不计算**指标，只绘制 API 返回值）。 */
+export function registerFactIndicators(klinecharts) {
+  if (!klinecharts || typeof klinecharts.registerOverlay !== "function") return false;
+  const lineTemplate = (name, title) => ({
+    name, totalStep: 0, lock: true,
+    createPointFigures: ({ coordinates, overlay }) => {
+      if (!coordinates || coordinates.length === 0) return [];
+      return [{
+        type: "line", attrs: { coordinates },
+        styles: { style: "solid", size: 1, color: name === "probexVwap" ? "#f5a524" : "#7aa2f7" },
+      }, {
+        type: "circle", attrs: { x: coordinates[coordinates.length - 1].x,
+                                 y: coordinates[coordinates.length - 1].y, r: 2 },
+        styles: { style: "fill", color: name === "probexVwap" ? "#f5a524" : "#7aa2f7" },
+        ignoreEvent: true,
+      }];
+    },
+  });
+  klinecharts.registerOverlay(lineTemplate("probexVwap", "VWAP(backend)"));
+  klinecharts.registerOverlay(lineTemplate("probexAtr", "ATR(backend)"));
+  return true;
+}
+
 /** 注册 semantic overlay（marker = circle + text；点击跳转 canonical 实体）。 */
 export function registerProbexOverlays(klinecharts) {
   if (!klinecharts || typeof klinecharts.registerOverlay !== "function") return false;

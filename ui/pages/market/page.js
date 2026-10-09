@@ -9,7 +9,7 @@ import { HEATMAP_NOTE, drawHeatmap } from "/ui/pages/market/heatmap.js";
 import { boundsNote, decisionTable, executionTable, tradesTable } from "/ui/pages/market/overlays.js";
 import { replayControls } from "/ui/pages/market/replay.js";
 import { featurePanels, healthStrip } from "/ui/pages/market/timeline.js";
-import { UNAVAILABLE_INDICATORS } from "/ui/pages/market/indicators.js";
+import { BACKEND_FACT_INDICATORS } from "/ui/pages/market/indicators.js";
 import { mountWorkbench, TIMEFRAMES, toolbarHtml } from "/ui/pages/market/workbench.js";
 import { mountPredictionPanel, predictionSection } from "/ui/pages/market/prediction_panel.js";
 import { updateSelection } from "/ui/client/selection.js";
@@ -73,6 +73,31 @@ export async function render(rest = []) {
       return header + section("Run review",
         `<div class="row"><span class="k">recorded market</span><span class="v unknown">UNKNOWN (${escapeHtml(String(error))})</span></div>`);
     }
+    if (payload.source === "durable") {
+      // P0001.17 §9：历史 run ⇒ 用该 run 的**持久化事实**画图并定位（只读；缺失事实如实标注）
+      const candles = ((payload.candles || {}).candles) || [];
+      lastRunReview = { runId: payload.run_id || runId, candles, facts: payload.facts || [] };
+      const factRows = (payload.facts || []).slice(-60).reverse().map((item) => [
+        String(item.ts), escapeHtml(String(item.kind || "")),
+        escapeHtml(String(item.decision_id || item.client_order_id || "")),
+        escapeHtml(String(item.status || item.mode || "")),
+        `<button data-locate="${escapeHtml(String(item.ts))}">locate on chart</button>`]);
+      return header +
+        `<section class="wide"><h2>Recorded market chart (durable facts)</h2>` +
+        `<div id="wb-toolbar-runreview" class="wb-toolbar"></div>` +
+        `<div id="kline-chart-runreview" class="kline-chart"></div>` +
+        `<div class="muted">source=<code>durable</code> · ${escapeHtml(String(payload.note || ""))}</div></section>` +
+        section("Run facts (locate on chart)", factRows.length
+          ? table(["ts", "kind", "identity", "state", "locate"], factRows)
+          : rows([["facts", '<span class="unknown">UNKNOWN（该 run 未记录 decision/order 事实）</span>']])) +
+        section("Recorded market timeline", featurePanels(payload.timeline)) +
+        section("Run review notes", rows([
+          ["source", "durable（该 run 的持久化事实，不是当前接线缓冲）"],
+          ["volume", '<span class="unknown">UNAVAILABLE</span> <span class="muted">历史 run 只记录盘口 mid，未持久化逐笔成交 ⇒ 不伪造成交量</span>'],
+          ["cross-run", "不同 run 不共享缓冲/选择状态（切换 run 会清空 selected decision/order/fill）"],
+        ])) +
+        section("Projection bounds", boundsNote(payload));
+    }
     const isCurrentRun = payload.run_id === current.runtime.runtime_id;
     const timelinePoints = (payload.timeline || {}).points || [];
     const firstTs = timelinePoints.length ? timelinePoints[0].ts : null;
@@ -134,16 +159,30 @@ export async function render(rest = []) {
       '<div class="muted">play / pause / step / speed / seek 与 K 线 cursor/time window 同步</div></section>' +
     section("Projection bounds", boundsNote(depth)) + instrumentVenueSection(snapshot) +
     section("Indicators not available (backend has no such fact)", rows(
-      UNAVAILABLE_INDICATORS.map((item) => [item.name,
-        `<span class="unknown">NOT_AVAILABLE</span> <span class="muted">${escapeHtml(item.reason)}</span>`])));
+      BACKEND_FACT_INDICATORS.map((item) => [item.name,
+        `<span class="muted">${escapeHtml(item.source)}</span>`])));
 
   lastMarket = { candles1m, trace, focusTs, depth, symbol: snapshot.runtime.symbol };
   return header + body;
 }
 
 let lastMarket = null;
+let lastRunReview = null;
 
-export async function mount() {
+export async function mount(rest = []) {
+  // P0001.17 §9：Run Review 的记录事实图表（历史 run；只读展示 + 事实定位）
+  if (rest[0] === "run-review" && lastRunReview && lastRunReview.candles.length) {
+    const workbench = mountWorkbench(document.getElementById("kline-chart-runreview"),
+                                    document.getElementById("wb-toolbar-runreview"), {
+      candles: lastRunReview.candles, trace: [], timeframe: "1m", symbol: "BTCUSDT",
+      source: "durable run facts (mid-only)", indicators: ["MA", "EMA", "VOL"],
+    });
+    document.querySelectorAll("button[data-locate]").forEach((button) => {
+      button.addEventListener("click", () => workbench && workbench.setFocus(Number(button.dataset.locate)));
+    });
+    updateSelection({ surface: "market", run: lastRunReview.runId, timestamp: null,
+                      decision: null, order: null, fill: null });
+  }
   const context = lastMarket;
   if (!context) return;
   const { candles1m, trace, focusTs, depth, symbol } = context;
@@ -175,6 +214,7 @@ export async function mount() {
       trace,
       timeframe,
       focusTs,
+      atrPoints: (((candles1m.candles || {}).indicators || {}).atr || {}).points || [],
       symbol: snapshot.runtime.symbol,
       source: (candles1m.candles || {}).source,
       onTimeframe: (interval) => { refreshChart(interval); },

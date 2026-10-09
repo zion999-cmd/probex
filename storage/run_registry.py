@@ -189,6 +189,49 @@ class JsonRunRegistry:
         finally:
             os.close(handle)
 
+    # ------------------------------------------------------------------ P0001.17：run 级事实持久化
+
+    def run_facts_path(self, run_id: str, kind: str) -> Path:
+        """一个 run 的持久化事实文件（`market` = 市场时间线；`facts` = decision/order/fill 事实）。"""
+        if kind not in ("market", "facts"):
+            raise RunRegistryError(f"unknown run fact kind {kind!r}")
+        return self.root / RUNS_DIR / f"{run_id}.{kind}.jsonl"
+
+    def append_run_facts(self, run_id: str, kind: str, entries: Sequence[dict[str, object]]) -> int:
+        """**只追加**事实（best-effort；调用方负责节流）。返回写入条数。"""
+        if not entries:
+            return 0
+        path = self.run_facts_path(run_id, kind)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = "".join(_canonical(dict(entry)) + "\n" for entry in entries)
+        handle = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+        try:
+            os.write(handle, payload.encode("utf-8"))
+        finally:
+            os.close(handle)
+        return len(entries)
+
+    def load_run_facts(self, run_id: str, kind: str, *, limit: int | None = None
+                       ) -> tuple[tuple[dict[str, object], ...], str | None]:
+        """读取持久化事实；返回 `(entries, unavailable_reason)`（缺失/损坏 ⇒ 明确原因，不猜）。"""
+        path = self.run_facts_path(run_id, kind)
+        if not path.exists():
+            return (), f"no {kind} facts recorded for run {run_id!r}"
+        entries: list[dict[str, object]] = []
+        try:
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                if not line.strip():
+                    continue
+                value = json.loads(line)
+                if not isinstance(value, dict):
+                    raise RunRegistryError(f"corrupt {kind} fact at line {number}: not an object")
+                entries.append(value)
+        except json.JSONDecodeError as exc:
+            raise RunRegistryError(f"corrupt {kind} facts for run {run_id!r}: {exc}") from exc
+        if limit is not None and limit > 0:
+            entries = entries[-limit:]
+        return tuple(entries), None
+
     def _write_record_file(self, record: RunRecord) -> Path:
         target = self.root / RUNS_DIR / f"{record.run_id}.json"
         temp = target.with_suffix(".json.tmp")

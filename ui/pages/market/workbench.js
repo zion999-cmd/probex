@@ -9,8 +9,8 @@
 
 import * as klinecharts from "klinecharts";   // import map → /ui/vendor/klinecharts-shim.js (UMD 桥接)
 import { arrow, fibonacciExtension, fibonacciSegment, measure, rect } from "/vendor/@klinecharts/extension/dist/index.js";
-import { PROBEX_INDICATORS, registerProbexIndicators } from "/ui/pages/market/indicators.js";
-import { registerProbexOverlays, semanticOverlays } from "/ui/pages/market/semantic_overlays.js";
+import { PROBEX_INDICATORS, atrPointsFromBackend, overlayPointsFromBackend, registerProbexIndicators } from "/ui/pages/market/indicators.js";
+import { registerFactIndicators, registerProbexOverlays, semanticOverlays } from "/ui/pages/market/semantic_overlays.js";
 import { entityHash } from "/ui/app/navigation.js";
 
 export const TIMEFRAMES = ["1m", "5m", "15m", "1h"];
@@ -85,6 +85,7 @@ export function mountWorkbench(chartHost, toolbarHost, options = {}) {
 
   registerProbexIndicators(klinecharts);
   registerProbexOverlays(klinecharts);
+  registerFactIndicators(klinecharts);
   for (const template of [rect, arrow, measure, fibonacciSegment, fibonacciExtension]) {
     try { klinecharts.registerOverlay(template); } catch (error) { /* 已注册则忽略 */ }
   }
@@ -126,6 +127,19 @@ export function mountWorkbench(chartHost, toolbarHost, options = {}) {
     try { chart.removeOverlay({ name: "probexSemantic" }); } catch (error) { /* 无则忽略 */ }
     const overlays = semanticOverlays(trace, (ts) => priceAt(candles, ts), entityHash);
     if (overlays.length) chart.createOverlay(overlays);
+    // P0001.17 §5：VWAP / ATR 来自**后端事实**（不在此计算）——有事实才画线，否则由页面显示 NOT_AVAILABLE
+    try {
+      chart.removeOverlay({ name: "probexVwap" });
+      chart.removeOverlay({ name: "probexAtr" });
+    } catch (error) { /* 无则忽略 */ }
+    const vwapPoints = overlayPointsFromBackend(candles, "vwap");
+    if (vwapPoints.length) {
+      chart.createOverlay({ name: "probexVwap", points: vwapPoints });
+    }
+    const atrPoints = atrPointsFromBackend(options.atrPoints);
+    if (atrPoints.length) {
+      chart.createOverlay({ name: "probexAtr", points: atrPoints });
+    }
     const focus = options.focusTs;
     if (focus) chart.scrollToTimestamp(Number(focus), 0);
     refreshStatus();

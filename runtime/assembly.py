@@ -311,6 +311,8 @@ class ProductRuntime:
 
     def __post_init__(self) -> None:
         self._local_data_clock: dict[str, int | None] = {"ms": None}
+        # P0001.17：run 级事实持久化（market 时间线 + decision/order/fill）；按 bucket 节流
+        self._persisted_market_ts: int | None = None
         if self.profile.feed is not None:
             # P0001.17 §3：本地 Replay/PAPER 的时间必须与**市场数据时间**一致（确定性、可复现），
             # 否则引擎订单时间（wall clock）与市场/模拟成交时间（event time）不在同一时间轴，
@@ -1330,6 +1332,9 @@ class ProductRuntime:
         ask = getattr(decision, "ask", None)
         side = "buy" if getattr(bid, "action", None) is not None else "sell"
         chosen = bid if getattr(bid, "action", None) is not None else ask
+        self._persist_fact("decision", {"ts": int(getattr(decision, "at_ms", 0)),
+                                       "decision_id": getattr(decision, "decision_id", None),
+                                       "mode": str(getattr(getattr(decision, "mode", None), "value", "") or "")})
         self._history.feed_decision(SimpleNamespace(
             ts=int(getattr(decision, "at_ms", 0)),
             side=side,
@@ -1349,6 +1354,10 @@ class ProductRuntime:
         if order is None:
             return
         status = getattr(order, "status", None)
+        self._persist_fact("order", {"ts": int(getattr(order, "updated_at", 0)),
+                                     "client_order_id": str(getattr(order, "client_order_id", "")),
+                                     "status": str(getattr(status, "value", status) or ""),
+                                     "venue_order_id": getattr(order, "exchange_order_id", None)})
         self._history.feed_execution(SimpleNamespace(
             ts=int(getattr(order, "updated_at", 0)),
             client_order_id=str(getattr(order, "client_order_id", "")),
@@ -1538,10 +1547,67 @@ class ProductRuntime:
         P0001.17：本地 Replay/PAPER 的 runtime 时钟同步推进到数据时间（单一时间轴）。
         """
         self._local_data_clock["ms"] = int(ts_ms) if hasattr(self, "_local_data_clock") else None
+        self._persist_market_point()
         self._identity = dataclasses_replace(self._identity, data_timestamp=Fact.of(int(ts_ms)))
         service = getattr(self, "_service", None)
         if service is not None:
             service.identity = self._identity          # 让快照立即反映新时间事实
+
+    def _persist_market_point(self) -> None:
+        """把当前市场状态按 bucket 节流写入该 run 的持久化时间线（best-effort，不打断运行）。"""
+        provider = self._feed_provider
+        state = provider.last_state if provider is not None else None
+        if state is None:
+            return
+        try:
+            ts = int(state.time.as_of_exchange_ts)
+        except Exception:  # noqa: BLE001 - 状态结构异常 ⇒ 不持久化（不伪造）
+            return
+        bucket = int(self._projection_config.bucket_ms) if self._projection_config is not None else 1_000
+        if self._persisted_market_ts is not None and ts - self._persisted_market_ts < bucket:
+            return
+        if self._durable_absence_reason() is not None:
+            return
+        point: dict[str, object] = {"ts": ts}
+        price = getattr(state, "price", None)
+        if price is not None:
+            point.update({"best_bid": price.best_bid, "best_ask": price.best_ask, "mid": price.mid,
+                          "spread": price.spread, "microprice": price.microprice})
+        quality = getattr(state, "quality", None)
+        if quality is not None:
+            book_health = getattr(quality, "book_health", None)
+            point.update({"book_health": str(getattr(book_health, "value", book_health) or ""),
+                          "tradeable": bool(getattr(quality, "tradeable", False))})
+        trade = getattr(state, "trade", None)
+        if trade is not None:
+            point.update({"vwap": getattr(trade, "vwap", None), "trade_count": getattr(trade, "trade_count", None),
+                          "cvd": getattr(trade, "cvd", None)})
+        try:
+            self._registry.append_run_facts(self._session.run_id, "market", [point])
+            self._persisted_market_ts = ts
+        except Exception as exc:  # noqa: BLE001 - 持久化失败不得影响交易/回放
+            log_event("runtime", "run_fact_persist_failed", level=30,
+                      runtime_id=self._identity.runtime_id, run_id=self._session.run_id,
+                      kind="market", error=type(exc).__name__)
+
+    def _durable_absence_reason(self) -> str | None:
+        """何时**不**持久化事实（明确原因，避免把非交易 run 也写满磁盘）。"""
+        if self.profile.feed is None:
+            return "no feed (live/testnet runtimes have no recorded market timeline)"
+        return None
+
+    def _persist_fact(self, kind: str, entry: dict[str, object]) -> None:
+        """decision / order / fill 事实持久化（供历史 run 的 Run Review 定位）。"""
+        reason = self._durable_absence_reason()
+        if reason is not None or not hasattr(self, "_registry"):
+            return
+        try:
+            self._registry.append_run_facts(self._session.run_id, "facts",
+                                            [{"kind": kind, **entry}])
+        except Exception as exc:  # noqa: BLE001
+            log_event("runtime", "run_fact_persist_failed", level=30,
+                      runtime_id=self._identity.runtime_id, run_id=self._session.run_id,
+                      kind=kind, error=type(exc).__name__)
 
     def _stop_feed(self) -> None:
         provider = self._feed_provider

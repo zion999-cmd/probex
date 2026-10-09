@@ -981,3 +981,18 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
    不得据此判断模型有效性。
 5. **选中上下文单一真源**：`ui/client/selection.js` 是唯一选中 store；Assistant 经
    `ui/assistant/context.js` 读取同一 store，并区分"已选对象"与"最新对象"。
+
+## D-054 授权补齐：成交域事实 / run 级事实持久化 / 指标服务端化（P0001.17）
+
+**日期**：2026-10-04
+**状态**：生效（人类「完全授权给你，补齐」）
+
+1. **成交域事实**：`FeatureEngine` 消费真实 `TradePayload`（`TradeFeatureAccumulator`，窗口 = 既有最大收益窗口），
+   产出 vwap / cvd / 主动买卖量 / 成交笔数 / 强度；无成交 ⇒ None（UNKNOWN）。TRADE **不**喂 `MarketBook`。
+2. **run 级事实持久化**：由**既有** `RunRegistry` Owner 追加 `runs/<id>.market.jsonl` 与 `runs/<id>.facts.jsonl`；
+   只追加、可读取、缺失/损坏给明确原因；持久化失败不影响交易。历史 run 的 Run Review 读这些事实
+   （`source: durable`；mid-only K 线，volume 不伪造）。
+3. **指标服务端化**：VWAP（candle 聚合器用真实成交逐桶计算）与 ATR（`product/indicators.py::wilder_atr`，周期显式 14）
+   均在服务端计算，API 返回事实，UI 只绘制；**UI 不做任何业务指标计算**（守卫测试）。
+4. **表面状态注入验证**：测试资产 `tests/ui/fault_server.py` + `capture_states.mjs` 逐页验证
+   Loading / Error(+恢复入口) / Empty / UNKNOWN(+reason) / 导航；不改产品行为。
