@@ -92,6 +92,7 @@ cmd_demo() {
 cmd_up() {
   local mode=paper port="" hours=3 symbol=BTCUSDT local_dir="$DEFAULT_LOCAL_DIR"
   local event_store="" run_dir="" config_file="${REPO_ROOT}/profiles/trial-local.json" passthrough=()
+  local market_source="event-store"
   while [[ $# -gt 0 ]]; do case "$1" in
     --mode) mode="${2:?needs value}"; shift 2 ;;
     --port) port="${2:?needs value}"; shift 2 ;;
@@ -101,6 +102,7 @@ cmd_up() {
     --event-store) event_store="${2:?needs value}"; shift 2 ;;
     --run-dir) run_dir="${2:?needs value}"; shift 2 ;;
     --config-file) config_file="${2:?needs value}"; shift 2 ;;
+    --market-source) market_source="${2:?needs value}"; shift 2 ;;
     --) shift; passthrough=("$@"); break ;;
     *) echo "unknown: $1" >&2; exit 2 ;;
   esac; done
@@ -113,6 +115,26 @@ cmd_up() {
   esac
   need_python
   [[ -f "$config_file" ]] || { echo "error: config not found: $config_file" >&2; exit 2; }
+  if [[ "$market_source" == "binance-public" ]]; then
+    echo "[probex] up mode=${mode} market-source=binance-public (真实公网行情；只读)"
+    python3 -m runtime.assembly --mode "$mode" --symbol "$symbol" \
+      --market-source binance-public --port "$port" \
+      --run-registry-dir "$run_dir" \
+      ${passthrough[@]+"${passthrough[@]}"} &
+    local pid2=$!
+    trap 'kill -TERM '$pid2' 2>/dev/null || true; wait '$pid2' 2>/dev/null || true; echo "[probex] stopped"' INT TERM
+    local ready2=0
+    for _ in $(seq 1 120); do
+      if python3 -c "import sys,urllib.request;
+raise SystemExit(0 if urllib.request.urlopen(sys.argv[1],timeout=2).status==200 else 1)" \
+        "http://127.0.0.1:${port}/health/live" >/dev/null 2>&1; then ready2=1; break; fi
+      kill -0 "$pid2" 2>/dev/null || break
+      sleep 0.5
+    done
+    [[ "$ready2" == 1 ]] && echo "[probex] READY → http://127.0.0.1:${port}/" || echo "[probex] 警告：未就绪" >&2
+    wait "$pid2"
+    return
+  fi
   mkdir -p "$local_dir"
   [[ -n "$event_store" ]] || event_store="${local_dir}/events.jsonl"
   [[ -n "$run_dir" ]] || run_dir="${local_dir}/runs"

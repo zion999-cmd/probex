@@ -2471,3 +2471,18 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - 全量 **2459 passed / 0 failed / 24 skipped**；无业务能力变化、无新依赖、NOT Included 未触碰。
 - 下一步 Batch 3：G-A2/G-B2 把既有真实公网 connector 经产品入口接线（只读公网无需凭据）。
   Batch 4（P0001.16 收口）仍需人类单独授权 TESTNET 写入。
+
+## 2026-10-10（全局补齐任务 · Batch 3：真实行情接入 G-A2/G-B2）
+
+- 新增 `runtime/public_market.py`：`PublicMarketConfig` + `PublicMarketPump`（单线程，持续调用既有
+  `LiveMarketDataRuntime.pump_once`，把真实 states/snapshots/trades 搬进既有 `BoundedMarketHistory`，
+  正式 mark 注入既有 accounting；不构造任何 private/broker ⇒ 只读不能下单）。
+- 产品入口新增 `--market-source binance-public`（与 event-store 二选一；仅限 replay/paper 模式；
+  无需凭据）；run 级 market/trades 事实持续写入既有 `RunRegistry`。
+- 持久化 guards（`_persist_market_point` / `_durable_absence_reason`）改为 source-aware；stop() 停 pump。
+- 新增离线集成测试 `tests/integration/test_public_market_wiring.py`（脚本化传输：真实报文形态 ⇒
+  states/trades 进 read model + market/trades 持久化；stop 清理）。
+- **真实公网验收 NOT RUN**：当前网络（含本地代理出口）被 Binance 返回 `HTTP 451` geo-block；
+  此前真实验收依赖人类的不同地区隧道。产品行为本身不伪造（connector 会变 FAILED）。
+- 全量 **2461 passed / 0 failed / 24 skipped**；无新依赖、NOT Included 未触碰。
+- **Batch 4（P0001.16 收口）阻塞中：需要人类单独授权 TESTNET 写入 / 处理 0.001 BTC 残留仓位。**

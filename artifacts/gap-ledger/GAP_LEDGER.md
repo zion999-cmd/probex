@@ -72,7 +72,7 @@
 | # | 事实 | 判定 |
 |---|---|---|
 | A-1 | **产品入口只支持单标的 BTCUSDT 永续**：`domain/instruments/registry.py::PRODUCTION_ASSET_CLASSES={CRYPTO}`、`PRODUCTION_PRODUCT_TYPES={PERPETUAL}`、单 registry 实例 | 📦 **原始 Proposal 就是单标的生产范围**（多标的/股票/期货仅 vocabulary，属 NOT Included）；非缺陷 |
-| A-2 | **真实公网行情 connector 只在 TESTNET 栈接线，产品入口不构造它**：`runtime/assembly.py` 馈送源只有 event store | 🔴 **G-A2**：`--mode paper` 实际吃的是（合成）文件，不是持续真实数据。这是"技术演示 vs 可持续运行"的核心差距 |
+| A-2 | ✅ 已修正：产品入口支持 `--market-source binance-public`（既有真实公网 connector；只读无需凭据）|
 | A-3 | 断线/重连/缺口/健康在真实 connector 层均有实现（P0001.9.1/.1.1） | ✅（连接器层）；🟡（未在产品入口暴露） |
 | A-4 | ~~`--mode testnet` + event store 时 UI 误显 `binance:market CONNECTED`~~ ✅ 已修正：产品入口在 TESTNET/LIVE 模式无专用栈时直接拒绝启动 |
 
@@ -81,7 +81,7 @@
 | # | 事实 | 判定 |
 |---|---|---|
 | B-1 | Run 级事实已持久化（`<id>.market/facts/trades.jsonl`），重启可读 | ✅（D-054 + 逐笔补齐；实测历史 run 181/181 带量） |
-| B-2 | 真实行情**持续采集**没有产品入口：`BinanceMarketDataConnector` 不被 assembly 构造 | 🔴 **G-B2**：无人把真实持续行情写入本地（与 G-A2 同根） |
+| B-2 | ✅ 已修正：binance-public 源在 pump 线程上持续采集并把 market/trades 事实写入既有 run registry |
 | B-3 | 无第二套存储（run registry 是唯一 Owner） | ✅ 边界完好 |
 
 ### C. 图表与历史浏览
@@ -135,7 +135,7 @@
 |---|---|---|
 | **Batch 1：事实一致性收敛** ✅ 已完成（2454 passed） | G-F1/F2/F3/F4/F5、G-E3（合并脚本） | ✅ 全部可 |
 | **Batch 2：诚实性修正** ✅ 已完成（2459 passed） | G-A4（模式标签 vs 事实） | ✅ 可（只改产品投影/启动校验，不下单） |
-| **Batch 3：真实行情接入** | G-A2/G-B2（把既有 `BinanceMarketDataConnector` 经产品入口接线 ⇒ 真实持续采集/持久化） | ✅ 只读可（真实公网行情无需凭据）；**需明确这是"接线既有 connector"，属 P0001.9.1 能力的产品化，影响 assembly 契约** |
+| **Batch 3：真实行情接入** ✅ 已完成（2461 passed；真实公网验收因 Binance 451 geo-block NOT RUN，改离线脚本化集成验证） | G-A2/G-B2（既有公网 connector 经产品入口接线 ⇒ 真实持续采集/持久化） | ✅ 只读可（公网无需凭据） |
 | **Batch 4：P0001.16 收口** | G-D2（SC-11/12/13/6/7/15 + 清场 0.001 BTC） | ⛔ **需要人类单独授权 TESTNET 写入/平仓**（任务 §六）；未授权前保持 Blocked |
 | **Batch 5（待决，不自行实施）** | G-G1 策略/模型有效性标定；A-1 多标的（若人类改范围） | ❓ 需新提案/明确业务授权 |
 
@@ -146,3 +146,4 @@
 - 2026-10-10 建立（基于同日只读全项目审计；41 Proposal 全覆盖）。
 - 2026-10-10 Batch 1 完成：4 个陈旧 Proposal 状态纠正；roadmap/current_state/decisions 补正；启动脚本合并为单个 `scripts/probex.sh`（up/demo/status/data）；陈旧 capture 证据重跑归档（missing=NONE）。
 - 2026-10-10 Batch 2 完成：`runtime.assembly` 在 TESTNET/LIVE 模式无专用栈时 fail-fast 拒绝（消除‘本地文件冒充 binance:market CONNECTED’的标注缺陷）。
+- 2026-10-10 Batch 3 完成：`--market-source binance-public` 把产品入口接到既有真实公网 connector（pump 线程 + 既有 run registry 持久化）；新增 `runtime/public_market.py` 与离线集成测试；真实公网验收因当前网络被 Binance 451 geo-block（NOT RUN，诚实标注）。

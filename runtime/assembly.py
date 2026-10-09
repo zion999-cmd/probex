@@ -220,6 +220,8 @@ class RuntimeProfile:
     clock: Callable[[], int] = clock_now_ms
     #: 真实 feed（提供后 REPLAY/PAPER 会真正消费事件并产生市场事实）
     feed: FeedProfile | None = None
+    #: Batch 3：行情来源（event-store 或 binance-public 真实持续公网行情；只读）
+    market_source: str = "event-store"
     #: F-12：non-loopback 必须显式 opt-in + bearer token（缺任一 ⇒ 拒绝启动）
     allow_non_loopback: bool = False
     #: F-12：auth token 的 secret 引用（如 `env:PROBEX_API_TOKEN`）；值永不进 provenance/snapshot/logs
@@ -244,6 +246,8 @@ class RuntimeProfile:
         if self.auth_token_ref is not None and (
                 not isinstance(self.auth_token_ref, str) or not self.auth_token_ref):
             raise AssemblyError("RuntimeProfile.auth_token_ref must be a non-empty string when given")
+        if self.market_source not in ("event-store", "binance-public"):
+            raise AssemblyError("RuntimeProfile.market_source must be event-store or binance-public")
         # F-12：非 loopback 的启动姿态必须显式（警告后继续是不允许的）
         if not is_loopback_host(self.host):
             if not self.allow_non_loopback:
@@ -308,9 +312,13 @@ class ProductRuntime:
     _last_prune: dict[str, object] | None = field(default=None, init=False)
     _readiness_provider: object | None = field(default=None, init=False)
     _feed_error: str | None = field(default=None, init=False)
+    #: Batch 3 (G-A2/G-B2)：真实公网行情泵（只读；与 event-store feed 二选一）
+    _public_pump: object | None = field(default=None, init=False)
+    _market_source: str = field(default="event-store", init=False)
 
     def __post_init__(self) -> None:
         self._local_data_clock: dict[str, int | None] = {"ms": None}
+        self._market_source = self.profile.market_source
         # P0001.17：run 级事实持久化（market 时间线 + decision/order/fill）；按 bucket 节流
         self._persisted_market_ts: int | None = None
         if self.profile.feed is not None:
@@ -1103,6 +1111,8 @@ class ProductRuntime:
         if self.profile.feed is not None:
             self._start_feed()
             self._start_decision_loop()
+        elif getattr(self, "_market_source", "event-store") == "binance-public":
+            self._start_public_market()
         return status
 
     # ------------------------------------------------------------------ composition（不含 feed 业务逻辑）
@@ -1156,6 +1166,83 @@ class ProductRuntime:
             provider.account_provider = self._accounting_provider.sample   # type: ignore[attr-defined]
             provider.history_account = self._account_timeline              # type: ignore[attr-defined]
         provider.start()
+
+    def _start_public_market(self) -> None:
+        """Batch 3 (G-A2/G-B2)：把产品入口接到**真实持续公网行情**（只读；无需凭据）。"""
+        from connectors.binance.market_data.endpoints import REST_BASE_URL, WS_HOST
+        from connectors.binance.market_data.runtime import (
+            LiveMarketDataConfig, LiveMarketDataRuntime)
+        from connectors.binance.market_data.transport import ReconnectPolicy, connect as _real_connect
+        transport_factory = getattr(self, "_public_transport_factory", None) or _real_connect
+        from connectors.binance.market_data.snapshot import UrllibJsonClient
+        from connectors.binance.market_data.transport import ReconnectPolicy, connect
+        from connectors.binance.market_connector import BinanceMarketDataConnector
+        from domain.instruments import instrument_id_for
+        from product.market_projection import BoundedMarketHistory
+        from runtime.public_market import PublicMarketConfig, PublicMarketPump
+        from venue.identity import binance_venue
+
+        values = self._config_values()
+        history_capacity = int(values.get("projection.history_capacity", 6_000) or 6_000)
+        # 只读公网默认接主网公开行情；可显式指向 Binance 演示/测试网公开端点
+        rest_base = str(values.get("market.public_rest_base", REST_BASE_URL))
+        ws_host = str(values.get("market.public_ws_host", WS_HOST))
+        # 测试注入缝（默认真实组件；仅同进程测试使用，不形成能力）
+        http_client = getattr(self, "_public_http_client", None) or UrllibJsonClient(base_url=rest_base)
+        venue_identity = binance_venue(environment=VenueEnvironment.LIVE)
+        runtime = LiveMarketDataRuntime(
+            config=LiveMarketDataConfig(
+                symbol=self.profile.symbol, depth_speed="100ms", mark_price_speed="1s", depth_limit=100,
+                connect_timeout_s=10.0, read_timeout_s=0.5, snapshot_timeout_s=10.0,
+                exchange_info_timeout_s=10.0,
+                reconnect=ReconnectPolicy(max_attempts=5, base_backoff_ms=500, max_backoff_ms=5_000),
+                resync_cooldown_ms=1_000, history_limit=history_capacity, ws_host=ws_host,
+                max_book_age_ms=int(values.get("market.max_book_age_ms", 5_000) or 5_000)),
+            http_client=http_client,
+            transport_factory=lambda url, timeout_s: transport_factory(url, timeout_s=timeout_s),
+            clock=self.profile.clock)
+        history = BoundedMarketHistory(capacity=history_capacity, run_id=self._session.run_id)
+        connector = BinanceMarketDataConnector(
+            runtime=runtime, venue_identity=venue_identity,
+            instrument_id=instrument_id_for(self.profile.symbol, venue_id=venue_identity.venue_id),
+            clock=self.profile.clock)
+
+        def _on_mark(price: float, received_at: int) -> None:
+            accounting = self._accounting
+            if accounting is not None:
+                accounting.update_mark_price(self.profile.symbol, price, timestamp=received_at)
+
+        pump = PublicMarketPump(
+            PublicMarketConfig(symbol=self.profile.symbol, rest_base=rest_base, ws_host=ws_host,
+                               pump_timeout_s=0.5, max_messages=256, history_capacity=history_capacity),
+            history=history, clock=self.profile.clock, on_mark=_on_mark,
+            on_event=self._persist_public_event)
+        pump.attach_runtime(runtime, connector)
+        runtime.load_trading_rules()
+        self._trading_rules = runtime.trading_rules
+        connector.connect()                       # ⇒ runtime.connect()（真实 WS）
+        pump.start()
+        self._public_pump = pump
+        self._market_connector = connector
+        self._history = history
+        self._projection_config = self._feed_provider and self._feed_provider.config.projection
+        self._service.market_state = lambda: runtime.history[-1] if runtime.history else None
+        self._service.market_history = lambda: history
+        log_event("runtime", "public_market_start", runtime_id=self._identity.runtime_id,
+                  run_id=self._session.run_id, rest_base=rest_base, ws_host=ws_host)
+
+    def _persist_public_event(self, event: object) -> None:
+        """真实公网事件 ⇒ run 级市场点 + 逐笔持久化（复用既有 sink；节流/best-effort）。"""
+        try:
+            self._persist_market_point()      # type: ignore[attr-type=ignore]
+        except Exception:  # noqa: BLE001
+            pass
+        from market.events.payloads import TradePayload
+        if isinstance(getattr(event, "payload", None), TradePayload):
+            try:
+                self._persist_trade(event)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _raw_fact_lookup(self, kind: str, identity: str) -> object | None:
         """F5：把已批准的 raw-fact kind 接到**既有 Owner**（canonical identity 直接查找）。
@@ -1567,6 +1654,10 @@ class ProductRuntime:
         """把当前市场状态按 bucket 节流写入该 run 的持久化时间线（best-effort，不打断运行）。"""
         provider = self._feed_provider
         state = provider.last_state if provider is not None else None
+        if state is None and self._public_pump is not None:
+            runtime = getattr(self._public_pump, "_runtime", None)
+            history = getattr(runtime, "history", ()) if runtime is not None else ()
+            state = history[-1] if history else None
         if state is None:
             return
         try:
@@ -1619,8 +1710,8 @@ class ProductRuntime:
 
     def _durable_absence_reason(self) -> str | None:
         """何时**不**持久化事实（明确原因，避免把非交易 run 也写满磁盘）。"""
-        if self.profile.feed is None:
-            return "no feed (live/testnet runtimes have no recorded market timeline)"
+        if self.profile.feed is None and self._public_pump is None:
+            return "no market source (no recorded market timeline)"
         return None
 
     def _persist_fact(self, kind: str, entry: dict[str, object]) -> None:
@@ -1657,6 +1748,9 @@ class ProductRuntime:
         self._tracker.mark_stopping(now_ms=now)
         self._stop_decision_loop()          # P0001.14：先停 decision loop（无 background thread 泄漏）
         self._stop_feed()
+        if self._public_pump is not None:
+            self._public_pump.stop()
+            self._public_pump = None
         self._disconnect_connectors()       # P0001.15：两个 connector 各自断开
         if self._session.record.status.value == "RUNNING":
             self._host.finish(facts=self._build_summary_facts())
@@ -1750,6 +1844,9 @@ def build_profile_from_args(argv: Sequence[str] | None = None) -> RuntimeProfile
                         help="JSON file of resolved non-sensitive config values (source=FILE)")
     parser.add_argument("--event-store", default=None,
                         help="event store path; required for replay/paper real runs")
+    parser.add_argument("--market-source", default="event-store",
+                        choices=("event-store", "binance-public"),
+                        help="market source: event-store (default) or binance-public (real continuous public data, read-only, no credentials)")
     args = parser.parse_args(list(argv) if argv is not None else None)
     cli_entries = tuple(ConfigEntry(name=name, source=ConfigSource.CLI, value=Fact.of(value))
                         for item in args.config for name, _, value in [str(item).partition("=")])
@@ -1790,11 +1887,17 @@ def build_profile_from_args(argv: Sequence[str] | None = None) -> RuntimeProfile
                            price_levels=int(resolved["projection.price_levels"]),
                            history_capacity=int(resolved["projection.history_capacity"]),
                            view_depth=int(resolved["projection.view_depth"]))
-    elif mode in (RuntimeMode.REPLAY, RuntimeMode.PAPER):
+    elif mode in (RuntimeMode.REPLAY, RuntimeMode.PAPER) and args.market_source != "binance-public":
         raise AssemblyError(f"--event-store is required for a real {mode.value.lower()} run")
+    market_source = args.market_source
+    if market_source == "binance-public":
+        if mode not in (RuntimeMode.REPLAY, RuntimeMode.PAPER):
+            raise AssemblyError(
+                "--market-source binance-public is only allowed with replay/paper (public observation only)")
     return RuntimeProfile(symbol=args.symbol, config_entries=entries, mode=mode,
                           environment=args.environment, venue=args.venue, host=args.host, port=args.port,
                           run_registry_dir=args.run_registry_dir, feed=feed,
+                          market_source=market_source,
                           allow_non_loopback=bool(args.allow_non_loopback),
                           auth_token_ref=(str(args.auth_token_ref) if args.auth_token_ref else None))
 
