@@ -17,5 +17,9 @@ export function currentSelection(hash = typeof window !== "undefined" ? window.l
   if (chart.candle) merged.candle = typeof chart.candle === "string" ? chart.candle : JSON.stringify(chart.candle);
   if (chart.drawing) merged.drawing = String(chart.drawing);
   if (chart.run) merged.run = String(chart.run);
+  if (chart.decision) merged.decision = String(chart.decision);
+  if (chart.order) merged.order = String(chart.order);
+  if (chart.fill) merged.fill = String(chart.fill);
+  if (chart.symbol) merged.symbol = String(chart.symbol);
   return { surface: chart.surface || surface, selection: merged };
 }

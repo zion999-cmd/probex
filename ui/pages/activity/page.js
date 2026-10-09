@@ -60,12 +60,16 @@ async function mountDecisionDrilldown(host) {
     link.addEventListener("click", async (event) => {
       event.preventDefault();
       const decisionId = link.dataset.decision;
+      updateSelection({ surface: "activity", run: (lastActivity || {}).runtime
+        ? lastActivity.runtime.runtime_id : null, decision: decisionId, order: null, fill: null });
       panel.innerHTML = `<div class="unknown">loading ${escapeHtml(decisionId)}…</div>`;
       try {
         const payload = await fetchDecisionDetail(decisionId);
         panel.innerHTML = renderDecisionDetail(payload.detail);
       } catch (error) {
-        panel.innerHTML = `<div class="bad">ERROR: ${escapeHtml(String(error))}</div>`;
+        panel.innerHTML = `<div class="bad">ERROR: ${escapeHtml(String(error))} ` +
+          `<div class="muted">恢复：确认该 decision 是否属于当前运行（历史 run 的因果链未持久化），` +
+          `或刷新后从 Activity 的 trace 重新选择。</div></div>`;
       }
     });
   });
@@ -79,9 +83,14 @@ function renderDecisionDetail(detail) {
   const risk = (detail.risk || []).map((r) =>
     `${escapeHtml(r.client_order_id)}: ${escapeHtml(r.decision)}${r.reason_code ? " (" + escapeHtml(r.reason_code) + ")" : ""}`);
   const orders = (detail.orders || []).map((o) =>
-    `${escapeHtml(o.client_order_id)} · ${escapeHtml(o.side)} · ${escapeHtml(o.status)} · filled=${fact(o.filled_quantity)} · venue_order_id=${fact(o.venue_order_id)}`);
+    `<a href="#/activity" data-order="${escapeHtml(o.client_order_id)}">${escapeHtml(o.client_order_id)}</a>` +
+    ` · ${escapeHtml(o.side)} · ${escapeHtml(o.status)} · filled=${fact(o.filled_quantity)}` +
+    ` · venue_order_id=${fact(o.venue_order_id)}` +
+    ` · <a href="${marketPointHash(o.created_at)}">market @ ${o.created_at}</a>`);
   const fills = (detail.fills || []).map((f) =>
-    `${escapeHtml(f.client_order_id)} · price=${fact(f.price)} · qty=${fact(f.quantity)} · fee=${fact(f.fee)}`);
+    `<a href="#/activity" data-order="${escapeHtml(f.client_order_id)}" data-fill="${escapeHtml(String(f.trade_id))}">` +
+    `${escapeHtml(f.client_order_id)}</a> · price=${fact(f.price)} · qty=${fact(f.quantity)} · fee=${fact(f.fee)}` +
+    (f.ts ? ` · <a href="${marketPointHash(f.ts)}">market @ ${f.ts}</a>` : ""));
   const predictionLine = prediction
     ? `${escapeHtml(String(prediction.provider))}${prediction.is_local_trial ? ' <span class="warn">LOCAL_TRIAL</span>' : ""}` +
       ` · model=${escapeHtml(String(prediction.model))} · confidence=${prediction.derived_confidence === null ? "UNKNOWN" : escapeHtml(String(prediction.derived_confidence))}` +

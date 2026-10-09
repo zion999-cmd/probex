@@ -26,6 +26,7 @@ const EXTRA_DEPS = {
   "ui/pages/system/page.js": ["ui/client/charts.js", "ui/system/ops_charts.js"],
   "ui/pages/activity/page.js": ["ui/client/charts.js", "ui/client/selection.js",
                                 "ui/pages/market/prediction_panel.js"],
+  "ui/pages/orders/page.js": ["ui/client/selection.js"],
 };
 
 function strip(source) {

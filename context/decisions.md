@@ -959,3 +959,25 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
 5. **唯一写路径不变**：`Risk → Readiness → ExecutionEngine → PrivateExecutionConnector → Binance`；
    仍走同一 `OrderTracker` / `FillLedger` / `AccountingCore` / user stream / reconciliation。
 6. **UNKNOWN 语义不变**：ambiguous ⇒ UNKNOWN，不自动 retry，不伪造 REJECTED/ACCEPTED（本次实测再次验证）。
+
+## D-053 本地交易闭环的组装与 `LOCAL_TRIAL` prediction provider（P0001.17）
+
+**日期**：2026-10-04
+**状态**：生效（P0001.17 已完成）
+
+1. **本地执行适配器**：REPLAY/PAPER 的本地执行适配器为**一个** `ExecutionAdapter`，由显式配置
+   `simulation.enabled` 选择实现——启用时用既有 `execution/simulation/venue.py::SimulatedVenue`
+   （事件级成交：队列近似/费率/延迟），否则保持既有 `PaperBroker`（手工注入 fill）。
+   两者都在**同一个** `PaperExecutionConnector` seam 之后，engine/RiskGate/OrderTracker/AccountingCore 不变。
+2. **事件驱动成交**：市场事件经 `MarketFeedProvider.market_event_sink` 喂给本地适配器；
+   成交由 user-stream 风格的执行事件回流到 `ExecutionEngine → OrderTracker → AccountingCore`（唯一 Owner）。
+3. **本地时间语义**：有 feed 的 REPLAY/PAPER 运行时时钟**跟随市场数据时间**（单一时间轴，确定性）；
+   否则引擎订单时间与模拟成交时间不在同一时间轴（会导致撤单永不确认）。回放可显式节流
+   （`feed.events_per_second`），使运行可观察、策略有交互机会。
+4. **`LOCAL_TRIAL` prediction provider**（人类裁决 2026-10-04 授权）：复用既有 `PredictionProvider` 契约与
+   `PredictionRuntime`；确定性、可审计（规则/常量/输入/输出/reason 在模块内文档化 + `audit_log()`）；
+   `provider="LOCAL_TRIAL"`、`model="local-trial-v1"`；**仅 REPLAY/PAPER**（TESTNET/LIVE 构造期拒绝）；
+   输入不足 **fail closed**（不静默回退）。UI/API/Assistant 必须标注"本地试验，非真实模型"，
+   不得据此判断模型有效性。
+5. **选中上下文单一真源**：`ui/client/selection.js` 是唯一选中 store；Assistant 经
+   `ui/assistant/context.js` 读取同一 store，并区分"已选对象"与"最新对象"。

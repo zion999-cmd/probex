@@ -5,6 +5,7 @@
  */
 import { ENDPOINTS, fetchJson, fetchSnapshot } from "/ui/client/api.js";
 import { escapeHtml, fact, rows, section, table } from "/ui/client/render.js";
+import { updateSelection } from "/ui/client/selection.js";
 import { entityHash, marketPointHash } from "/ui/app/navigation.js";
 
 let lastSnapshot = null;
@@ -22,6 +23,12 @@ function connectorId(kind) {
   return fact((health || {}).connector_id);
 }
 
+/** 订单 id：点击即把该订单写入 selection（Assistant 据此解释"已选订单"）。 */
+function orderLink(order) {
+  return `<a href="#/activity/orders" data-order="${escapeHtml(order.client_order_id)}">` +
+    `${escapeHtml(order.client_order_id)}</a>`;
+}
+
 /** Order → Decision：跳到 Activity 的同一决策（decision id 可点击，双向可查）。 */
 function decisionCell(decisionId) {
   if (!decisionId || !decisionId.known) return fact(decisionId);
@@ -31,11 +38,15 @@ export const slug = "orders";
 
 export async function render() {
   lastSnapshot = await fetchSnapshot();
+  if (typeof updateSelection === "function") {
+    updateSelection({ surface: "orders", run: (lastSnapshot.runtime || {}).runtime_id || null,
+                      decision: null, order: null, fill: null });
+  }
   const { execution } = await fetchJson(ENDPOINTS.orders);
   const orders = execution.active_orders || [];
   const table_ = table(["client id", "side", "status", "price", "qty", "filled",
                         "decision", "instrument", "venue"],
-    orders.map((o) => [escapeHtml(o.client_order_id), escapeHtml(o.side),
+    orders.map((o) => [orderLink(o), escapeHtml(o.side),
       escapeHtml(o.status), fact(o.price), fact(o.quantity), fact(o.filled_quantity),
       decisionCell(o.decision_id), fact(o.instrument_id), fact(o.venue_id)]));
   const detail = orders.length
@@ -57,6 +68,15 @@ export async function render() {
           ` · ${decisionCell(o.decision_id)}`],
       ]))).join("")
     : "";
+  if (typeof document !== "undefined") {
+    document.querySelectorAll("a[data-order]").forEach((link) => {
+      link.addEventListener("click", () => {
+        if (typeof updateSelection === "function") {
+          updateSelection({ surface: "orders", order: link.dataset.order });
+        }
+      });
+    });
+  }
   return section("Active orders", table_) + detail + section("Exposure", rows([
     ["uncertain exposure", fact(execution.uncertain_exposure)],
     ["open order exposure", fact(execution.open_order_exposure)],

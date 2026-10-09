@@ -2358,3 +2358,21 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - 全量：**2435 passed / 0 failed / 24 skipped**。
 - 未完成（下一轮）：Run Review 深度定位、Surface loading/error/空状态逐页审计、图表选中态 → Assistant 全贯通。
 - P0001.16 保持 In Progress / Deferred；`currentProposal = "P0001.17"`。
+
+## 2026-10-04（终）：P0001.17 收口（Run Review / Surface 审计 / Assistant 选中上下文）
+
+- **Run Review**：`#/market/run-review/<run>` 取该 run 真实 timeline；仅**当前运行**提供 `Locate on chart`
+  （`#/market/live/<ts>` → workbench `focusTs` 同步）；历史/未知 run 实测 404 ⇒ UNKNOWN + 恢复入口，不跳错时间；
+  切换 run 清空 selected decision/order/fill（不串 run）。
+- **Surface 状态审计**：`artifacts/p0001.17/surface_state_audit.md`（逐页 Loading/Error/Empty/UNKNOWN/Navigation）；
+  console 的 error 状态新增恢复入口（Monitor / System health / retry this page）。
+- **Assistant 选中上下文**：修复 drawer 嵌套传参 bug（真实选中此前到不了后端）；新增 `selected_object` /
+  `selected_order_state`，明确区分"已选对象"与"最新对象"；实测命中。
+- **过程中修复的真实缺陷**：① Market 页面 `timeframe` TDZ ReferenceError（整页 error）；② run-review 分支在
+  snapshot 未取时引用；③ orders 页面在无 selection store 环境崩溃（可选依赖现安全降级）；④ 浏览器 E2E
+  的 hash-only 导航不重载 SPA（harness 修复：强制真实加载 + 允许 query）。
+- **证据**：`artifacts/p0001.17/`（9 张截图 + `local_loop_capture.json`（8/8 检查 missing 全空）+
+  `local_paper_demo_facts.json` + `surface_state_audit.md`）。
+- **测试**：全量 **2435 passed / 0 failed / 24 skipped**。
+- **状态**：P0001.17 **已完成**；`currentProposal = null`（未获切换授权，不自行启动下一阶段）；
+  P0001.16 保持 **In Progress / Deferred**（未关闭）。

@@ -92,9 +92,16 @@ async function showAnswer(body, [kind, identity, label]) {
         '<span class="unknown">UNKNOWN（当前没有订单事实可关联：无挂单/未提交）</span>';
       return;
     }
-    const explanation = await explain(kind, resolvedIdentity);
+    // currentSelection() 返回 {surface, selection:{...}} ⇒ 展平后传给 explain（否则真实选中不会到达后端）
+    const context = currentSelection() || {};
+    const selection = { ...(context.selection || {}), surface: context.surface || "monitor" };
+    const explanation = await explain(kind, resolvedIdentity, selection);
     const answers = explanation.answers || {};
-    const text = Object.values(answers).join(" · ");
+    const preferred = ["selected_object", "selected_order_state", "order_decision_link", "submit_outcome",
+                       "user_stream_health", "reconciliation_state", "prediction_source"];
+    const ordered = preferred.filter((key) => answers[key]).map((key) => answers[key])
+      .concat(Object.entries(answers).filter(([key]) => !preferred.includes(key)).map(([, value]) => value));
+    const text = ordered.join(" · ");
     host.querySelector(".v").innerHTML = text
       ? escapeHtml(text)
       : '<span class="unknown">UNKNOWN (no answer from recorded facts)</span>';

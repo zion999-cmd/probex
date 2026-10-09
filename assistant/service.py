@@ -197,9 +197,16 @@ class AssistantService:
 
     # ------------------------------------------------------------------ explain
 
-    def explain(self, kind: str, identity: str) -> dict[str, object]:
-        """确定性解释：把既有事实与因果链组合起来（不调用 LLM、不推断业务语义）。"""
+    def explain(self, kind: str, identity: str, *, selection: Mapping[str, str] | None = None
+                ) -> dict[str, object]:
+        """确定性解释：把既有事实与因果链组合起来（不调用 LLM、不推断业务语义）。
+
+        `selection`（P0001.17 §3）：来自 Chart / Activity / Run Review 的**真实选中**上下文
+        （run / decision / order / fill / timestamp / timeframe / candle），用于区分"已选对象"与"最新对象"。
+        """
         snapshot = self.snapshot_provider()
+        context = self.context(surface=str((selection or {}).get("surface", "monitor")),
+                               selected=selection or {})
         trace = [entry for entry in snapshot.evidence.trace
                  if identity in (entry.identity.value if entry.identity.known else "")]
         facts: dict[str, object] = {}
@@ -222,7 +229,8 @@ class AssistantService:
             "raw_facts": facts,
             "blockers": [f"{b.owner.value}:{b.reason_code}" for b in snapshot.blockers],
             "blocker_explanations": explain_codes(b.reason_code for b in snapshot.blockers),
-            "answers": self._instrument_answers(snapshot, kind=kind, identity=identity),
+            "answers": {**self._instrument_answers(snapshot, kind=kind, identity=identity),
+                        **self._selection_answers(snapshot, context)},
             "note": "explanation is composed from existing product facts (no LLM, no new truth)",
         }
 
@@ -327,6 +335,41 @@ class AssistantService:
                 f"（price={fill.price.value if fill.price.known else 'UNKNOWN'}，"
                 f"qty={fill.quantity.value if fill.quantity.known else 'UNKNOWN'}）"
                 "；decision 关联见该订单的 correlation（OrderTracker 反查）")
+        return answers
+
+    def _selection_answers(self, snapshot: object, context: object) -> dict[str, str]:
+        """P0001.17 §3：区分"已选对象"与"当前最新对象"（不得混淆），并基于选中对象回答。"""
+        answers: dict[str, str] = {}
+        selected_decision = getattr(getattr(context, "selected_decision_id", None), "value", None)
+        selected_order = getattr(getattr(context, "selected_order_id", None), "value", None)
+        selected_fill = getattr(getattr(context, "selected_fill_id", None), "value", None)
+        selected_timestamp = getattr(getattr(context, "selected_timestamp", None), "value", None)
+        execution = getattr(snapshot, "execution", None)
+        latest_decision = getattr(getattr(snapshot, "strategy", None), "at_ms", None)
+        orders = tuple(getattr(execution, "active_orders", ()) or ()) if execution is not None else ()
+        if selected_decision or selected_order or selected_fill:
+            answers["selected_object"] = (
+                "当前**已选**对象："
+                f"decision={selected_decision or '—'}；order={selected_order or '—'}；fill={selected_fill or '—'}"
+                + (f"；timestamp={selected_timestamp}" if selected_timestamp else "")
+                + "。以下解释针对**已选对象**；`latest_*` 指的是系统当前最新一轮，两者不同。")
+            if selected_order:
+                linked = [order for order in orders if order.client_order_id == selected_order]
+                if linked:
+                    order = linked[0]
+                    answers["selected_order_state"] = (
+                        f"已选订单 {selected_order}：status={order.status}，filled={order.filled_quantity.value if order.filled_quantity.known else 'UNKNOWN'}，"
+                        f"decision={(order.decision_id.value if order.decision_id.known else 'UNKNOWN')}"
+                        "（来自订单自身 canonical correlation）")
+                else:
+                    answers["selected_order_state"] = (
+                        f"已选订单 {selected_order} 不在当前 active orders 中：可能已终态或来自其它 run"
+                        "（本地未持久化历史订单事实 ⇒ 无法给出实时状态，不猜）")
+        else:
+            answers["selected_object"] = (
+                "当前**没有选中对象**（未从图表/Activity/Run Review 传入 decision/order/fill）；"
+                "回答只覆盖当前最新事实：latest decision at_ms="
+                f"{getattr(latest_decision, 'value', None) if latest_decision is not None else 'UNKNOWN'}")
         return answers
 
     def _order_decision_answer(self, snapshot: object, *, kind: str, identity: str) -> str:

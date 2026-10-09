@@ -63,7 +63,15 @@ async function renderSurface() {
     // 真实挂载钩子：页面在 DOM 插入**之后**再挂 chart / canvas / ECharts（queueMicrotask 会早于 innerHTML）
     if (typeof module.mount === "function") await module.mount(route.args);
   } catch (error) {
-    view.innerHTML = `<section><h2>error</h2><div class="row"><span class="k">page</span><span class="v bad">${escapeHtml(String(error))}</span></div></section>`;
+    view.innerHTML = `<section><h2>error</h2>` +
+      `<div class="row"><span class="k">page</span><span class="v bad">${escapeHtml(String(error))}</span></div>` +
+      `<div class="row"><span class="k">recovery</span><span class="v">` +
+      `<a href="#/monitor">Monitor</a> · <a href="#/system/health">System health</a> · ` +
+      `<a href="#" id="retry-page">retry this page</a>` +
+      `<span class="muted">（若为 run/decision 相关错误：确认对象属于当前运行；历史 run 的市场/因果链未持久化）</span></span></div>` +
+      `</section>`;
+    const retry = document.getElementById("retry-page");
+    if (retry) retry.addEventListener("click", (event) => { event.preventDefault(); renderSurface(); });
   }
 }
 

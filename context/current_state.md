@@ -15,8 +15,9 @@ Provider identity 核实（决策 D，提案 §1.7）与授权探测 P1/P2（提
   P2 单条 `noul` 探针 → HTTP 200、604 ms、`answers.ok={type:noul,noul:0.99}`、cost 1.1634e-05。
 - **热路径 Jev 的真实目标应为 `/api/v1/systemone`**；实现 typed provider 需新提案（尚未授权、尚未改代码）。
 
-`context/status.json` 的 `currentProposal` 为 **`"P0001.16"`**（**实现中 / 未 CLOSED**）：人类 2026-10-04
-「选择 B，并批准 P0001.16 进入实现」；SC-11/SC-12/SC-13（真实 TESTNET 挂单/成交/flat）尚未达成，因此不得标记完成。
+`context/status.json` 的 `currentProposal` 为 **`null`**（**P0001.17 已于 2026-10-04 完成**；未获切换到下一阶段的授权，
+按 CLAUDE.md §5 置 `null`，不得据此推断下一阶段）。**P0001.16 保持 In Progress / Deferred**（人类裁决：当前阶段不是
+真实交易验证阶段；不关闭、不新增 TESTNET 写入、不伪造 private event）。
 
 > 历史说明（superseded）：本文件早期段落中的 `"P0001.9.7"` / 各 P0001.9.x 状态描述只反映当时事实；
 > 判断当前 Proposal 一律以 `context/status.json` 为准。
@@ -886,3 +887,31 @@ detached worktree（`7987cd5`，无 `node_modules` / 无未跟踪文件）复核
 
 1) 定位 adapter 路径 UNKNOWN；2) 实现 UNKNOWN → query/reconciliation 收敛；3) 重跑 §14 A/B/C；
 4) §15 fault injection；5) SC-16/17/18 + SC-19 guard。
+
+## P0001.17 Local Trading Loop & Product Experience Completion（已完成，2026-10-04）
+
+**状态**：已完成；`proposals/P0001.17-...md` 状态 = 已完成；`currentProposal = null`。
+
+### 已完成能力
+
+- **本地真实交易闭环**：Replay 市场数据 → MarketState → `LOCAL_TRIAL` prediction → MakerPolicy decision →
+  RiskGate → PAPER 下单 → 既有 `SimulatedVenue` **事件级模拟成交** → OrderTracker → FillLedger/AccountingCore →
+  position/equity/PnL → Product Read Model → UI。E2E：`tests/integration/test_local_paper_loop_e2e.py`（约 5 秒通过）。
+- **`LOCAL_TRIAL` prediction provider**（人类裁决授权）：确定性、可审计、仅 REPLAY/PAPER、fail-closed、UI/API/Assistant 明确标注。
+- **Decision 因果链 drill-down**：`GET /api/v1/decisions/detail?decision_id=` + Activity 面板
+  （market state hash / prediction / decision+reason / risk / orders / fills / accounting）。
+- **图表语义绑定**：决策/订单/成交接入有界展示缓冲（overlays 实测 47 decisions / 113 executions），与 K 线同时间轴。
+- **Performance**：真实 account timeline（231–232 点）驱动 equity/PnL/exposure 曲线。
+- **Run Review**：当前 run 真实 timeline + `Locate on chart`（图表同步到对应时刻）；历史/未知 run 如实 UNKNOWN + 恢复入口。
+- **Assistant 选中上下文**：单一 selection store；区分"已选对象"与"最新对象"。
+- **真实浏览器 E2E**：`tests/ui/local_paper_demo.py` + `tests/ui/capture_local_loop.mjs` —— 8/8 检查通过；
+  截图与断言 JSON 在 `artifacts/p0001.17/`；Surface 状态审计见同目录 `surface_state_audit.md`。
+
+### 测试 / 证据
+
+全量 **2435 passed / 0 failed / 24 skipped**（架构守卫含：单一写路径、无第二 Order/Accounting/Execution path）。
+
+### 遗留（已记录，不阻塞完成）
+
+历史 run 的逐笔/盘口未持久化 ⇒ 其 Run Review 无 K 线/时间定位（不做假图）；若需"历史 run 图上定位"，
+需后续阶段引入 run 级 market 事实持久化（新架构，未授权，未实施）。

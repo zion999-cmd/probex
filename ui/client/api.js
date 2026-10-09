@@ -99,9 +99,14 @@ export async function fetchRunSummary() {
 }
 
 /** P0001.15 §27：deterministic explain（instrument / venue / reference price / order / decision）。 */
-export async function explain(kind, identity) {
-  const query = `?kind=${encodeURIComponent(kind)}&identity=${encodeURIComponent(identity || "")}`;
-  const payload = await fetchJson(`${ENDPOINTS.assistantExplain}${query}`);
+export async function explain(kind, identity, selection = null) {
+  const params = new URLSearchParams({ kind, identity: identity || "" });
+  if (selection && typeof selection === "object") {
+    for (const [key, value] of Object.entries(selection)) {
+      if (value !== null && value !== undefined && value !== "") params.set(key, String(value));
+    }
+  }
+  const payload = await fetchJson(`${ENDPOINTS.assistantExplain}?${params.toString()}`);
   return payload.explanation || {};
 }
 

@@ -131,6 +131,23 @@ try {
   await record(page, "03-activity-causal-chain-drilldown", ["causal chain", "Decision drill-down"]);
   results[results.length - 1].drilldown = drill;
 
+  // 3b) Run Review：当前 run ⇒ 可定位；未知 run ⇒ 明确 UNKNOWN + 恢复入口（不得跳错误时间）
+  const runReview = await page.evaluate(`(async () => {
+    const snap = await (await fetch("/api/v1/snapshot")).json();
+    const runId = snap.runtime.runtime_id;
+    const okRes = await fetch("/api/v1/runs/" + encodeURIComponent(runId) + "/market");
+    const missingRes = await fetch("/api/v1/runs/run-does-not-exist/market");
+    let missingBody = null;
+    try { missingBody = await missingRes.json(); } catch (e) { missingBody = String(e); }
+    return { runId, currentRunStatus: okRes.status, unknownRunStatus: missingRes.status,
+             unknownRunBody: missingBody };
+  })()`);
+  await page.goto(`${base}/#/market/run-review/${encodeURIComponent(runReview.runId)}`, 5000);
+  await record(page, "07-run-review-current", ["Recorded market timeline", "Locate on chart"]);
+  results[results.length - 1].runReview = runReview;
+  await page.goto(`${base}/#/market/run-review/run-does-not-exist`, 4000);
+  await record(page, "08-run-review-unknown", ["UNKNOWN"]);
+
   // 4) Performance：真实 equity/PnL 序列
   await page.goto(`${base}/#/performance`, 4500);
   const perf = await page.evaluate(`(async () => {
@@ -145,6 +162,29 @@ try {
   // 5) System：两个 connector health 分开
   await page.goto(`${base}/#/system/connections`, 3000);
   await record(page, "05-system-connectors", ["Market data connector", "Private execution connector", "connection state"]);
+
+  // 5b) Assistant：已选对象 vs 最新对象（从 Activity 选中 decision 后再问）
+  await page.goto(`${base}/#/activity`, 7000);
+  const selected = await page.evaluate(`(async () => {
+    const link = document.querySelector("a[data-decision]");
+    if (!link) return { selected: false };
+    link.click();
+    await new Promise((r) => setTimeout(r, 2500));
+    const detail = document.getElementById("decision-detail");
+    return { selected: true, decisionId: link.dataset.decision,
+             panel: detail ? detail.innerText.slice(0, 200) : null };
+  })()`);
+  const assistantSelected = await page.evaluate(`(async () => {
+    const buttons = Array.from(document.querySelectorAll("#assistant-questions button"));
+    const target = buttons.find((b) => b.textContent.includes("decision")) || buttons[0];
+    if (!target) return { answered: false };
+    target.click();
+    await new Promise((r) => setTimeout(r, 1500));
+    const host = document.getElementById("assistant-answer");
+    return { answered: true, text: host ? host.innerText.slice(0, 600) : null };
+  })()`);
+  results.push({ name: "assistant-selected", shot: await page.shot("09-assistant-selected-object"),
+                 selected, assistantSelected });
 
   // 6) Assistant：Run/Decision/Order 上下文 + LOCAL_TRIAL 说明
   await page.goto(`${base}/#/monitor`, 3000);
@@ -168,4 +208,5 @@ try {
 }
 
 writeFileSync(join(outDir, "local_loop_capture.json"), JSON.stringify({ base, results }, null, 1), "utf-8");
-console.log(JSON.stringify({ results }, null, 1).slice(0, 6000));
+// 截断时不得产生非法 JSON（按字符切片会破坏字符串）⇒ 只输出紧凑 JSON，供断言脚本解析
+console.log(JSON.stringify({ results }));

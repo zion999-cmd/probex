@@ -59,6 +59,8 @@ export async function render(rest = []) {
     + (focusTs ? `<div class="row"><span class="k">focused timestamp</span><span class="v">${escapeHtml(focusTs)}</span></div>` : ""));
 
   if (active === "run-review") {
+    // run-review 需要当前 runtime identity（用于判断该 run 是否为当前运行）
+    const current = await fetchSnapshot();
     if (!runId) {
       return header + section("Run review", '<div class="row"><span class="k">select a run</span>' +
         '<span class="v unknown">UNKNOWN (open Performance → Runs → market view)</span></div>');
@@ -70,10 +72,29 @@ export async function render(rest = []) {
       return header + section("Run review",
         `<div class="row"><span class="k">recorded market</span><span class="v unknown">UNKNOWN (${escapeHtml(String(error))})</span></div>`);
     }
+    const isCurrentRun = payload.run_id === current.runtime.runtime_id;
+    const timelinePoints = (payload.timeline || {}).points || [];
+    const firstTs = timelinePoints.length ? timelinePoints[0].ts : null;
+    const lastTs = timelinePoints.length ? timelinePoints[timelinePoints.length - 1].ts : null;
+    const locate = isCurrentRun && lastTs
+      ? rows([
+        ["chart focus", `<a href="#/market/live/${encodeURIComponent(String(lastTs))}">focused @ ${lastTs}</a>` +
+          ` · <a href="#/market/live/${encodeURIComponent(String(firstTs))}">window start @ ${firstTs}</a> ` +
+          `<span class="muted">（在同一 run 的 K 线工作台上定位；Decision/Order/Fill 也可从 Activity 跳转）</span>`],
+        ["run identity", `<code>${escapeHtml(payload.run_id || runId)}</code> = current runtime run`],
+      ])
+      : rows([
+        ["chart focus", '<span class="unknown">UNAVAILABLE（该 run 的逐笔/盘口事实未持久化 ⇒ 不跳转到无数据的时间）</span>'],
+        ["run identity", `<code>${escapeHtml(payload.run_id || runId)}</code>` +
+          `<span class="muted"> ≠ current runtime run ${escapeHtml(current.runtime.runtime_id)}</span>`],
+        ["恢复入口", "Run Review 只能看**已记录的时间轴/摘要**；要定位图表请选择当前运行（Market → live）"],
+      ]);
     return header + section("Recorded market timeline", featurePanels(payload.timeline)) +
+      section("Locate on chart", locate) +
       section("Run review notes", rows([
-        ["candles", "K 线聚合只对**当前已接线的 market 缓冲**可用；历史 run 的逐笔/盘口未持久化 ⇒ 不伪造 K 线"],
-        ["run_id", escapeHtml(payload.run_id || runId)],
+        ["recorded facts", "run summary + 有界 market timeline（仅当前已接线 run 有）"],
+        ["not persisted", "历史 run 的逐笔成交/盘口快照未持久化 ⇒ 不提供 K 线与时间定位，也不伪造"],
+        ["cross-run", "不同 run 之间不共享任何缓冲/选择状态（切换 run 会清空 selected decision/order/fill）"],
       ])) +
       section("Projection bounds", boundsNote(payload));
   }
@@ -128,6 +149,10 @@ export async function mount() {
     if (canvas) drawHeatmap(canvas, depth.depth);
 
     let timeframe = "1m";
+    // P0001.17 §3：把"当前 run + 图表选择"写入 selection（切换 run 时清空已选对象，避免串 run）
+    updateSelection({ surface: "market", run: snapshot.runtime.runtime_id, symbol: snapshot.runtime.symbol,
+                      timestamp: focusTs || null, timeframe: "1m",
+                      decision: null, order: null, fill: null });
     let workbench = null;
     const candlesFor = async (interval) => {
       const payload = await fetchJson(`${ENDPOINTS.marketCandles}?interval=${interval}&limit=300`);

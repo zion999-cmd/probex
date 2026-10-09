@@ -610,8 +610,10 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         if not identity:
             self._error(400, "missing_identity", "explain requires identity=<id>")
             return
+        selection = {key: params[key] for key in ("run", "decision", "order", "fill", "timestamp",
+                                                  "timeframe", "candle", "surface") if params.get(key)}
         self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE,
-                              "explanation": assistant.explain(kind, identity)})
+                              "explanation": assistant.explain(kind, identity, selection=selection)})
 
     def _serve_action_invoke(self, action_id: str, body: dict) -> None:
         """执行一个受控 action：状态通过 body.status 表达（HTTP 码只区分类别）。"""
