@@ -83,3 +83,10 @@
 - empty 模式：事件存储为**空文件**（真实无数据，不是 mock）⇒ 全部状态为 UNKNOWN/ABSENT 且**都带 reason**；
   5/5 Surface 导航仍可用（`navOk=true`）。
 - 两模式 5/5 Surface 均通过（`errHint` / `unknown+reason` / `nav`），fault 模式另含 5/5 recovery。
+
+## 浏览器 harness 的已知采样限制（如实记录）
+
+`capture_local_loop.mjs` 的 surface 断言是"navigate 后固定 settle 再读文本"。在机器负载高时，
+个别页面（本轮出现一次 `05-system-connectors`）可能在采样点尚未渲染完 ⇒ 该次断言 missing 非空。
+已单独复核：`#/system/connections` 的 `market data connector` / `private execution connector`
+标签均真实存在（直接读取页面文本验证）。后续可把固定 settle 改成"等待标志文本出现"。
