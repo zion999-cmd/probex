@@ -990,8 +990,8 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
 1. **成交域事实**：`FeatureEngine` 消费真实 `TradePayload`（`TradeFeatureAccumulator`，窗口 = 既有最大收益窗口），
    产出 vwap / cvd / 主动买卖量 / 成交笔数 / 强度；无成交 ⇒ None（UNKNOWN）。TRADE **不**喂 `MarketBook`。
 2. **run 级事实持久化**：由**既有** `RunRegistry` Owner 追加 `runs/<id>.market.jsonl` 与 `runs/<id>.facts.jsonl`；
-   只追加、可读取、缺失/损坏给明确原因；持久化失败不影响交易。历史 run 的 Run Review 读这些事实
-   （`source: durable`；mid-only K 线，volume 不伪造）。
+   只追加、可读取、缺失/损坏给明确原因；持久化失败不影响交易。历史 run 的 Run Review 读这些事实（`source: durable`）。
+   > **更新（commit `2d031e6`）**：逐笔 `runs/<id>.trades.jsonl` 已补齐 ⇒ 历史 run 的 K 线是**真实 OHLCV**（含成交量），不再是 mid-only。
 3. **指标服务端化**：VWAP（candle 聚合器用真实成交逐桶计算）与 ATR（`product/indicators.py::wilder_atr`，周期显式 14）
    均在服务端计算，API 返回事实，UI 只绘制；**UI 不做任何业务指标计算**（守卫测试）。
 4. **表面状态注入验证**：测试资产 `tests/ui/fault_server.py` + `capture_states.mjs` 逐页验证

@@ -30,7 +30,9 @@ P0001.9.4.1.1 Full Testnet Readiness Integration Validation ← 已完成（唯�
 P0001.9.4.2 Persistent Equity High-Watermark      ← 已完成（Testnet 跨进程验收：readiness reasons = []）
 P0001.9.5 Execution Readiness Evidence Binding    ← 已完成（受控 evidence + 短时授权 + generation 失效链）
 P0001.9.6 Binance ExecutionAdapter                ← 已完成（Testnet 写链闭环：submit/cancel/UNKNOWN 收敛；product 首次具备写能力）
-P0001.9.7 Live Execution Orchestration            ← 实现中（Phase A observe-only PASS；Phase B 阻塞于杠杆/prediction 前置条件）
+P0001.9.7 Live Execution Orchestration            ← 已完成（development scope；Phase B ≥30min deferred）
+P0001.16  Venue Execution Productization          ← 实现中 / Deferred（真实残留仓位；SC-11/12/13 未达成）
+P0001.17  Local Trading Loop / Product Experience ← 已完成（本地闭环 + LOCAL_TRIAL + Run Review + 服务端指标）
 P0001.10  Product API / UI / Reports       ← 已完成
 P0001.11  Product Operations Foundation    ← 已完成
 P0001.12  Product Surface Architecture / Capability Completion ← 已完成
@@ -77,7 +79,9 @@ P0001.15  Instrument Domain + Venue Integration Contract ← 已完成（2026-10
 | P0001.9.4.2 | 已完成（durable HWM：activate→persist→restart→recovery→restore→readiness，Testnet `live_ready` / reasons `[]`） |
 | P0001.9.5 | 已完成（typed market/environment/HWM 绑定 + collector + authority TTL/generation 校验；Testnet 授权链验收 PASS） |
 | P0001.9.6 | 已完成（LIMIT+GTX 写执行；三分类结果、clientOrderId 幂等、UNKNOWN 不重试；Testnet 验收 PASS） |
-| P0001.9.7 | **实现中**（orchestrator 完成；Phase A observe-only 10 分钟零写 PASS；Phase B 写 enabled 待外部前置条件） |
+| P0001.9.7 | 已完成（development scope；Phase A observe-only PASS；Phase B ≥30min deferred） |
+| P0001.16 | **实现中 / Deferred**（acceptance 隔离能力 + 真实成交已发生；SC-11/12/13/6/7/15 未达成；残留 0.001 BTC） |
+| P0001.17 | 已完成（本地真实交易闭环；LOCAL_TRIAL provider；Run Review；服务端 vwap/ATR；2454 测试） |
 | P0001.10 | 已完成（Product API / UI / Reports） |
 | P0001.11 | 已完成（Product Operations Foundation） |
 | P0001.12 | 已完成（Surface Architecture + Capability Completion + Assistant/Actions） |

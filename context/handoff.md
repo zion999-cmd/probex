@@ -2395,3 +2395,68 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - 三个浏览器脚本改为**条件等待**（标志文本 / chart API），消除负载下的采样过早问题。
 - 复验：全量 2446 passed；local loop capture missing 全空；chart verify PASS；fault 5/5（含恢复入口）；empty 5/5。
 - `currentProposal = null`；P0001.16 保持 Deferred/In Progress。
+
+## 2026-10-10：本地启动脚本 + 运行手册（人类当前会话明确指令；**无 Proposal**）
+
+**授权**：人类当前会话指令「太复杂，写几个脚本可以启动。还要写好文档」。
+**性质**：开发体验工具 + 文档；**不是**交易能力、**不是**新架构、**未改任何业务语义**；
+`context/status.json.currentProposal` 保持 `null`（未授权切换阶段）。
+
+### 新增
+
+- `scripts/start_local.sh`：启动产品入口（`python3 -m runtime.assembly`），只允许 `--mode paper|replay`；
+  自动在缺 event store 时生成一份；就绪探测 `/health/live`（免认证）后打印 URL；`trap` 转发 SIGINT/SIGTERM
+  做优雅停止（durable run 记 `COMPLETED`）。默认端口 paper 8899 / replay 8898，默认工作目录
+  `~/.probex/local-run`（仓库外，可用 `--local-dir` / `PROBEX_LOCAL_DIR` 覆盖）。
+- `scripts/start_demo.sh`：一键本地 PAPER demo（复用 `tests/ui/local_paper_demo.py`），端口 8897。
+- `scripts/probex_status.sh`：只读查看运行中的 runtime（状态/事实摘要 + `blockers` + 最近 runs）。
+- `scripts/make_event_store.py`：生成确定性 event store（来源 = `tests/ui/market_fixture.py`，
+  输出中如实标注 `synthetic data: not real market evidence`）。
+- `README.md` + `docs/RUNBOOK.md`：快速开始、脚本参数表、UI 路由表、API/CLI 清单、产物目录、
+  停止/崩溃语义、配置优先级与认证、常见错误表、以及边界声明（LOCAL TRIAL 配置；产品面无下单能力；
+  TESTNET 验收需 `PROBEX_TESTNET_CONFIRM=1` + `PROBEX_TESTNET_ACCEPTANCE=1` 双重显式且 P0001.16 未收口）。
+- `tests/unit/test_startup_scripts.py`（8 条守卫）：bash strict mode + `bash -n`；只允许调用既有入口；
+  **禁止**出现 acceptance driver / 下单 / TESTNET-LIVE 模式 / 凭据变量；默认产物目录必须在仓库之外；
+  文档必须保留安全边界与三个默认端口。
+
+### 验证（真实执行）
+
+- `scripts/make_event_store.py` ⇒ 1 小时 1560 事件；`start_local.sh --mode paper` ⇒ `READY` + UI HTTP 200
+  + `equity=9999.886`（真实模拟成交）；SIGTERM ⇒ `[start_local] stopped` + durable `COMPLETED`。
+- `start_local.sh --mode replay` ⇒ `quoting=false`、`state=RUNNING`、优雅停止正常。
+- `probex_status.sh` ⇒ 正确打印 mode/venue/instrument/equity/`provider=LOCAL_TRIAL`/blockers/runs。
+- `start_demo.sh` ⇒ 事实 JSON（decisions/submits/fills/equity）+ UI HTTP 200。
+- 全量测试 **2454 passed / 0 failed / 24 skipped**（+8 守卫）。
+
+### 边界 / 未做
+
+- 未新增任何第三方依赖（纯 bash + Python 标准库）；未创建第二条执行/写路径；
+  脚本结构性无法触发真实下单（守卫测试固定）。
+- 未修改 `context/status.json`、`current_state.md`、`roadmap.md`、任何 Proposal。
+- **Commit: 未提交**（人类本会话未要求 commit）。
+
+## 2026-10-10（全局补齐任务 · Batch 1：事实一致性收敛）
+
+**授权**：人类「Probex 全局产品补齐任务」§五（standing authorization，跨批次依赖执行）。
+台账：`artifacts/gap-ledger/GAP_LEDGER.md`。
+
+### 纠正 / 新增
+
+- **状态字段陈旧纠正**（能力已落地、SC 全 PASS）：P0001.5 / P0001.6 / P0001.6.1 / P0001.7.1 ⇒ 已完成。
+- **roadmap**：补 P0001.16（实现中/Deferred）与 P0001.17（已完成）；P0001.9.7 状态改为「已完成 development scope」。
+- **current_state**：版本表补 16/17 提交；P0001.17 段测试数与"遗留"刷新；删除孤立残句。
+- **decisions**：D-054 第 2 条补充"逐笔已补齐 ⇒ 真实 OHLCV"。
+- **启动脚本合并**（用户反馈"太多"）：删除 `start_local.sh / start_demo.sh / probex_status.sh`，
+  换为单个 `scripts/probex.sh`（子命令 `up [--mode paper|replay]` / `demo` / `status` / `data`）；守卫测试同步重写。
+- **陈旧证据重跑**：`artifacts/p0001.17/local_loop_capture.json` 重新生成（`missing=NONE`，含 05-system-connectors）；截图同步。
+- `ui/pages/market/indicators.js` 删除重复且过时的顶部 docstring。
+
+### 验证
+
+- `scripts/probex.sh up --mode paper` ⇒ READY + UI HTTP 200 + `status` 正确（equity/prediction=LOCAL_TRIAL）；SIGTERM ⇒ stopped。
+- 全量 **2454 passed / 0 failed / 24 skipped**；架构守卫通过；NOT Included 未触碰；未新增依赖。
+
+### 下一步（Batch 2）
+
+- G-A4：`--mode testnet/live` + event store 时 UI 误报 `binance:market CONNECTED` 的诚实性修正（只改产品投影/启动校验，不下单）。
+- Batch 3（G-A2/G-B2）：把既有真实公网 connector 经产品入口接线；**Batch 4（P0001.16 收口）需人类单独授权 TESTNET 写入**。

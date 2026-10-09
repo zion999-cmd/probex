@@ -375,7 +375,6 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
   `OPENROUTER_API_KEY` 从仓库外 `~/.probex/openrouter.env` 注入且真实 SystemOne 调用通过）。
   两次真实 Testnet 运行（32 分钟窗口 + 预热）**仍未产生任何报价** ⇒ **SC-24 – SC-28 未达成、根因未定位**（不猜）；
   下一步：harness 增加逐轮 telemetry 落盘后短诊断（产品代码不动）。安全检查：open orders 0 / position 0 / leverage 1。
-0001.4.1 的 live 验证（SC-1 / SC-2 / SC-5）。
 
 ## 下一步
 
@@ -423,6 +422,8 @@ Git 仓库已初始化；P0001.1 – P0001.9.2.1 均已提交并推送（每个 
 | `d4939a4` | **图表 / UI 产品化**（Chart Workbench：K 线 / 指标 / 画线 / semantic overlays / ECharts 面板） | 2303 passed（detached worktree 复核） |
 | `7987cd5` | **P0001.14** Runtime Decision Loop Integration | 2347 passed（detached worktree 复核） |
 | `14ac3cb` | **P0001.15** Instrument Domain + Venue Integration Contract | 2401 passed（detached worktree 复核） |
+| `aad76f9` … `0416338` | **P0001.16** Venue Execution Productization（**实现中 / Deferred**） | 2414 passed（detached） |
+| `f07cdf4` … `2d031e6` | **P0001.17** Local Trading Loop / Product Experience | 2454 passed（detached 复核） |
 
 `CLAUDE.md` 与 `.gitignore` 被使用者全局 gitignore（`~/.gitignore_global`）排除，未纳入版本控制。
 P0001.9.3（`1be451a`）与 P0001.9.3.1（`4b69a73`）均已提交并 **push 到 `origin/master`**；
@@ -909,9 +910,10 @@ detached worktree（`7987cd5`，无 `node_modules` / 无未跟踪文件）复核
 
 ### 测试 / 证据
 
-全量 **2435 passed / 0 failed / 24 skipped**（架构守卫含：单一写路径、无第二 Order/Accounting/Execution path）。
+全量 **2454 passed / 0 failed / 24 skipped**（架构守卫含：单一写路径、无第二 Order/Accounting/Execution path）。
 
-### 遗留（已记录，不阻塞完成）
+### 遗留（不阻塞本阶段完成）
 
-历史 run 的逐笔/盘口未持久化 ⇒ 其 Run Review 无 K 线/时间定位（不做假图）；若需"历史 run 图上定位"，
-需后续阶段引入 run 级 market 事实持久化（新架构，未授权，未实施）。
+- 真实公网行情 connector 仅在 TESTNET 栈接线，产品入口不构造它 ⇒ 本地 run 吃的是（合成）event store，不是持续真实数据（缺口 G-A2/G-B2，待 Batch 3）。
+- 历史 run 的 K 线为 mid/逐笔聚合（无逐 tick 深度序列）。
+- 上述均已记录在 `artifacts/gap-ledger/GAP_LEDGER.md`。
