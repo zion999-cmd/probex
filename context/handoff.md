@@ -2387,3 +2387,11 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - **复验**：`verify_chart.mjs` 对真实本地运行全 PASS（181 candles / 454 semantic markers / drawings / zoom-pan /
   timeframe / replay sync）→ `artifacts/p0001.17/chart_verify.json`；`capture_local_loop.mjs` 8/8；
   全量 **2434 passed / 0 failed / 24 skipped**。
+
+## 2026-10-04（最终补齐）：逐笔持久化 + harness 条件等待
+
+- 新增 run 级**逐笔**事实持久化（`runs/<id>.trades.jsonl`，既有 RunRegistry Owner）⇒ 历史 run 的
+  Run Review 用真实 OHLCV（181/181 根带成交量 + 逐桶 VWAP + 服务端 ATR）；实测 15445 笔持久化。
+- 三个浏览器脚本改为**条件等待**（标志文本 / chart API），消除负载下的采样过早问题。
+- 复验：全量 2446 passed；local loop capture missing 全空；chart verify PASS；fault 5/5（含恢复入口）；empty 5/5。
+- `currentProposal = null`；P0001.16 保持 Deferred/In Progress。

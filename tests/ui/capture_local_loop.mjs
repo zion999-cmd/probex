@@ -76,6 +76,25 @@ class Page {
     await sleep(settle);
   }
   async text() { return String((await this.evaluate("document.body.innerText")) || ""); }
+  /** 等待文本出现（真实渲染完成条件；上限 timeout 后返回 false，不静默通过）。 */
+  async waitForText(needle, timeout = 15000, interval = 250) {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const text = await this.text();
+      if (text.includes(needle)) return true;
+      await sleep(interval);
+    }
+    return false;
+  }
+  /** 等待选择器出现。 */
+  async waitForSelector(selector, timeout = 15000, interval = 250) {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      if (await this.evaluate(`!!document.querySelector(${JSON.stringify(selector)})`)) return true;
+      await sleep(interval);
+    }
+    return false;
+  }
   async evaluate(expression) {
     const r = await this.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
     return r.result.value;
@@ -90,6 +109,8 @@ class Page {
 
 const results = [];
 const record = async (page, name, checks) => {
+  // 条件等待：先等第一个标志文本出现（避免负载高时采样过早）
+  if (checks.length) await page.waitForText(checks[0], 15000);
   const text = await page.text();
   const lower = text.toLowerCase();
   const missing = checks.filter((needle) => !lower.includes(needle.toLowerCase()));
@@ -101,10 +122,12 @@ const page = await Page.open("about:blank");
 try {
   // 1) Monitor
   await page.goto(`${base}/#/monitor`);
+  await page.waitForText("LOCAL_TRIAL", 15000);
   await record(page, "01-monitor-local-trial", ["LOCAL_TRIAL", "position", "equity"]);
 
   // 2) Market：K 线 + 指标 + **图表数据链**（API 与图表一致）
-  await page.goto(`${base}/#/market/live`, 5000);
+  await page.goto(`${base}/#/market/live`, 3000);
+  await page.waitForSelector("#kline-chart canvas", 20000);
   const chart = await page.evaluate(`(async () => {
     const api = await (await fetch("/api/v1/market/candles?interval=1m&limit=200")).json();
     const canvases = document.querySelectorAll("canvas").length;
@@ -118,7 +141,8 @@ try {
   results[results.length - 1].chart = chart;
 
   // 3) Activity：因果链 + decision drill-down
-  await page.goto(`${base}/#/activity`, 7000);
+  await page.goto(`${base}/#/activity`, 3000);
+  await page.waitForSelector("a[data-decision]", 20000);
   const drill = await page.evaluate(`(async () => {
     const link = document.querySelector("a[data-decision]");
     if (!link) return { clicked: false };
@@ -142,14 +166,17 @@ try {
     return { runId, currentRunStatus: okRes.status, unknownRunStatus: missingRes.status,
              unknownRunBody: missingBody };
   })()`);
-  await page.goto(`${base}/#/market/run-review/${encodeURIComponent(runReview.runId)}`, 5000);
+  await page.goto(`${base}/#/market/run-review/${encodeURIComponent(runReview.runId)}`, 3000);
+  await page.waitForText("Locate on chart", 20000);
   await record(page, "07-run-review-current", ["Recorded market timeline", "Locate on chart"]);
   results[results.length - 1].runReview = runReview;
-  await page.goto(`${base}/#/market/run-review/run-does-not-exist`, 4000);
+  await page.goto(`${base}/#/market/run-review/run-does-not-exist`, 3000);
+  await page.waitForText("UNKNOWN", 20000);
   await record(page, "08-run-review-unknown", ["UNKNOWN"]);
 
   // 4) Performance：真实 equity/PnL 序列
-  await page.goto(`${base}/#/performance`, 4500);
+  await page.goto(`${base}/#/performance`, 3000);
+  await page.waitForText("Trade statistics", 20000);
   const perf = await page.evaluate(`(async () => {
     const tl = await (await fetch("/api/v1/portfolio/timeline")).json();
     return { canvases: document.querySelectorAll("canvas").length,
@@ -161,10 +188,12 @@ try {
 
   // 5) System：两个 connector health 分开
   await page.goto(`${base}/#/system/connections`, 3000);
+  await page.waitForText("Private execution connector", 20000);       // 条件等待（不再固定 settle）
   await record(page, "05-system-connectors", ["Market data connector", "Private execution connector", "connection state"]);
 
   // 5b) Assistant：已选对象 vs 最新对象（从 Activity 选中 decision 后再问）
-  await page.goto(`${base}/#/activity`, 7000);
+  await page.goto(`${base}/#/activity`, 3000);
+  await page.waitForSelector("a[data-decision]", 20000);
   const selected = await page.evaluate(`(async () => {
     const link = document.querySelector("a[data-decision]");
     if (!link) return { selected: false };
@@ -188,6 +217,7 @@ try {
 
   // 6) Assistant：Run/Decision/Order 上下文 + LOCAL_TRIAL 说明
   await page.goto(`${base}/#/monitor`, 3000);
+  await page.waitForSelector("#assistant-questions button", 20000);
   const assistant = await page.evaluate(`(async () => {
     const buttons = Array.from(document.querySelectorAll("#assistant-questions button"));
     const answers = [];

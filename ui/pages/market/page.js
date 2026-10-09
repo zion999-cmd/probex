@@ -76,7 +76,8 @@ export async function render(rest = []) {
     if (payload.source === "durable") {
       // P0001.17 §9：历史 run ⇒ 用该 run 的**持久化事实**画图并定位（只读；缺失事实如实标注）
       const candles = ((payload.candles || {}).candles) || [];
-      lastRunReview = { runId: payload.run_id || runId, candles, facts: payload.facts || [] };
+      lastRunReview = { runId: payload.run_id || runId, candles, facts: payload.facts || [],
+                        atrPoints: (((payload.indicators || {}).atr || {}).points || []) };
       const factRows = (payload.facts || []).slice(-60).reverse().map((item) => [
         String(item.ts), escapeHtml(String(item.kind || "")),
         escapeHtml(String(item.decision_id || item.client_order_id || "")),
@@ -93,7 +94,9 @@ export async function render(rest = []) {
         section("Recorded market timeline", featurePanels(payload.timeline)) +
         section("Run review notes", rows([
           ["source", "durable（该 run 的持久化事实，不是当前接线缓冲）"],
-          ["volume", '<span class="unknown">UNAVAILABLE</span> <span class="muted">历史 run 只记录盘口 mid，未持久化逐笔成交 ⇒ 不伪造成交量</span>'],
+          ["volume", (payload.trades > 0
+            ? `<span class="known">${payload.trades} 笔持久化成交</span> <span class="muted">OHLCV 与服务端 VWAP 由这些真实成交聚合</span>`
+            : '<span class="unknown">UNAVAILABLE</span> <span class="muted">该 run 未持久化逐笔成交 ⇒ 不伪造成交量</span>')],
           ["cross-run", "不同 run 不共享缓冲/选择状态（切换 run 会清空 selected decision/order/fill）"],
         ])) +
         section("Projection bounds", boundsNote(payload));
@@ -175,7 +178,8 @@ export async function mount(rest = []) {
     const workbench = mountWorkbench(document.getElementById("kline-chart-runreview"),
                                     document.getElementById("wb-toolbar-runreview"), {
       candles: lastRunReview.candles, trace: [], timeframe: "1m", symbol: "BTCUSDT",
-      source: "durable run facts (mid-only)", indicators: ["MA", "EMA", "VOL"],
+      atrPoints: lastRunReview.atrPoints || [],
+      source: "durable run facts", indicators: ["MA", "EMA", "VOL"],
     });
     document.querySelectorAll("button[data-locate]").forEach((button) => {
       button.addEventListener("click", () => workbench && workbench.setFocus(Number(button.dataset.locate)));

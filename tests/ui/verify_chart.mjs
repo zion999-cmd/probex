@@ -32,7 +32,12 @@ const ev = async (expr) => (await send("Runtime.evaluate", { expression: expr, r
 await send("Runtime.enable"); await send("Page.enable");
 await send("Emulation.setDeviceMetricsOverride", { width: 1680, height: 1050, deviceScaleFactor: 1, mobile: false });
 await send("Page.navigate", { url: `${base}/#/market/live` });
-await sleep(4000);
+// 条件等待：chart API 真实挂载（负载高时 4s 固定等待会采样过早）
+for (let attempt = 0; attempt < 80; attempt += 1) {
+  const ready = await ev("!!(document.getElementById('kline-chart') && document.getElementById('kline-chart').__probex)");
+  if (ready) break;
+  await sleep(250);
+}
 
 const results = {};
 const api = "document.getElementById('kline-chart').__probex";

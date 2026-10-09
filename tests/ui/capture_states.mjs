@@ -51,6 +51,15 @@ class Page {
     await this.send("Page.navigate", { url: t.toString() }); await sleep(settle);
   }
   async text() { return String((await this.evaluate("document.body.innerText")) || ""); }
+  async waitForAny(needles, timeout = 15000, interval = 250) {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const lower = (await this.text()).toLowerCase();
+      if (needles.some((n) => lower.includes(n.toLowerCase()))) return true;
+      await sleep(interval);
+    }
+    return false;
+  }
   async evaluate(expr) {
     const r = await this.send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true });
     return r.result.value;
@@ -66,7 +75,8 @@ const page = await Page.open();
 try {
   for (const [mode, base] of [["fault", faultBase], ["empty", emptyBase]]) {
     for (const surface of SURFACES) {
-      await page.goto(`${base}/#/${surface}`);
+      await page.goto(`${base}/#/${surface}`, 2000);
+      await page.waitForAny(["ERROR", "UNKNOWN", "unavailable", "NOT_AVAILABLE"], 15000);
       const text = await page.text();
       const lower = text.toLowerCase();
       const hasRecovery = await page.evaluate(

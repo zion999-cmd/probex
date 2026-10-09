@@ -60,7 +60,7 @@
    "hasUnknownReason": true,
    "loadingSeen": false,
    "navOk": true,
-   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791529605968 · health=UNKNOWN · data_ts=UNKNOWN (no market data consumed yet) READINESS:READINESS_U"
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791531606049 · health=UNKNOWN · data_ts=UNKNOWN (no market data consumed yet) READINESS:READINESS_U"
   },
   {
    "surface": "market/live",
@@ -70,7 +70,7 @@
    "hasUnknownReason": true,
    "loadingSeen": false,
    "navOk": true,
-   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791529605968 · health=UNKNOWN · data_ts=UNKNOWN (no market data consumed yet) READINESS:READINESS_U"
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791531606049 · health=UNKNOWN · data_ts=UNKNOWN (no market data consumed yet) READINESS:READINESS_U"
   },
   {
    "surface": "activity",
@@ -80,7 +80,7 @@
    "hasUnknownReason": true,
    "loadingSeen": false,
    "navOk": true,
-   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791529605968 · health=UNKNOWN · data_ts=UNKNOWN (no market data consumed yet) READINESS:READINESS_U"
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791531606049 · health=UNKNOWN · data_ts=UNKNOWN (no market data consumed yet) READINESS:READINESS_U"
   },
   {
    "surface": "performance",
@@ -90,7 +90,7 @@
    "hasUnknownReason": true,
    "loadingSeen": false,
    "navOk": true,
-   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791529605968 · health=UNKNOWN · data_ts=UNKNOWN (no market data consumed yet) READINESS:READINESS_U"
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791531606049 · health=UNKNOWN · data_ts=UNKNOWN (no market data consumed yet) READINESS:READINESS_U"
   },
   {
    "surface": "system/health",
@@ -100,7 +100,7 @@
    "hasUnknownReason": true,
    "loadingSeen": false,
    "navOk": true,
-   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791529605968 · health=UNKNOWN · data_ts=UNKNOWN (no market data consumed yet) READINESS:READINESS_U"
+   "excerpt": "PROBEX Monitor Market Activity Performance System PAPER · local · binance · BTCUSDT · runtime=paper-1791531606049 · health=UNKNOWN · data_ts=UNKNOWN (no market data consumed yet) READINESS:READINESS_U"
   }
  ]
 }

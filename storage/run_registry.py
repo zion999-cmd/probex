@@ -193,7 +193,7 @@ class JsonRunRegistry:
 
     def run_facts_path(self, run_id: str, kind: str) -> Path:
         """一个 run 的持久化事实文件（`market` = 市场时间线；`facts` = decision/order/fill 事实）。"""
-        if kind not in ("market", "facts"):
+        if kind not in ("market", "facts", "trades"):
             raise RunRegistryError(f"unknown run fact kind {kind!r}")
         return self.root / RUNS_DIR / f"{run_id}.{kind}.jsonl"
 

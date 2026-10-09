@@ -110,6 +110,8 @@ class MarketFeedProvider:
     reference_price_sink: Callable[[object], None] | None = None
     #: P0001.17 §3：本地执行模拟器 sink（每个市场事件都喂给 `SimulatedVenue` ⇒ 事件级模拟成交）
     market_event_sink: Callable[[object], None] | None = None
+    #: P0001.17 §9：真实成交事实 sink（composition root 用它把逐笔写入该 run 的持久化事实）
+    trade_sink: Callable[[object], None] | None = None
     _thread: threading.Thread | None = field(default=None, init=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False)
     _stats: dict[str, object] = field(default_factory=dict, init=False)
@@ -220,6 +222,13 @@ class MarketFeedProvider:
                 if isinstance(payload, TradePayload):
                     self.history.feed_trade(self._trade_print(payload, event.exchange_ts))
                     self._stats["trade_events"] = int(self._stats.get("trade_events", 0)) + 1
+                    if self.trade_sink is not None:
+                        try:
+                            self.trade_sink(event)
+                        except Exception as exc:  # noqa: BLE001 - 持久化失败不得打断 feed
+                            self._stats["trade_sink_errors"] = int(
+                                self._stats.get("trade_sink_errors", 0)) + 1
+                            self._stats["trade_sink_last_error"] = type(exc).__name__
                 if is_mark:
                     # 正式 MARK 事实只进入 reference price source（**不**进盘口/feature，也不冒充 last trade）
                     self._stats["mark_events"] = int(self._stats.get("mark_events", 0)) + 1

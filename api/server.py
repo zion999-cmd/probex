@@ -422,6 +422,7 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         try:
             points, unavailable = registry.load_run_facts(run_id, "market", limit=5_000)
             facts, facts_unavailable = registry.load_run_facts(run_id, "facts", limit=2_000)
+            trades, _trades_unavailable = registry.load_run_facts(run_id, "trades", limit=50_000)
         except Exception as exc:  # noqa: BLE001 - 损坏 ⇒ 明确报错，不猜
             self._error(BAD_REQUEST, "run_facts_unreadable", f"{type(exc).__name__}: {exc}")
             return
@@ -429,6 +430,7 @@ class ProductApiHandler(BaseHTTPRequestHandler):
             self._error(NOT_FOUND, "no_recorded_market_for_run", unavailable)
             return
         from product.candles import aggregate_candles
+        from product.indicators import wilder_atr
 
         config = self.service.projection_config_view()
         bucket_ms = int(getattr(config, "bucket_ms", 1_000) or 1_000)
@@ -442,12 +444,23 @@ class ProductApiHandler(BaseHTTPRequestHandler):
                          for p in points
                          if isinstance(p, dict) and p.get("ts") is not None and p.get("best_bid")
                          and p.get("best_ask"))
-        series = aggregate_candles(trades=(), snapshots=recorded, interval="1m", limit=240)
+        recorded_trades = tuple(SimpleNamespace(ts=int(t["ts"]), price=t.get("price"),
+                                               quantity=t.get("quantity"))
+                                for t in trades
+                                if isinstance(t, dict) and t.get("ts") is not None
+                                and t.get("price") is not None and t.get("quantity") is not None)
+        # 有持久化逐笔 ⇒ 真实 OHLCV（含成交量与逐桶 VWAP）；否则退回 mid-only（如实标注）
+        series = aggregate_candles(trades=recorded_trades, snapshots=recorded, interval="1m", limit=240)
+        durable_atr = wilder_atr(series.candles, period=CANDLE_ATR_PERIOD)
         self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE, "run_id": run_id,
-                              "source": "durable", "points": len(points),
+                              "source": "durable", "points": len(points), "trades": len(recorded_trades),
                               "candles": to_jsonable(series), "facts": list(facts),
+                              "indicators": {"atr": {"period": CANDLE_ATR_PERIOD,
+                                                     "points": to_jsonable(durable_atr)}},
                               "facts_unavailable": facts_unavailable,
-                              "note": "recorded run facts (book mid only; no trades persisted => volume omitted)",
+                              "note": ("recorded run facts: OHLCV from persisted trades"
+                                       if recorded_trades else
+                                       "recorded run facts (book mid only; no trades persisted => volume omitted)"),
                               "bounds": self._bounds(config) if config is not None else {}})
 
     def _serve_replay_control(self, verb: str, body: dict) -> None:

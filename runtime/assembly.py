@@ -1124,6 +1124,7 @@ class ProductRuntime:
         provider.reference_price_sink = reference_prices.observe_market_event
         if self._simulated_venue is not None:
             provider.market_event_sink = self._simulated_venue.on_market_event
+        provider.trade_sink = self._persist_trade
         venue = self._resolve_venue_identity()
         registry = self._resolve_instrument_registry()
         instrument = None if registry is None else registry.current
@@ -1589,6 +1590,23 @@ class ProductRuntime:
             log_event("runtime", "run_fact_persist_failed", level=30,
                       runtime_id=self._identity.runtime_id, run_id=self._session.run_id,
                       kind="market", error=type(exc).__name__)
+
+    def _persist_trade(self, event: object) -> None:
+        """把一条真实成交写入该 run 的持久化事实（历史 run 的 K 线因此有成交量与成交均价）。"""
+        reason = self._durable_absence_reason()
+        if reason is not None or not hasattr(self, "_registry"):
+            return
+        payload = getattr(event, "payload", None)
+        try:
+            self._registry.append_run_facts(self._session.run_id, "trades", [{
+                "ts": int(getattr(event, "exchange_ts")),
+                "price": float(getattr(payload, "price")),
+                "quantity": float(getattr(payload, "quantity")),
+                "aggressor": str(getattr(getattr(payload, "aggressor", None), "value", "") or "")}])
+        except Exception as exc:  # noqa: BLE001 - 持久化失败不得影响交易/回放
+            log_event("runtime", "run_fact_persist_failed", level=30,
+                      runtime_id=self._identity.runtime_id, run_id=self._session.run_id,
+                      kind="trades", error=type(exc).__name__)
 
     def _durable_absence_reason(self) -> str | None:
         """何时**不**持久化事实（明确原因，避免把非交易 run 也写满磁盘）。"""

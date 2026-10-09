@@ -90,3 +90,17 @@
 个别页面（本轮出现一次 `05-system-connectors`）可能在采样点尚未渲染完 ⇒ 该次断言 missing 非空。
 已单独复核：`#/system/connections` 的 `market data connector` / `private execution connector`
 标签均真实存在（直接读取页面文本验证）。后续可把固定 settle 改成"等待标志文本出现"。
+
+## 两项限制已消除（2026-10-04，人类「全部做掉」）
+
+1. **历史 run 的图表现在是真实 OHLCV（不再是 mid-only）**：新增 `runs/<id>.trades.jsonl`
+   （真实逐笔：ts / price / quantity / aggressor，由既有 `RunRegistry` Owner 追加），
+   `/api/v1/runs/<id>/market` 用**持久化逐笔 + 记录盘口**在服务端聚合 ⇒ 181/181 根 K 线带真实成交量、
+   逐桶 VWAP 与服务端 ATR(14)。实测：`trades persisted=15445`、`candles=181`、`with volume=181`、
+   `atr non-null=168`、`source=trades`、`note="OHLCV from persisted trades"`。
+   UI 同步显示"N 笔持久化成交 / 由真实成交聚合"；无逐笔的 run 仍如实显示 `UNAVAILABLE`。
+2. **浏览器 harness 改为条件等待**（不再固定 settle）：`capture_local_loop.mjs` /
+   `capture_states.mjs` / `verify_chart.mjs` 均等待标志文本或 chart API 真实出现（上限内不出现即报 missing）。
+   复验：local loop 全部 Surface `missing=[]`、Assistant 选中回答通过、chart verify PASS
+   （181 candles / 437 markers / zoom-pan / timeframe / replay sync）；fault 5/5（含恢复入口）、
+   empty 5/5（UNKNOWN + reason）。
