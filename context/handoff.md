@@ -2506,3 +2506,17 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - **结论**：所有"无需新增授权、属原始 Proposal 交付范围"的缺口均已修复并逐条验收。
   剩余仅：Batch 4（P0001.16 收口，需 TESTNET 写/平仓授权）、Batch 5（策略有效性标定/多标的，需新提案）、
   真实公网 451（需非受限出口）。
+
+## 2026-10-10（行情数据能力补充任务：统一数据源扩展点）
+
+- 新增 `venue/market_source.py::MarketSourceAdapter`（runtime_checkable）：免费公开/付费源经适配器
+  转换为**既有 MarketState 契约**；`connect/disconnect/poll_states/latest_market`；不为某源另建状态机/存储。
+- 新增默认源适配器 `connectors/binance/public_source.py::BinancePublicSourceAdapter`（复用既有
+  LiveMarketDataRuntime，不重写传输）。
+- `runtime/public_market.py::PublicMarketPump` 改为**通用适配器驱动**（不再绑定 Binance pump_once）；
+  assembly 经注入缝 `runtime.market_source_adapter` 支持任意源；默认 Binance 路径 connector 负责连接；
+  data timestamp 由 MarketState 统一推进；history 在 pump.start 前接线（修竞态）。
+- 新增测试：`tests/integration/test_public_source_extension.py`（自定义免费源贯通 + 失败诚实暴露 + 协议）
+  ；`test_public_market_wiring.py` 重写为默认 Binance 源的通用路径验证。
+- 全量 **2464 passed / 0 failed / 24 skipped**；无新依赖、未触碰写路径与核心所有权、CAPITAL 仍禁用。
+- 真实公网 451 依旧（NOT RUN，未伪造）。

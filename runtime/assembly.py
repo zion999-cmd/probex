@@ -1168,26 +1168,77 @@ class ProductRuntime:
         provider.start()
 
     def _start_public_market(self) -> None:
-        """Batch 3 (G-A2/G-B2)：把产品入口接到**真实持续公网行情**（只读；无需凭据）。"""
-        from connectors.binance.market_data.endpoints import REST_BASE_URL, WS_HOST
-        from connectors.binance.market_data.runtime import (
-            LiveMarketDataConfig, LiveMarketDataRuntime)
-        from connectors.binance.market_data.transport import ReconnectPolicy, connect as _real_connect
-        transport_factory = getattr(self, "_public_transport_factory", None) or _real_connect
-        from connectors.binance.market_data.snapshot import UrllibJsonClient
-        from connectors.binance.market_data.transport import ReconnectPolicy, connect
-        from connectors.binance.market_connector import BinanceMarketDataConnector
-        from domain.instruments import instrument_id_for
+        """把产品入口接到公开行情（默认 Binance 公开源；经统一 `MarketSourceAdapter`，只读）。
+
+        扩展点：任何实现 `venue.market_source.MarketSourceAdapter` 的源都可通过注入缝
+        `runtime.market_source_adapter` 接入（免费/付费源），无需修改核心所有权。
+        """
         from product.market_projection import BoundedMarketHistory
-        from runtime.public_market import PublicMarketConfig, PublicMarketPump
-        from venue.identity import binance_venue
+        from runtime.public_market import PublicMarketPump
 
         values = self._config_values()
         history_capacity = int(values.get("projection.history_capacity", 6_000) or 6_000)
-        # 只读公网默认接主网公开行情；可显式指向 Binance 演示/测试网公开端点
+        injected = getattr(self, "market_source_adapter", None)
+        if injected is not None:
+            adapter = injected
+            connector = getattr(self, "market_data_connector", None)
+        else:
+            adapter, connector = self._build_binance_public_source(
+                history_capacity=history_capacity, values=values)
+        history = BoundedMarketHistory(capacity=history_capacity, run_id=self._session.run_id)
+
+        def _on_mark(price: float, received_at: int) -> None:
+            accounting = self._accounting
+            if accounting is not None:
+                accounting.update_mark_price(self.profile.symbol, price, timestamp=received_at)
+
+        def _on_state(state: object) -> None:
+            # 统一推进 data timestamp（取自 MarketState 的 exchange 时间；真实事实驱动）
+            try:
+                ts = int(state.time.as_of_exchange_ts)
+                self.note_data_timestamp(ts)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                self._persist_market_point()
+            except Exception:  # noqa: BLE001
+                pass
+
+        pump = PublicMarketPump(
+            adapter, history=history, clock=self.profile.clock, connector=connector,
+            pump_timeout_s=0.5, max_states=256, on_mark=_on_mark, on_state=_on_state)
+        # 默认路径的 connector 同时负责 runtime.connect + 置 connected；自定义源只有 adapter
+        if connector is not None:
+            connector.connect()
+        else:
+            adapter.connect()
+        # 先把 history 接到 self（on_state 会立刻在 pump 线程上触发 persist，不能晚于 start）
+        self._public_pump = pump
+        self._market_connector = connector
+        self._history = history
+        pump.start()
+        self._service.market_state = lambda: (history.states()[-1] if history.states() else None)
+        self._service.market_history = lambda: history
+        log_event("runtime", "public_market_start", runtime_id=self._identity.runtime_id,
+                  run_id=self._session.run_id, source=adapter.source_id)
+
+    def _build_binance_public_source(self, *, history_capacity: int,
+                                      values: dict[str, object]) -> tuple[object, object]:
+        """默认免费源：Binance 公开 REST/WS（无需凭据）经适配器接入。"""
+        from connectors.binance.market_data.endpoints import REST_BASE_URL, WS_HOST
+        from connectors.binance.market_data.runtime import (
+            LiveMarketDataConfig, LiveMarketDataRuntime)
+        from connectors.binance.market_data.transport import (
+            ReconnectPolicy, connect as _real_connect)
+        from connectors.binance.market_data.snapshot import UrllibJsonClient
+        from connectors.binance.market_connector import BinanceMarketDataConnector
+        from connectors.binance.public_source import BinancePublicSourceAdapter
+        from domain.instruments import instrument_id_for
+        from venue.identity import binance_venue
+
         rest_base = str(values.get("market.public_rest_base", REST_BASE_URL))
         ws_host = str(values.get("market.public_ws_host", WS_HOST))
-        # 测试注入缝（默认真实组件；仅同进程测试使用，不形成能力）
+        transport_factory = getattr(self, "_public_transport_factory", None) or _real_connect
         http_client = getattr(self, "_public_http_client", None) or UrllibJsonClient(base_url=rest_base)
         venue_identity = binance_venue(environment=VenueEnvironment.LIVE)
         runtime = LiveMarketDataRuntime(
@@ -1201,48 +1252,14 @@ class ProductRuntime:
             http_client=http_client,
             transport_factory=lambda url, timeout_s: transport_factory(url, timeout_s=timeout_s),
             clock=self.profile.clock)
-        history = BoundedMarketHistory(capacity=history_capacity, run_id=self._session.run_id)
         connector = BinanceMarketDataConnector(
             runtime=runtime, venue_identity=venue_identity,
             instrument_id=instrument_id_for(self.profile.symbol, venue_id=venue_identity.venue_id),
             clock=self.profile.clock)
-
-        def _on_mark(price: float, received_at: int) -> None:
-            accounting = self._accounting
-            if accounting is not None:
-                accounting.update_mark_price(self.profile.symbol, price, timestamp=received_at)
-
-        pump = PublicMarketPump(
-            PublicMarketConfig(symbol=self.profile.symbol, rest_base=rest_base, ws_host=ws_host,
-                               pump_timeout_s=0.5, max_messages=256, history_capacity=history_capacity),
-            history=history, clock=self.profile.clock, on_mark=_on_mark,
-            on_event=self._persist_public_event)
-        pump.attach_runtime(runtime, connector)
+        adapter = BinancePublicSourceAdapter(runtime)
         runtime.load_trading_rules()
         self._trading_rules = runtime.trading_rules
-        connector.connect()                       # ⇒ runtime.connect()（真实 WS）
-        pump.start()
-        self._public_pump = pump
-        self._market_connector = connector
-        self._history = history
-        self._projection_config = self._feed_provider and self._feed_provider.config.projection
-        self._service.market_state = lambda: runtime.history[-1] if runtime.history else None
-        self._service.market_history = lambda: history
-        log_event("runtime", "public_market_start", runtime_id=self._identity.runtime_id,
-                  run_id=self._session.run_id, rest_base=rest_base, ws_host=ws_host)
-
-    def _persist_public_event(self, event: object) -> None:
-        """真实公网事件 ⇒ run 级市场点 + 逐笔持久化（复用既有 sink；节流/best-effort）。"""
-        try:
-            self._persist_market_point()      # type: ignore[attr-type=ignore]
-        except Exception:  # noqa: BLE001
-            pass
-        from market.events.payloads import TradePayload
-        if isinstance(getattr(event, "payload", None), TradePayload):
-            try:
-                self._persist_trade(event)
-            except Exception:  # noqa: BLE001
-                pass
+        return adapter, connector
 
     def _raw_fact_lookup(self, kind: str, identity: str) -> object | None:
         """F5：把已批准的 raw-fact kind 接到**既有 Owner**（canonical identity 直接查找）。
@@ -1654,10 +1671,9 @@ class ProductRuntime:
         """把当前市场状态按 bucket 节流写入该 run 的持久化时间线（best-effort，不打断运行）。"""
         provider = self._feed_provider
         state = provider.last_state if provider is not None else None
-        if state is None and self._public_pump is not None:
-            runtime = getattr(self._public_pump, "_runtime", None)
-            history = getattr(runtime, "history", ()) if runtime is not None else ()
-            state = history[-1] if history else None
+        if state is None and self._history is not None:
+            hstates = self._history.states() if callable(getattr(self._history, "states", None)) else ()
+            state = hstates[-1] if hstates else None
         if state is None:
             return
         try:

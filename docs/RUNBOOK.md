@@ -79,6 +79,17 @@ scripts/probex.sh up --mode paper --market-source binance-public
 ```
 若当前出口被 Binance 限制（HTTP 451），产品不应退回伪造数据：connector health 会变为 FAILED/RECONNECTING；需更换出口（如不同地区隧道）。
 
+#### 2.0.1 其他免费公开 / 未来付费行情源（统一适配器扩展点）
+
+任何数据源只需实现适配器协议 `venue/market_source.py::MarketSourceAdapter`
+（`connect / disconnect / poll_states ⇒ 既有 MarketState / latest_mark`），即可经统一泵接入，
+**不修改核心账本、风险或订单状态所有权，也不新建状态机/存储**。
+
+- 默认源（Binance 公开）适配器：`connectors/binance/public_source.py`
+- 装配扩展缝：`runtime.market_source_adapter`（注入自定义源）；`MarketSourceAdapter` 是运行时可检查协议
+- 付费源：当前只保留该接口与配置扩展点，不购买、不实现未经验证的供应商专属功能
+- 数据源失败必须如实抛出（产品不伪报成功；见 `test_public_source_extension.py`）
+
 ### 2.1 直接调用产品入口（不使用脚本）
 
 等价的最小命令：
