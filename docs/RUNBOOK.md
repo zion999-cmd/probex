@@ -171,6 +171,9 @@ blockers metrics capabilities reasons runs execution ops actions action run expl
 
 ---
 
+> **实时刷新**：页面正文每 5s 轮询 `/api/v1/snapshot` 静默更新（非 WS，WS 按提案延期）。
+> Market 页为非破坏更新（保留图表与用户画线）；当标签页隐藏、输入聚焦或已展开 drill-down 时暂停轮询。
+
 ## 5. 停止、崩溃与状态语义
 
 | 情况 | 结果 |

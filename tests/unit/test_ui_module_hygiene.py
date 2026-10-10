@@ -83,6 +83,19 @@ class UiModuleHygieneTest(unittest.TestCase):
                     self.assertTrue(_imported(source, name) or _defined(source, name),
                                     f"{path.name} uses {name} without importing/defining it")
 
+    def test_console_polls_the_surface_and_is_interaction_safe(self) -> None:
+        """锁定正文轮询契约：定时刷新 + 非破坏 refresh 优先 + 交互保护。"""
+        console = (UI_ROOT / "client" / "console.js").read_text(encoding="utf-8")
+        self.assertIn("SURFACE_REFRESH_MS", console)
+        self.assertIn("maybeRefreshSurface", console)
+        self.assertIn("surfaceInteractionPaused", console)
+        # 轮询优先使用页面的非破坏 refresh，缺省才整体重渲染
+        self.assertIn("module.refresh", console)
+        # market 页面必须提供非破坏 refresh（保留用户画线）
+        market = (UI_ROOT / "pages" / "market" / "page.js").read_text(encoding="utf-8")
+        self.assertRegex(market, r"export\s+async\s+function\s+refresh\b")
+        self.assertIn("liveWorkbench.refresh", market)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

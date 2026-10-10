@@ -66,6 +66,7 @@ async function mountDecisionDrilldown(host) {
       try {
         const payload = await fetchDecisionDetail(decisionId);
         panel.innerHTML = renderDecisionDetail(payload.detail);
+        panel.dataset.panelOpen = "1";        // 防止 surface 轮询关闭用户展开的面板
       } catch (error) {
         panel.innerHTML = `<div class="bad">ERROR: ${escapeHtml(String(error))} ` +
           `<div class="muted">恢复：确认该 decision 是否属于当前运行（历史 run 的因果链未持久化），` +

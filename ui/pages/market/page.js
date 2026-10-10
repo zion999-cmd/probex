@@ -149,7 +149,7 @@ export async function render(rest = []) {
 
   const body = chart +
     `<section><h2>Order book / microstructure</h2>${orderBookRows(depth)}</section>` +
-    `<section><h2>Recent trades</h2>${tradesTable(trades.trades)}</section>` +
+    `<section><h2>Recent trades</h2><div data-recent-trades>${tradesTable(trades.trades)}</div></section>` +
     `<section class="wide"><h2>L2 depth heatmap</h2>` +
       '<canvas id="heatmap" width="1200" height="320"></canvas>' +
       `<div class="row"><span class="k">note</span><span class="v unknown">${escapeHtml(HEATMAP_NOTE)}</span></div></section>` +
@@ -171,6 +171,8 @@ export async function render(rest = []) {
 
 let lastMarket = null;
 let lastRunReview = null;
+let liveWorkbench = null;
+let liveTimeframe = "1m";
 
 export async function mount(rest = []) {
   // P0001.17 §9：Run Review 的记录事实图表（历史 run；只读展示 + 事实定位）
@@ -196,6 +198,7 @@ export async function mount(rest = []) {
     if (canvas) drawHeatmap(canvas, depth.depth);
 
     let timeframe = "1m";
+    liveTimeframe = "1m";
     // P0001.17 §3：把"当前 run + 图表选择"写入 selection（切换 run 时清空已选对象，避免串 run）
     updateSelection({ surface: "market", run: snapshot.runtime.runtime_id, symbol: snapshot.runtime.symbol,
                       timestamp: focusTs || null, timeframe: "1m",
@@ -207,6 +210,7 @@ export async function mount(rest = []) {
     };
     const refreshChart = async (interval) => {
       timeframe = interval;
+      liveTimeframe = interval;
       const [series, tracePayload] = await Promise.all([candlesFor(interval), fetchJson(ENDPOINTS.evidence)]);
       const nextTrace = (tracePayload.evidence || {}).trace || [];
       if (workbench) workbench.refresh({ candles: series.candles || [], trace: nextTrace,
@@ -231,6 +235,7 @@ export async function mount(rest = []) {
       const host = document.getElementById("kline-chart");
       if (host) host.innerHTML = '<div class="unknown">UNKNOWN (chart library unavailable in this environment)</div>';
     }
+    liveWorkbench = workbench;
 
     const controls = document.getElementById("replay-controls");
     if (controls) replayControls(controls, {
@@ -248,3 +253,35 @@ export async function mount(rest = []) {
     }
   
 }
+
+/**
+ * 非破坏实时刷新（console surface poll 调用）：在不重建图表、保留用户画线的前提下更新数据。
+ * 只在 live 视图有效；run-review / 无 workbench 时返回（让 console 回退整体渲染）。
+ */
+export async function refresh(rest = []) {
+  if (!liveWorkbench) return;
+  const active = rest[0] && VIEWS.includes(rest[0]) ? rest[0] : "live";
+  if (active !== "live") return;
+  const interval = liveTimeframe;
+  const [series, tracePayload, snapshot] = await Promise.all([
+    fetchJson(`${ENDPOINTS.marketCandles}?interval=${interval}&limit=300`),
+    fetchJson(ENDPOINTS.evidence), fetchSnapshot(),
+  ]);
+  liveWorkbench.refresh({
+    candles: (series.candles || {}).candles || [],
+    trace: (tracePayload.evidence || {}).trace || [],
+    source: (series.candles || {}).source,
+  });
+  // 次要面板（order book/trades/heatmap/prediction）：轻量更新有容器的部分
+  try {
+    const trades = await fetchJson(ENDPOINTS.marketTrades);
+    const tradesHost = document.querySelector("[data-recent-trades]");
+    if (tradesHost) tradesHost.innerHTML = tradesTable(trades.trades);
+  } catch (error) { /* best effort */ }
+  const predictionHost = document.getElementById("market-prediction");
+  if (predictionHost && snapshot.prediction) {
+    predictionHost.innerHTML = predictionSection(snapshot.prediction);
+    mountPredictionPanel(document.getElementById("prediction-horizons"), snapshot.prediction);
+  }
+}
+

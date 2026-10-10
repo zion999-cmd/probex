@@ -2520,3 +2520,17 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
   ；`test_public_market_wiring.py` 重写为默认 Binance 源的通用路径验证。
 - 全量 **2464 passed / 0 failed / 24 skipped**；无新依赖、未触碰写路径与核心所有权、CAPITAL 仍禁用。
 - 真实公网 451 依旧（NOT RUN，未伪造）。
+
+## 2026-10-10（全量 UI 查漏补缺）
+
+- 缺口：console 只轮询 Header，正文在 hash 之间静态（无法体现"真实行情持续更新"）。
+- `ui/client/console.js`：新增 SURFACE_REFRESH_MS=5000 + maybeRefreshSurface；优先页面非破坏
+  `module.refresh`（拿不到才整体重渲染）；surfaceInteractionPaused 保护（隐藏标签/焦点/`[data-panel-open]`）。
+- `ui/pages/market/page.js`：导出非破坏 `refresh`（liveWorkbench.refresh 只换数据，不重建图表/不清用户画线）；
+  最近成交面板加 data-recent-trades；mount 记录 liveWorkbench/liveTimeframe。
+- `ui/pages/activity/page.js`：展开 decision drilldown 时标 panel dataset.panelOpen（轮询不关闭它）。
+- 守卫：`test_ui_module_hygiene.py` 新增 surface-poll 契约断言。
+- **浏览器实测**（慢节奏产品入口，20 events/s）：7s 窗口内无 hash 变化，banner data_ts
+  1700001510000 → 1700001785000，view 重渲染、图表仍挂载、画线保留。
+- 全量 **2463 passed / 0 failed / 24 skipped**（本轮 +2 净守卫）；无新依赖、未触写路径/核心所有权/CAPITAL。
+- 受阻不变：真实公网 451、P0001.16 写入收口、策略有效性（I1/I2/I3）。

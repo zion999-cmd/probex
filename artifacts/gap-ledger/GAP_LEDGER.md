@@ -149,4 +149,5 @@
 - 2026-10-10 Batch 3 完成：`--market-source binance-public` 把产品入口接到既有真实公网 connector（pump 线程 + 既有 run registry 持久化）；新增 `runtime/public_market.py` 与离线集成测试；真实公网验收因当前网络被 Binance 451 geo-block（NOT RUN，诚实标注）。
 - 2026-10-10 修正：`docs/RUNBOOK.md` 被全局 gitignore 的 `docs` 规则静默排除（clean checkout 缺文件）⇒ force-track 该交付物；detached checkout 复核 2461 全绿。
 - 2026-10-10 行情能力补充任务：新增统一数据源扩展点 `venue/market_source.py::MarketSourceAdapter`（任何免费/付费源转换为既有 MarketState，无需改核心所有权）+ Binance 默认源适配器 `connectors/binance/public_source.py`；`PublicMarketPump` 改为通用适配器驱动；新增扩展点测试（自定义免费源 + 失败诚实暴露）；**2464 passed**；detached 复核 2464（提交后）。
+- 2026-10-10 全量 UI 查漏补缺：补**正文 surface 轮询**（`console.js` SURFACE_REFRESH_MS=5000；优先页面非破坏 `refresh`，否则整体重渲染；交互保护：隐藏标签/焦点/打开的 drilldown）。Market 页新增非破坏 refresh（`liveWorkbench.refresh` 保留用户画线）。实测 7s 内 data_ts 前进、图表不重建；新增/扩展守卫。**2463 passed**。全量 UI 矩阵见 `UI_MATRIX.md`。
 - 2026-10-10 第二轮全局复核：重新抽取全部 38 个 Acceptance 段逐条核对（澄清 P0001.1 §2 的 10 项是原总架构文本、明确不属实施范围）；分层实测 unit 1591 / integration 489 / fault 308 / replay 49 全绿；detached clean checkout 2461 全绿；无空壳页面、无遗留进程。结论：无需新增授权的缺口已全部闭合。
