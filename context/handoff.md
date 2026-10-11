@@ -2619,3 +2619,14 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - 测试：+18（test_universe 外）：tracker 守恒、组合预算纯函数（6000+6000>10000、等于放行、gross 不抵消、
   在途占用、unresolved fail-closed、reduce-only/反手/缺证据）、真实 ExecutionEngine 端到端（含在途成交前占预算）。
 - 全量 **2513 passed / 0 failed / 24 skipped**。未改 AccountingCore/OrderTracker 所有权、MakerPolicy、写路径、CAPITAL。
+
+## 2026-10-11（P0017.2 L1 验收修正：缺 mark 组合低估）
+
+- 问题（人类指出）：assembly commitment provider 对 `notional=None`（非 flat 持仓缺有效 mark）静默跳过，
+  可能低估组合 gross，使其他标的新单绕过组合预算；单标的闸不能替代跨标的组合检查。
+- 修正 `runtime/assembly.py::_portfolio_commitment_provider`：非 flat 持仓缺 mark ⇒ 标记该 symbol
+  进 `has_unresolved_by_symbol` ⇒ 组合闸 `PORTFOLIO_EXPOSURE_UNKNOWN` fail-closed；flat/未交易 symbol 不误报；
+  恢复 mark 后正常重估。
+- 新增 4 项 `test_portfolio_gate_engine` 测试：跨标的缺 mark 拦截、mark 恢复、flat 不阻断、未交易 symbol 不标记。
+- L2（MakerPolicy sizing 感知组合限额）按人类决定暂缓；Testnet/LIVE 组合风险仍未验证（runtime/testnet 不接组合闸）。
+- 全量 **2517 passed / 0 failed / 24 skipped**。

@@ -94,9 +94,9 @@
 
 ---
 
-## 4. 已知限制 / 未覆盖（诚实记录，不扩大结论）
+## 4. 已知限制 / 未覆盖（L1 已修复；其余诚实记录）
 
-1. **[S→应收紧] 组合投影对缺 mark 持仓是"跳过"而非 fail-closed**（`runtime/assembly.py` `if pos.notional`）。当前靠单标的 `MISSING_MARK_PRICE` 纵深防御，PAPER 安全；但严格按设计 §12，组合层最好在"有非 flat 持仓却无法取 mark"时直接返回不可建立上界。**建议作为后续小改，不在本次最小改动内。**
+1. **[已修复 2026-10-11] 组合投影对缺 mark 持仓原是"跳过"，现 fail-closed**（`runtime/assembly.py` `if pos.notional`）。**已修正**：`runtime/assembly.py` provider 现在检测"非 flat 持仓缺有效 mark"并标记该 symbol 不可量化，组合闸返回 `PORTFOLIO_EXPOSURE_UNKNOWN`；跨标的新单被拒（A 缺 mark、买 C 被拦），恢复 mark 后重新可评估，flat/未交易 symbol 不误报。新增 4 项引擎集成测试。**残留说明**：单标的 `MISSING_MARK_PRICE` 闸仍作为第二道防线保留。
 2. **[S] MakerPolicy 的事前报价预算 `risk/budget.py::remaining_exposure_budget` 尚未纳入 `max_portfolio_gross_notional`**：组合闸在 submit 时强制（事后不会超限），但策略**报价规模**暂不会因组合限额而缩小。这意味着策略可能继续报价、在 submit 被组合闸拒（安全但可能产生更多 reject）。设计 §7.1/预算报告提到"MakerPolicy 自动据此缩减"，本次只完成了硬闸，**未改 `risk/budget.py`**（避免改策略行为，符合非目标"不修改 MakerPolicy"）。是否要让预算函数感知组合限额，需要你决策（会触及策略 sizing，建议单列）。
 3. **[X] 真实多标的 PAPER 端到端**：组合预算的端到端测试用真实 `AccountingCore/OrderTracker/ExecutionEngine` + PaperBroker（离线确定性），但**不是**多 symbol 真实行情驱动的长时段运行；P0017.1 的真实行情 E2E 本身仍 NOT RUN（451）。
 4. **[X] Testnet/LIVE 组合预算**：`runtime/testnet.py` 未接线组合闸（0.2），无真实/测试覆盖；这是独立授权事项。

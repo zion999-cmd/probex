@@ -1583,16 +1583,25 @@ class ProductRuntime:
             from risk.portfolio_budget import PortfolioCommitment
             positions: dict[str, float] = {}
             net_qty: dict[str, float] = {}
-            for pos in accounting.positions():
-                if pos.notional:
+            # L1 修正（2026-10-11）：非 flat 持仓缺有效 mark ⇒ notional 不可知。
+            # 不能静默跳过（会低估组合 gross，使其他标的新单绕过组合预算）；
+            # 标记该 symbol 不可量化，组合闸以 PORTFOLIO_EXPOSURE_UNKNOWN fail-closed。
+            unpriced_symbols: set[str] = set()
+            for pos in accounting.positions:
+                if pos.qty != 0.0 and pos.notional is None:
+                    unpriced_symbols.add(pos.symbol)
+                elif pos.notional:
                     positions[pos.symbol] = float(pos.notional)
                 net_qty[pos.symbol] = float(pos.qty)
             pending = manager.tracker.exposure_by_symbol()
+            unresolved = {s: bool(manager.unresolved_count_for_symbol(s))
+                          for s in set(positions) | set(pending) | unpriced_symbols}
+            for symbol in unpriced_symbols:
+                unresolved[symbol] = True
             return PortfolioCommitment(
                 position_by_symbol=positions,
                 pending_by_symbol={s: float(v["total"]) for s, v in pending.items()},
-                has_unresolved_by_symbol={s: bool(manager.unresolved_count_for_symbol(s))
-                                           for s in set(positions) | set(pending)}), net_qty
+                has_unresolved_by_symbol=unresolved), net_qty
         return provider
 
     def _orders_for_decision(self, decision_id: str) -> tuple[object, ...]:

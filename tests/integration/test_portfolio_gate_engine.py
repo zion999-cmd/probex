@@ -32,18 +32,21 @@ class PortfolioGateEngineTest(unittest.TestCase):
             kill_switch_mode=KillSwitchMode.NORMAL)
 
         def commitment_provider():
-            positions = {s: p.notional for s, p in
-                          ((s, self.accounting.position(s)) for s in ("BTCUSDT", "ETHUSDT"))
-                          if p.notional}
+            positions = {}
+            net_qty = {}
+            unpriced = set()
+            for pos in self.accounting.positions:
+                net_qty[pos.symbol] = pos.qty
+                if pos.qty != 0.0 and pos.notional is None:
+                    unpriced.add(pos.symbol)      # L1：非 flat 缺 mark ⇒ 不可量化
+                elif pos.notional:
+                    positions[pos.symbol] = float(pos.notional)
             pending = self.tracker.exposure_by_symbol()
+            unresolved = {s: (s in unpriced) for s in set(positions) | set(pending) | unpriced}
             return PortfolioCommitment(
-                position_by_symbol={k: float(v) for k, v in positions.items()},
+                position_by_symbol=positions,
                 pending_by_symbol={s: v["total"] for s, v in pending.items()},
-                has_unresolved_by_symbol={s: (c > 0) for s, c in
-                                           ((s, sum(1 for o in self.tracker.unresolved_orders()
-                                                     if o.symbol is None or o.symbol == s))
-                                            for s in ("BTCUSDT", "ETHUSDT"))}), \
-                {s: self.accounting.position(s).qty for s in ("BTCUSDT", "ETHUSDT")}
+                has_unresolved_by_symbol=unresolved), net_qty
 
         self.engine = ExecutionEngine(
             accounting=self.accounting, gate=__import__("risk.gate", fromlist=["RiskGate"]).RiskGate(self.limits),
@@ -105,6 +108,96 @@ class PortfolioGateEngineTest(unittest.TestCase):
             portfolio_commitment_provider=lambda: (
                 PortfolioCommitment({}, {}, {}), {}))
         result = engine.submit(self._buy("ETHUSDT", 2.0, 3_000.0), now_ms=5)
+        self.assertTrue(result.submitted)
+
+    # ------------------------------------------------------------------
+    # L1 修正：非 flat 持仓缺 mark 时组合闸必须 fail-closed（不能静默跳过）
+    # ------------------------------------------------------------------
+    def _fresh_engine(self):
+        """L1 测试需要可重复 bootstrap 的独立账本/引擎。"""
+        accounting = AccountingCore(initial_balance=100_000.0)
+        tracker = OrderTracker(session_id="p00172-l1")
+        manager = OrderManager(tracker=tracker, adapter=PaperBroker())
+
+        def provider():
+            pos_map, net_qty, unpriced = {}, {}, set()
+            for pos in accounting.positions:
+                net_qty[pos.symbol] = pos.qty
+                if pos.qty != 0.0 and pos.notional is None:
+                    unpriced.add(pos.symbol)
+                elif pos.notional:
+                    pos_map[pos.symbol] = float(pos.notional)
+            pending = tracker.exposure_by_symbol()
+            unresolved = {s: s in unpriced for s in set(pos_map) | set(pending) | unpriced}
+            return PortfolioCommitment(pos_map,
+                                         {s: v["total"] for s, v in pending.items()},
+                                         unresolved), net_qty
+
+        from risk.gate import RiskGate
+        return accounting, tracker, manager, ExecutionEngine(
+            accounting=accounting, gate=RiskGate(self.limits), manager=manager,
+            portfolio_commitment_provider=provider)
+
+    def _fill(self, engine, manager, tracker, symbol: str, qty: float, price: float,
+                *, now_ms: int, mark: float | None):
+        """提交并全额成交（mark=None：建立了持仓但不设 mark，模拟缺有效标记价格）。"""
+        submitted = engine.submit(self._buy(symbol, qty, price), now_ms=now_ms)
+        assert submitted.submitted, submitted.decision.details if submitted.rejected else "submitted"
+        manager.adapter.fill(submitted.order.client_order_id, quantity=qty, price=price,
+                                timestamp=now_ms + 1)
+        engine.poll(now_ms=now_ms + 2)
+        if mark is not None:
+            engine.accounting.update_mark_price(symbol, mark, timestamp=now_ms + 3)
+        return submitted
+
+    def _record_unpriced_fill(self, accounting: AccountingCore, symbol: str, side: Side,
+                                qty: float, price: float):
+        """直接用 canonical Fill 建立一个成交后缺 mark 的持仓（FillLedger 双键去重）。"""
+        from market.events.types import Venue
+        from portfolio.types import Fill
+        fill = Fill(
+            fill_id=f"f-{symbol}", order_id=f"o-{symbol}", venue=Venue.BINANCE,
+            symbol=symbol, side=side, price=price, quantity=qty, fee=0.0, fee_asset="USDT",
+            trade_id=f"t-{symbol}", exchange_ts=1, receive_ts=1)
+        accounting.record_fill(fill)
+
+    def test_missing_mark_on_one_holding_blocks_new_order_on_other_symbol(self) -> None:
+        accounting, tracker, manager, engine = self._fresh_engine()
+        # A：成交后从未设 mark ⇒ 持仓名义不可估（真实的 markless holding）
+        self._record_unpriced_fill(accounting, "BTCUSDT", Side.BUY, 0.1, 60_000.0)
+        self.assertIsNone(accounting.position("BTCUSDT").notional)
+        # B：同样用 canonical Fill 建立有 mark 的 2000 名义持仓（不经过 submit，避免被 A 的不可估状态拦）
+        self._record_unpriced_fill(accounting, "ETHUSDT", Side.BUY, 2 / 3, 3_000.0)
+        accounting.update_mark_price("ETHUSDT", 3_000.0, timestamp=2)
+        # 买 C 3000：A 缺 mark ⇒ 组合不可估 ⇒ 必须拒绝（不得跳过 A 而放行）
+        result = engine.submit(self._buy("SOLUSDT", 30.0, 100.0), now_ms=20)
+        self.assertTrue(result.rejected)
+        self.assertEqual(result.decision.reason_code.value, "PORTFOLIO_EXPOSURE_UNKNOWN")
+        self.assertNotIn("SOLUSDT", {o.symbol for o in tracker.orders})
+
+    def test_portfolio_re_evaluates_after_mark_recovers(self) -> None:
+        accounting, tracker, manager, engine = self._fresh_engine()
+        self._record_unpriced_fill(accounting, "BTCUSDT", Side.BUY, 0.05, 60_000.0)
+        accounting.update_mark_price("ETHUSDT", 3_000.0, timestamp=19)  # 候选标的自身需有 mark
+        blocked = engine.submit(self._buy("ETHUSDT", 1.0, 3_000.0), now_ms=20)
+        self.assertTrue(blocked.rejected)
+        self.assertEqual(blocked.decision.reason_code.value, "PORTFOLIO_EXPOSURE_UNKNOWN")
+        accounting.update_mark_price("BTCUSDT", 60_000.0, timestamp=21)
+        allowed = engine.submit(self._buy("ETHUSDT", 1.0, 3_000.0), now_ms=22)
+        self.assertTrue(allowed.submitted, allowed.decision.details if allowed.rejected else "")
+
+    def test_flat_position_without_mark_does_not_block(self) -> None:
+        # 无持仓 + 有有效 mark：flat 不构成不可估持仓，正常走组合闸
+        accounting, tracker, manager, engine = self._fresh_engine()
+        accounting.update_mark_price("ETHUSDT", 3_000.0, timestamp=1)
+        result = engine.submit(self._buy("ETHUSDT", 1.0, 3_000.0), now_ms=20)
+        self.assertTrue(result.submitted, result.decision.details if result.rejected else "")
+
+    def test_unpriced_symbol_with_no_position_is_not_flagged(self) -> None:
+        # 未交易过的 symbol 既无持仓也无 mark，不应被当成不可估持仓（只看实际持仓）
+        accounting, tracker, manager, engine = self._fresh_engine()
+        accounting.update_mark_price("ETHUSDT", 3_000.0, timestamp=1)
+        result = engine.submit(self._buy("ETHUSDT", 1.0, 3_000.0), now_ms=20)
         self.assertTrue(result.submitted)
 
 
