@@ -2543,3 +2543,11 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - 最终提案：`proposals/P0017.1-multi-symbol-market-data-platform.md`（逐文件影响、数据/状态契约、
   订阅限制核实计划、离线/真实双验收、3 个待确认项）。
 - 代码/核心 Owner/TESTNET 仓位均未改动；`currentProposal` 保持 null，等审阅定稿后再设置并开工。
+
+## 2026-10-11（P0017.1 Batch 1：限制核实 + Universe 发现）
+
+- `artifacts/p0017/P0017_LIMITS_FINDINGS.md`：WS 合流 200 stream/连接、300 连接/IP 等文档限制
+  （451 无法实时复核，待真实出口复验）；保守默认 50 stream/连接、`max_symbols=16`；exchangeInfo 缓存 6h。
+- 新增 `connectors/binance/market_data/universe.py`：`parse_universe` 纯函数（TRADING+永续+quote 白名单，
+  单条目畸形跳过、结构错误 fail-closed、去重、可自定义 quote 集合），不动单 symbol `parse_exchange_info`。
+- 单测 `tests/unit/test_universe_discovery.py`（7 tests）；既有 binance depth/live market 41 tests 不回归。

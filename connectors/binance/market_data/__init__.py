@@ -26,6 +26,7 @@ from connectors.binance.market_data.errors import (
     WebSocketTimeout,
 )
 from connectors.binance.market_data.exchange_info import TradingRules, parse_exchange_info
+from connectors.binance.market_data.universe import Universe, UniverseSymbol, parse_universe
 from connectors.binance.market_data.mark import MarkPriceObservation, parse_mark_price
 from connectors.binance.market_data.runtime import (
     MarketDataBatch,
@@ -108,6 +109,9 @@ __all__ = [
     "parse_depth_diff",
     "parse_depth_snapshot",
     "parse_exchange_info",
+    "Universe",
+    "UniverseSymbol",
+    "parse_universe",
     "parse_mark_price",
     "parse_message",
     "stream_matches",
