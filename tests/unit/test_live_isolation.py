@@ -19,6 +19,8 @@ BOUNDARY_ALLOWED = {
     "transport.py": {"socket", "ssl", "os", "base64", "hashlib", "urllib"},
     "snapshot.py": {"time", "urllib", "json"},
     "runtime.py": {"time"},
+    # P0017.1：多标的采集编排层只需要采集线程；仍禁止交易/存储/凭据域
+    "multi_collector.py": {"time", "threading"},
 }
 
 SENSITIVE_ROOTS = {"socket", "ssl", "urllib", "time", "threading", "asyncio", "http", "os", "subprocess"}

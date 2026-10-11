@@ -2558,3 +2558,14 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
   （root/venue/symbol/kind/day/data.jsonl + manifest）；按 UTC 日分片、O_APPEND+fsync、
   单调校验、续写不重复、损坏/缺分片 fail-closed、manifest hash、区间/limit 读取、日缺口报告、symbol 隔离。
 - 10 个单测 `tests/unit/test_market_dataset.py`；全量 2482 passed（+17）。未接采集/API/UI（后续批次）。
+
+## 2026-10-11（P0017.1 Batch 3：多标的采集编排；数据源决策）
+
+- 人类决策：**不引入 CCXT、不做多数据源抽象**；多标的在现有 Binance `LiveMarketDataRuntime`
+  之上按"每标的一个 runtime"编排（复用 snapshot 对齐/pu/resync/重连/FeatureEngine；天然故障隔离）。
+- 新增 `connectors/binance/market_data/multi_collector.py`：`CollectorConfig`（max_symbols=16、
+  去重/上限校验）+ `MultiSymbolMarketCollector`（connect/pump_once/start/stop/订阅状态视图）。
+- 集成测试 `tests/integration/test_multi_collector.py`（5 tests）：symbol 隔离、单标的畸形报文不污染其他标的、
+  订阅视图、上限校验、on_batch sink 写入共享数据集按 symbol 隔离。
+- live 隔离守卫为 multi_collector 放行 time/threading（仍禁交易/存储/凭据）。
+- 全量 2487 passed / 0 failed / 24 skipped。下一步 Batch 4：只读 API（universe/symbol status/数据集查询）。
