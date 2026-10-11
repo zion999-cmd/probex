@@ -890,18 +890,22 @@ class ProductRuntime:
                                ("risk.max_open_order_exposure", "max_open_order_exposure"),
                                ("risk.max_position_notional", "max_position_notional"),
                                ("risk.max_daily_loss", "max_daily_loss"),
-                               ("risk.max_drawdown_pct", "max_drawdown_pct")):
+                               ("risk.max_drawdown_pct", "max_drawdown_pct"),
+                               ("risk.max_portfolio_gross_notional", "max_portfolio_gross_notional")):
                 if key in values:
                     limit_values[field] = float(values[key])
             self._risk_limits = RiskLimits(**limit_values)                    # type: ignore[arg-type]
+            engine_accounting = accounting if accounting is not None else __import__(
+                "portfolio.accounting", fromlist=["AccountingCore"]).AccountingCore(initial_balance=0.0)
             self._execution = ExecutionEngine(
-                accounting=(accounting if accounting is not None else __import__(
-                    "portfolio.accounting", fromlist=["AccountingCore"]).AccountingCore(initial_balance=0.0)),
+                accounting=engine_accounting,
                 # 只启用显式配置的限额：未配置的限额不强制对应事实存在（不是 bypass；配置了的仍严格判定）
                 gate=RiskGate(self._risk_limits),
                 manager=manager, book_healthy=True,
                 normalizer=normalizer,
-                latency_observer=lambda kind, ts: self._latency_note(kind, ts))
+                latency_observer=lambda kind, ts: self._latency_note(kind, ts),
+                portfolio_commitment_provider=self._portfolio_commitment_provider(
+                    engine_accounting, manager))
         # P0001.14：MakerPolicy / PredictionRuntime 均由显式配置构造（缺键 ⇒ None；不发明业务数值）
         _venue = self._resolve_venue_identity()
         _registry = self._resolve_instrument_registry()
@@ -1568,6 +1572,28 @@ class ProductRuntime:
             client_order_id=str(getattr(order, "client_order_id", "")),
             event=str(getattr(status, "value", status) or type(update).__name__),
             detail=str(getattr(update, "detail", "") or "")))
+
+    def _portfolio_commitment_provider(self, accounting: object, manager: object):
+        """P0017.2：构造组合 gross 一致视图（未配置组合限额时返回 None ⇒ 组合闸不生效）。"""
+        limits = getattr(self, "_risk_limits", None)
+        if limits is None or limits.max_portfolio_gross_notional is None:
+            return None
+
+        def provider():
+            from risk.portfolio_budget import PortfolioCommitment
+            positions: dict[str, float] = {}
+            net_qty: dict[str, float] = {}
+            for pos in accounting.positions():
+                if pos.notional:
+                    positions[pos.symbol] = float(pos.notional)
+                net_qty[pos.symbol] = float(pos.qty)
+            pending = manager.tracker.exposure_by_symbol()
+            return PortfolioCommitment(
+                position_by_symbol=positions,
+                pending_by_symbol={s: float(v["total"]) for s, v in pending.items()},
+                has_unresolved_by_symbol={s: bool(manager.unresolved_count_for_symbol(s))
+                                           for s in set(positions) | set(pending)}), net_qty
+        return provider
 
     def _orders_for_decision(self, decision_id: str) -> tuple[object, ...]:
         execution = getattr(self, "_execution", None)

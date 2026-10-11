@@ -106,6 +106,9 @@ class ExecutionEngine:
     exchange_available_balance_provider: Callable[[str], object | None] | None = None
     #: P0001.16：durable HWM 证据提供者（真实资金下 drawdown 必须 known，由既有 HWM owner 提供）
     high_watermark_provider: Callable[[], object | None] | None = None
+    #: P0017.2：组合 gross 预算一致视图提供者，返回
+    #: `(PortfolioCommitment, {symbol: net_position_qty})`；None ⇒ 不做组合闸（单标的零回归）
+    portfolio_commitment_provider: Callable[[], tuple[object, dict[str, float]] | None] | None = None
     normalization_capacity: int = 200
     rejections: list[ExecutionRejected] = field(default_factory=list)
     _decisions: deque = field(default_factory=deque, init=False)
@@ -142,6 +145,18 @@ class ExecutionEngine:
 
     def submit(self, proposal: OrderProposal, *, now_ms: Milliseconds) -> ExecutionResult:
         """在**紧邻 submit** 的位置做一次新鲜风险检查。"""
+        # P0017.2：组合第二道闸（先于单标的闸；同一同步临界区，单决策线程顺序评估）。
+        # 只在配置了组合限额且提供了一致视图时生效；未配置 ⇒ 行为与既有完全一致。
+        portfolio_decision = self._evaluate_portfolio_budget(proposal, now_ms=now_ms)
+        if portfolio_decision is not None and portfolio_decision.rejected:
+            rejection = ExecutionRejected(proposal=proposal, decision=portfolio_decision,
+                                          timestamp=now_ms)
+            self.rejections.append(rejection)
+            self._decisions.append(RiskDecisionObservation(decision=portfolio_decision,
+                                                             proposal=proposal, timestamp=now_ms,
+                                                             client_order_id=None))
+            return ExecutionResult(timestamp=now_ms, decision=portfolio_decision, rejection=rejection)
+
         snapshot = self.snapshot(proposal.symbol, now_ms=now_ms)
         decision = self.gate.evaluate(proposal, snapshot, book_healthy=self.book_healthy)
         if decision.rejected:
@@ -223,10 +238,10 @@ class ExecutionEngine:
             self.accounting,
             symbol=symbol,
             now_ms=now_ms,
-            open_order_exposure=self.manager.open_order_exposure(),
-            confirmed_open_exposure=self.manager.confirmed_open_exposure,
-            uncertain_exposure=self.manager.uncertain_exposure,
-            unresolved_order_count=self.manager.unresolved_order_count,
+            open_order_exposure=self.manager.exposure_for_symbol(symbol),
+            confirmed_open_exposure=self.manager.confirmed_exposure_for_symbol(symbol),
+            uncertain_exposure=self.manager.uncertain_exposure_for_symbol(symbol),
+            unresolved_order_count=self.manager.unresolved_count_for_symbol(symbol),
             liquidation=liquidation,
             day_start_ts=self.day_start_fn(now_ms),
             historical_baseline=(None if self.historical_baseline_provider is None
@@ -238,6 +253,21 @@ class ExecutionEngine:
         )
 
     # ------------------------------------------------------------------ 内部
+
+    def _evaluate_portfolio_budget(self, proposal: OrderProposal, *,
+                                    now_ms: Milliseconds) -> RiskDecision | None:
+        """P0017.2 组合第二道闸；未接线/未配置限额 ⇒ None（不影响既有单标的路径）。"""
+        provider = self.portfolio_commitment_provider
+        if provider is None:
+            return None
+        provided = provider()
+        if provided is None:
+            return None
+        commitment, net_qty = provided
+        from risk.portfolio_budget import evaluate_portfolio_budget
+        return evaluate_portfolio_budget(
+            proposal, commitment, self.gate.limits,
+            net_position_qty_by_symbol=net_qty)
 
     def _account(self, updates: tuple[TrackerUpdate, ...]) -> tuple[Fill, ...]:
         """canonical Fill → AccountingCore（含 accounting 侧第二道去重）。"""

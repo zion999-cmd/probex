@@ -2601,3 +2601,21 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - `context/roadmap.md` 增加 P0017.1/.2/.3 行；`context/current_state.md` 增加 P0017.1 段。
 - `status.json`：`currentProposal` **保持 `P0017.1`**（提案未正式完成，按规范不在此处置 null；待 §7-B 验证或人类另有决定）。
 - 未启动 P0017.2/.3，未执行任何交易所写操作。
+
+## 2026-10-11（P0017.2 组合 gross-notional 预算实施，Batch 1–5）
+
+人类批准设计并指示实施（currentProposal=P0017.2）。
+- `risk/limits.py`：新增可选 `max_portfolio_gross_notional`（None=禁用，单标的零回归）。
+- `risk/types.py`：新增 reason `PORTFOLIO_NOTIONAL_LIMIT` / `PORTFOLIO_EXPOSURE_UNKNOWN`。
+- `risk/portfolio_budget.py`（新）：纯函数组合第二道闸（gross 非 net；持仓+在途+候选单；
+  可证明的 reduce-only 增量 0、超量/反手/缺净数量证据保守全额；unresolved fail-closed；≤ 允许）。
+- `execution/tracker.py`：新增只读 `exposure_by_symbol()`（confirmed/uncertain 分桶，守恒 Σ==total_pending）；
+  `UnresolvedOrder` 增加可选 symbol。
+- `execution/manager.py`：per-symbol exposure/unresolved 访问器（未知 symbol 的 unresolved 保守计入）。
+- `execution/engine.py`：submit 先组合闸后单标的闸（同一同步临界区，候选单被拦则不登记，无重复消费窗口）；
+  snapshot 在途作用域修正为 per-symbol（D7）；新增 portfolio_commitment_provider 注入点。
+- `runtime/assembly.py`：配置 risk.max_portfolio_gross_notional 时构造一致视图（accounting 持仓 + tracker 在途）。
+- reason catalog 增加两条人类解释。
+- 测试：+18（test_universe 外）：tracker 守恒、组合预算纯函数（6000+6000>10000、等于放行、gross 不抵消、
+  在途占用、unresolved fail-closed、reduce-only/反手/缺证据）、真实 ExecutionEngine 端到端（含在途成交前占预算）。
+- 全量 **2513 passed / 0 failed / 24 skipped**。未改 AccountingCore/OrderTracker 所有权、MakerPolicy、写路径、CAPITAL。

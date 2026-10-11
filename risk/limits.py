@@ -34,6 +34,8 @@ class RiskLimits:
     max_position_qty: float | None = None
     max_position_notional: float | None = None
     max_open_order_exposure: float | None = None
+    #: P0017.2：组合总名义上限（跨 symbol：持仓 + 在途）；`None`=不启用（默认，单标的零回归）
+    max_portfolio_gross_notional: float | None = None
     max_daily_loss: float | None = None
     max_drawdown_pct: float | None = None
     max_leverage: float | None = None
@@ -49,6 +51,7 @@ class RiskLimits:
             "max_position_qty",
             "max_position_notional",
             "max_open_order_exposure",
+            "max_portfolio_gross_notional",
             "max_daily_loss",
         ):
             value = getattr(self, field)

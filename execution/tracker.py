@@ -82,6 +82,8 @@ class UnresolvedOrder:
 
     client_order_id: str
     reason: str
+    #: P0017.2：所属 symbol（资料补齐时可填；未知为 None ⇒ 无法按 symbol 归属，保守计入）
+    symbol: str | None = None
 
 
 @dataclass
@@ -200,17 +202,46 @@ class OrderTracker:
         """`confirmed + uncertain` —— 这是 RiskSnapshot 应当使用的暴露。"""
         return self.confirmed_open_exposure() + self.uncertain_exposure()
 
+    def exposure_by_symbol(self) -> dict[str, dict[str, float]]:
+        """P0017.2 D7：按 symbol 分桶的在途暴露（只读；Owner 仍是 OrderTracker）。
+
+        口径与 `total_pending_exposure` 完全一致（同一订单集合、同一 `Order.notional`）：
+        - confirmed：ACTIVE 订单（PENDING_CREATE/OPEN/PARTIALLY_FILLED/PENDING_CANCEL）的剩余量；
+        - uncertain：LOST 订单的剩余量（不确定≠撤销，继续占额度）。
+        守恒：Σ_s (confirmed_s + uncertain_s) == total_pending_exposure()。
+        """
+        result: dict[str, dict[str, float]] = {}
+
+        def bucket(symbol: str) -> dict[str, float]:
+            return result.setdefault(symbol, {"confirmed": 0.0, "uncertain": 0.0,
+                                                "total": 0.0})
+
+        for order in self.active():
+            entry = bucket(order.symbol)
+            entry["confirmed"] += order.notional
+        for order in self.uncertain_orders():
+            entry = bucket(order.symbol)
+            entry["uncertain"] += order.notional
+        for entry in result.values():
+            entry["total"] = entry["confirmed"] + entry["uncertain"]
+        return result
+
     def open_order_exposure(self) -> float:
         """兼容别名：等于 `total_pending_exposure()`（P0001.6.1 起含 uncertain）。"""
         return self.total_pending_exposure()
 
     # ------------------------------------------------------------------ 资料不足的订单
 
-    def note_unresolved_order(self, client_order_id: str, *, reason: str) -> UnresolvedOrder:
+    def note_unresolved_order(self, client_order_id: str, *, reason: str,
+                               symbol: str | None = None) -> UnresolvedOrder:
         """记录一个「已知存在但资料不足」的订单：暴露无法量化 → Risk 必须 fail closed。"""
         if not isinstance(client_order_id, str) or not client_order_id:
             raise ValueError("client_order_id must be a non-empty string")
-        entry = UnresolvedOrder(client_order_id=client_order_id, reason=reason or "insufficient order data")
+        known = self._orders.get(client_order_id)
+        resolved_symbol = symbol or (known.symbol if known is not None else None)
+        entry = UnresolvedOrder(client_order_id=client_order_id,
+                                 reason=reason or "insufficient order data",
+                                 symbol=resolved_symbol)
         self._unresolved[client_order_id] = entry
         return entry
 

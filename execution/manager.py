@@ -105,6 +105,21 @@ class OrderManager:
     def unresolved_order_count(self) -> int:
         return len(self.tracker.unresolved_orders())
 
+    # P0017.2 D7：per-symbol 在途暴露（与全组合计同口径；Owner 仍是 OrderTracker）
+    def exposure_for_symbol(self, symbol: str) -> float:
+        return self.tracker.exposure_by_symbol().get(symbol, {}).get("total", 0.0)
+
+    def confirmed_exposure_for_symbol(self, symbol: str) -> float:
+        return self.tracker.exposure_by_symbol().get(symbol, {}).get("confirmed", 0.0)
+
+    def uncertain_exposure_for_symbol(self, symbol: str) -> float:
+        return self.tracker.exposure_by_symbol().get(symbol, {}).get("uncertain", 0.0)
+
+    def unresolved_count_for_symbol(self, symbol: str) -> int:
+        """P0017.2：该 symbol 的不可量化订单数。symbol 未知的 unresolved 保守计入每个 symbol（fail-closed）。"""
+        return sum(1 for order in self.tracker.unresolved_orders()
+                   if order.symbol is None or order.symbol == symbol)
+
     @property
     def active_orders(self) -> tuple[Order, ...]:
         return self.tracker.active()

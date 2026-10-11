@@ -83,6 +83,10 @@ class RiskReasonCode(Enum):
     MISSING_LIQUIDATION_INFO = "MISSING_LIQUIDATION_INFO"
     #: 存在资料不足、无法量化的订单暴露 → 不允许新增暴露（P0001.6.1）
     UNCERTAIN_EXPOSURE_UNKNOWN = "UNCERTAIN_EXPOSURE_UNKNOWN"
+    #: P0017.2：候选单会使组合 projected gross notional 超过组合限额（区别于单标的 NOTIONAL_LIMIT）
+    PORTFOLIO_NOTIONAL_LIMIT = "PORTFOLIO_NOTIONAL_LIMIT"
+    #: P0017.2：无法建立组合敞口安全上界（缺标记价格/有不可量化订单等）⇒ fail-closed
+    PORTFOLIO_EXPOSURE_UNKNOWN = "PORTFOLIO_EXPOSURE_UNKNOWN"
 
 
 class RiskDecisionType(Enum):
