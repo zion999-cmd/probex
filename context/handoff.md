@@ -2534,3 +2534,12 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
   1700001510000 → 1700001785000，view 重渲染、图表仍挂载、画线保留。
 - 全量 **2463 passed / 0 failed / 24 skipped**（本轮 +2 净守卫）；无新依赖、未触写路径/核心所有权/CAPITAL。
 - 受阻不变：真实公网 451、P0001.16 写入收口、策略有效性（I1/I2/I3）。
+
+## 2026-10-11（P0017.1 提案提交，待审阅；**未实施**）
+
+- 人类批准三阶段拆分（P0017.1 数据平台 / .2 多标的 PAPER+组合风险 / .3 回测评估），先批 .1；
+  明确市场数据**独立于 run、可共享**；要求先交提案不实施。
+- 只读架构审计：`artifacts/p0017/P0017_ARCHITECTURE_AUDIT.md`（四层成熟度 + Owner 多标的就绪度）。
+- 最终提案：`proposals/P0017.1-multi-symbol-market-data-platform.md`（逐文件影响、数据/状态契约、
+  订阅限制核实计划、离线/真实双验收、3 个待确认项）。
+- 代码/核心 Owner/TESTNET 仓位均未改动；`currentProposal` 保持 null，等审阅定稿后再设置并开工。
