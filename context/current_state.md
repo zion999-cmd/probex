@@ -376,6 +376,18 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
   两次真实 Testnet 运行（32 分钟窗口 + 预热）**仍未产生任何报价** ⇒ **SC-24 – SC-28 未达成、根因未定位**（不猜）；
   下一步：harness 增加逐轮 telemetry 落盘后短诊断（产品代码不动）。安全检查：open orders 0 / position 0 / leverage 1。
 
+
+### P0017.1 多标的市场数据平台（2026-10-11）
+
+- **状态：离线验收完成，真实 E2E 待验证**（人类 2026-10-11 选择 (b)）。**不是全部完成**。
+- 已交付（5 批：d1474d0 / 1166810 / 4a8a879 / e6e8419 / d7215c1）：
+  universe 发现、run 无关的共享市场数据集、每标的独立 LiveMarketDataRuntime 的多标的采集、
+  只读 API（universe/subscriptions/symbol status/dataset）、`--market-source binance-universe` 与 Market/universe UI。
+- 验收：§7-A 离线 + §7-C 边界 **PASS**（2495 passed / 0 failed / 24 skipped，detached clean checkout 一致）；
+  **§7-B 真实公网 E2E = NOT RUN（Binance HTTP 451 geo-block，外部阻塞）**——不代表真实采集已验证，
+  解除 451 后须按提案 §7-B 补跑 ≥2 symbol 持续更新/单流故障隔离/重启续读/浏览器真实验证并回填 LIMITS_FINDINGS。
+- `currentProposal` 暂保持 `P0017.1`（提案未正式完成）；P0017.2（多标的 PAPER + 组合级风险预算）/ P0017.3（回测）未批准。
+
 ## 下一步
 
 - **无授权中的步骤**：P0001.9.3 – P0001.9.6 均已收口，`currentProposal = null`。

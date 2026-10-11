@@ -2591,3 +2591,13 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
   随 surface 轮询刷新；只用已注册只读端点，无 binance/connectors 字面量。
 - 集成测试 `test_universe_platform_wiring.py`（1）；浏览器离线验收：universe 列表/详情来自真实管线。
 - 全量 2495 passed / 0 failed / 24 skipped。真实公网 451：binance-universe 真实 E2E 待非受限出口（NOT RUN）。
+
+## 2026-10-11（P0017.1 状态收口：离线完成，真实 E2E 待验证）
+
+- 人类选择 (b)：**只改状态记录，不改代码**。
+- 提案状态改为「离线验收完成，真实 E2E 待验证」：§7-A 离线 PASS、§7-C 边界 PASS（2495 测试 + detached）、
+  **§7-B 真实公网 E2E = NOT RUN（Binance HTTP 451，外部阻塞）**；明确 451 非离线失败、也不代表真实采集已验证，
+  本提案**不标记全部完成**；列出解除 451 后必须补跑的 5 项验收。
+- `context/roadmap.md` 增加 P0017.1/.2/.3 行；`context/current_state.md` 增加 P0017.1 段。
+- `status.json`：`currentProposal` **保持 `P0017.1`**（提案未正式完成，按规范不在此处置 null；待 §7-B 验证或人类另有决定）。
+- 未启动 P0017.2/.3，未执行任何交易所写操作。
