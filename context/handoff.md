@@ -2569,3 +2569,13 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
   订阅视图、上限校验、on_batch sink 写入共享数据集按 symbol 隔离。
 - live 隔离守卫为 multi_collector 放行 time/threading（仍禁交易/存储/凭据）。
 - 全量 2487 passed / 0 failed / 24 skipped。下一步 Batch 4：只读 API（universe/symbol status/数据集查询）。
+
+## 2026-10-11（P0017.1 Batch 4：只读市场平台 API）
+
+- 新增 `product/market_platform.py::MarketPlatform`（产品层零外部适配器/storage import；
+  universe/订阅/数据集 provider 由组合根注入，reader 走工厂）。
+- 新增 GET 端点：`/market/universe`、`/market/subscriptions`、
+  `/market/symbols/<symbol>/status`、`/market/dataset/<kind>/<symbol>`（含 start/end/limit、400/503 语义）；
+  加入 capabilities read 列表；未接线 ⇒ 503（不伪造）。
+- 集成测试 `tests/integration/test_market_platform_api.py`（7 tests）；产品层隔离守卫全过。
+- 全量 2494 passed / 0 failed / 24 skipped。下一步 Batch 5：assembly 接线 + UI 全标的列表/切换。

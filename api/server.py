@@ -45,6 +45,13 @@ from api.routes import (
     RUNS_COMPARE_PATH,
     RUNS_PATH,
 )
+from api.routes.market_platform import (
+    DATASET_PREFIX,
+    SUBSCRIPTIONS_PATH,
+    SYMBOL_STATUS_PREFIX,
+)
+from api.routes.market_universe import PATH as MARKET_UNIVERSE_PATH
+
 from product.serialization import snapshot_to_jsonable
 from product.service import ProductService
 from product.types import SCHEMA_VERSION
@@ -220,7 +227,10 @@ class ProductApiHandler(BaseHTTPRequestHandler):
                                    ASSISTANT_EXPLAIN_PATH, REASONS_PATH, OPS_PATH,
                                    *sorted(EXECUTION_SUB_PATHS),
                                    MARKET_TIMELINE_PATH, MARKET_DEPTH_PATH, MARKET_TRADES_PATH,
-                                   MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH, MARKET_CANDLES_PATH])),
+                                   MARKET_HEALTH_PATH, MARKET_OVERLAYS_PATH, MARKET_CANDLES_PATH,
+                                   MARKET_UNIVERSE_PATH, SUBSCRIPTIONS_PATH,
+                                   f"{SYMBOL_STATUS_PREFIX}<symbol>/status",
+                                   f"{DATASET_PREFIX}<kind>/<symbol>"])),
             cli_commands=COMMAND_SPEC,
             exit_codes=EXIT_CODES,
         )
@@ -389,6 +399,62 @@ class ProductApiHandler(BaseHTTPRequestHandler):
                        "bounds": self._bounds(config)}
         payload["run_id"] = history.run_id
         self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE, **payload})
+
+    def _serve_market_platform(self, path: str, query: str) -> bool:
+        """P0017.1：universe / 订阅状态 / 共享数据集（只读；未接线 503）。返回是否已处理。"""
+        platform = self.service.market_platform_view()
+        if platform is None:
+            # 路由本身存在，但未接线多标的平台 ⇒ 503（明确不可用，不返回合成数据）
+            if (path == MARKET_UNIVERSE_PATH or path == SUBSCRIPTIONS_PATH
+                    or path.startswith(SYMBOL_STATUS_PREFIX) or path.startswith(DATASET_PREFIX)):
+                self._error(503, "market_platform_unavailable",
+                            "multi-symbol market platform is not wired in this runtime")
+                return True
+            return False
+        if path == MARKET_UNIVERSE_PATH:
+            view = platform.universe_view()
+            self._json_or_503(view)
+            return True
+        if path == SUBSCRIPTIONS_PATH:
+            self._json_or_503(platform.subscriptions_view())
+            return True
+        if path.startswith(SYMBOL_STATUS_PREFIX):
+            suffix = path[len(SYMBOL_STATUS_PREFIX):].strip("/")
+            if "/" not in suffix or not suffix.endswith("/status"):
+                self._error(404, "unknown_endpoint", path)
+                return True
+            symbol = suffix.split("/", 1)[0]
+            view = platform.symbol_status_view(symbol) if symbol else None
+            self._json_or_503(view, missing_code="unknown_symbol")
+            return True
+        if path.startswith(DATASET_PREFIX):
+            return self._serve_dataset(platform, path, query)
+        return False
+
+    def _serve_dataset(self, platform: object, path: str, query: str) -> bool:
+        rest = path[len(DATASET_PREFIX):].strip("/")
+        parts = rest.split("/")
+        params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
+        if len(parts) != 2 or parts[0] not in ("book", "trade", "mark"):
+            self._error(400, "invalid_dataset_path", "expected /market/dataset/<kind>/<symbol>")
+            return True
+        kind, symbol = parts
+        try:
+            limit = max(1, min(int(params.get("limit", 500)), 5_000))
+            start_ts = int(params["start"]) if "start" in params else None
+            end_ts = int(params["end"]) if "end" in params else None
+        except (TypeError, ValueError):
+            self._error(400, "invalid_dataset_params", "start/end/limit must be integers")
+            return True
+        view = platform.dataset_view(symbol, kind, start_ts=start_ts, end_ts=end_ts, limit=limit)
+        self._json_or_503(view, missing_code="no_dataset")
+        return True
+
+    def _json_or_503(self, view: dict | None, *, missing_code: str = "market_platform_unavailable") -> None:
+        if view is None:
+            self._error(503, missing_code, "no market platform facts for this request")
+            return
+        self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE, **view})
 
     @staticmethod
     def _bounds(config: object) -> dict[str, int]:
@@ -806,6 +872,8 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         if path in (MARKET_TIMELINE_PATH, MARKET_DEPTH_PATH, MARKET_TRADES_PATH, MARKET_HEALTH_PATH,
                     MARKET_OVERLAYS_PATH, MARKET_CANDLES_PATH):
             self._serve_market_workbench(path, query)
+            return
+        if self._serve_market_platform(path, query):
             return
         if path.startswith(f"{RUNS_PATH}/") and path.endswith("/market"):
             self._serve_run_market(path)

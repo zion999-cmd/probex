@@ -173,6 +173,8 @@ class ProductService:
     market_state_hash: Callable[[], object | None] = lambda: None
     #: F-12/F-15：operational posture（network/auth/logging/retention + 四层健康拆分）
     ops: Callable[[], Mapping[str, object] | None] = lambda: None
+    #: P0017.1：多标的市场数据平台（universe / 订阅状态 / 共享数据集查询；只读）
+    market_platform: Callable[[], object | None] = lambda: None
 
     def run_summary_view(self, run_id: str | None = None) -> object | None:
         """取 Run Summary：`run_id` 给定时走 durable 记录；否则走当前 session provider。
@@ -186,6 +188,10 @@ class ProductService:
     def market_history_view(self) -> object | None:
         """取有界市场展示缓冲；未接线 ⇒ None（端点须按 UNKNOWN/503 处理）。"""
         return self.market_history()
+
+    def market_platform_view(self) -> object | None:
+        """P0017.1：多标的市场平台只读投影；未接线 ⇒ None（端点 503，不伪造）。"""
+        return self.market_platform()
 
     def projection_config_view(self) -> object | None:
         """取显示参数；未配置 ⇒ None（工作台端点必须 503，不得无限加载）。"""
