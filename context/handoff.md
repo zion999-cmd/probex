@@ -2551,3 +2551,10 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - 新增 `connectors/binance/market_data/universe.py`：`parse_universe` 纯函数（TRADING+永续+quote 白名单，
   单条目畸形跳过、结构错误 fail-closed、去重、可自定义 quote 集合），不动单 symbol `parse_exchange_info`。
 - 单测 `tests/unit/test_universe_discovery.py`（7 tests）；既有 binance depth/live market 41 tests 不回归。
+
+## 2026-10-11（P0017.1 Batch 2：共享市场数据集）
+
+- 新增 `storage/market_dataset.py`：与 run 解耦的 append-only 数据集
+  （root/venue/symbol/kind/day/data.jsonl + manifest）；按 UTC 日分片、O_APPEND+fsync、
+  单调校验、续写不重复、损坏/缺分片 fail-closed、manifest hash、区间/limit 读取、日缺口报告、symbol 隔离。
+- 10 个单测 `tests/unit/test_market_dataset.py`；全量 2482 passed（+17）。未接采集/API/UI（后续批次）。
