@@ -2579,3 +2579,15 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
   加入 capabilities read 列表；未接线 ⇒ 503（不伪造）。
 - 集成测试 `tests/integration/test_market_platform_api.py`（7 tests）；产品层隔离守卫全过。
 - 全量 2494 passed / 0 failed / 24 skipped。下一步 Batch 5：assembly 接线 + UI 全标的列表/切换。
+
+## 2026-10-11（P0017.1 Batch 5：assembly 接线 + UI）
+
+- 新增 `--market-source binance-universe`：发现（exchangeInfo→parse_universe）+ 显式订阅集
+  `market.universe.symbols`（逗号分隔，缺省只发现不订阅）+ `max_symbols` 上限 + 数据集落盘目录
+  `market.dataset.dir`（默认 ~/.probex/market-data）；`market.collector.autostart` 供测试。
+- collector 线程采集，`on_batch` 按 symbol 写共享数据集（trade；book 写器就位）；stop 关闭写器。
+- 数据集 reader 支持"未定稿分区直接扫磁盘"，使写入即可查询（close 后 manifest 定稿）。
+- UI：Market 增加 universe 二级页（全标的列表 + 单标的详情：采集状态/记录成交/分区/缺口），
+  随 surface 轮询刷新；只用已注册只读端点，无 binance/connectors 字面量。
+- 集成测试 `test_universe_platform_wiring.py`（1）；浏览器离线验收：universe 列表/详情来自真实管线。
+- 全量 2495 passed / 0 failed / 24 skipped。真实公网 451：binance-universe 真实 E2E 待非受限出口（NOT RUN）。

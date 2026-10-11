@@ -263,15 +263,35 @@ class MarketDatasetReader:
 
     def partitions(self) -> tuple[PartitionInfo, ...]:
         mpath = _manifest_path(self._kind_dir)
-        if not mpath.exists():
+        if mpath.exists():
+            manifest = json.loads(mpath.read_text(encoding="utf-8"))
+            out = []
+            for day, entry in sorted((manifest.get("partitions") or {}).items()):
+                out.append(PartitionInfo(
+                    day=day, rows=int(entry["rows"]), first_ts=entry.get("first_ts"),
+                    last_ts=entry.get("last_ts"), bytes_=int(entry.get("bytes", 0)),
+                    sha256=str(entry.get("sha256", ""))))
+            return tuple(out)
+        # 未定稿（写器仍在追加）：直接扫磁盘分区，保证数据写完即可查（不伪造内容）
+        if not self._kind_dir.exists():
             return ()
-        manifest = json.loads(mpath.read_text(encoding="utf-8"))
         out = []
-        for day, entry in sorted((manifest.get("partitions") or {}).items()):
-            out.append(PartitionInfo(
-                day=day, rows=int(entry["rows"]), first_ts=entry.get("first_ts"),
-                last_ts=entry.get("last_ts"), bytes_=int(entry.get("bytes", 0)),
-                sha256=str(entry.get("sha256", ""))))
+        for day_dir in sorted(p for p in self._kind_dir.iterdir() if p.is_dir()):
+            data = day_dir / "data.jsonl"
+            if not data.exists():
+                continue
+            first_ts: int | None = None
+            last_ts: int | None = None
+            rows = 0
+            for line in data.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                rows += 1
+                ts = int(json.loads(line)["exchange_ts"])
+                first_ts = ts if first_ts is None else first_ts
+                last_ts = ts
+            out.append(PartitionInfo(day=day_dir.name, rows=rows, first_ts=first_ts,
+                                       last_ts=last_ts, bytes_=data.stat().st_size, sha256=""))
         return tuple(out)
 
     def read(self, *, start_ts: int | None = None, end_ts: int | None = None,

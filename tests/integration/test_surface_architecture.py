@@ -119,12 +119,16 @@ class SurfaceArchitectureTest(unittest.TestCase):
         known |= set(EXECUTION_SUB_PATHS)
         known |= set(READ_PATHS)      # P0001.15：含 query 型只读端点（decisions/orders）
         known |= {"/api/v1/execution"}   # execution 路由别名（orders 的兼容路径）
+        # P0017.1：多标的市场平台只读端点（含前缀型 symbol/dataset）
+        prefix_known = ("/api/v1/runs/", "/api/v1/market/symbols/", "/api/v1/market/dataset")
+        known |= {"/api/v1/market/universe", "/api/v1/market/subscriptions"}
+        api_url_re = re.compile(r"[\'\`](/api/v1/[^\'\`?]*)")
         for path in sorted(UI_ROOT.rglob("*.js")):
             source = read(path)
-            for url in re.findall(r'"(/api/v1/[^"?]*)', source):
+            for url in api_url_re.findall(source):
                 with self.subTest(module=path.name, url=url):
                     self.assertTrue(url in known or url.rstrip("/") in known
-                                    or any(url.startswith(prefix) for prefix in ("/api/v1/runs/",)),
+                                    or any(url.startswith(prefix) for prefix in prefix_known),
                                     f"{path.name} references unknown endpoint {url}")
 
     def test_12_ui_adds_no_trading_write_path(self) -> None:

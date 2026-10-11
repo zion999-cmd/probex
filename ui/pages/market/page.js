@@ -12,12 +12,13 @@ import { featurePanels, healthStrip } from "/ui/pages/market/timeline.js";
 import { BACKEND_FACT_INDICATORS } from "/ui/pages/market/indicators.js";
 import { mountWorkbench, TIMEFRAMES, toolbarHtml } from "/ui/pages/market/workbench.js";
 import { mountPredictionPanel, predictionSection } from "/ui/pages/market/prediction_panel.js";
+import { renderSymbolDetail, renderUniverse } from "/ui/pages/market/universe.js";
 import { updateSelection } from "/ui/client/selection.js";
 
 export const title = "Market";
 export const slug = "market";
 
-export const VIEWS = ["live", "replay", "run-review"];
+export const VIEWS = ["live", "replay", "run-review", "universe"];
 
 function nav(active) {
   return VIEWS.map((view) =>
@@ -58,6 +59,13 @@ export async function render(rest = []) {
   const header = section("Market view", nav(active) + (runId
     ? `<div class="row"><span class="k">run</span><span class="v">${escapeHtml(runId)}</span></div>` : "")
     + (focusTs ? `<div class="row"><span class="k">focused timestamp</span><span class="v">${escapeHtml(focusTs)}</span></div>` : ""));
+
+  if (active === "universe") {
+    const body = rest[1]
+      ? await renderSymbolDetail(String(rest[1]))
+      : await renderUniverse();
+    return header + body;
+  }
 
   if (active === "run-review") {
     // run-review 需要当前 runtime identity（用于判断该 run 是否为当前运行）
@@ -259,8 +267,16 @@ export async function mount(rest = []) {
  * 只在 live 视图有效；run-review / 无 workbench 时返回（让 console 回退整体渲染）。
  */
 export async function refresh(rest = []) {
-  if (!liveWorkbench) return;
   const active = rest[0] && VIEWS.includes(rest[0]) ? rest[0] : "live";
+  if (active === "universe") {
+    const host = document.getElementById("view");
+    if (!host) return;
+    host.innerHTML = rest[1]
+      ? await renderSymbolDetail(String(rest[1]))
+      : await renderUniverse();
+    return;
+  }
+  if (!liveWorkbench) return;
   if (active !== "live") return;
   const interval = liveTimeframe;
   const [series, tracePayload, snapshot] = await Promise.all([

@@ -246,8 +246,9 @@ class RuntimeProfile:
         if self.auth_token_ref is not None and (
                 not isinstance(self.auth_token_ref, str) or not self.auth_token_ref):
             raise AssemblyError("RuntimeProfile.auth_token_ref must be a non-empty string when given")
-        if self.market_source not in ("event-store", "binance-public"):
-            raise AssemblyError("RuntimeProfile.market_source must be event-store or binance-public")
+        if self.market_source not in ("event-store", "binance-public", "binance-universe"):
+            raise AssemblyError(
+                "RuntimeProfile.market_source must be event-store, binance-public or binance-universe")
         # F-12：非 loopback 的启动姿态必须显式（警告后继续是不允许的）
         if not is_loopback_host(self.host):
             if not self.allow_non_loopback:
@@ -315,6 +316,9 @@ class ProductRuntime:
     #: Batch 3 (G-A2/G-B2)：真实公网行情泵（只读；与 event-store feed 二选一）
     _public_pump: object | None = field(default=None, init=False)
     _market_source: str = field(default="event-store", init=False)
+    _universe_collector: object | None = field(default=None, init=False)
+    _universe: object | None = field(default=None, init=False)
+    _universe_writers: dict = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         self._local_data_clock: dict[str, int | None] = {"ms": None}
@@ -1111,7 +1115,7 @@ class ProductRuntime:
         if self.profile.feed is not None:
             self._start_feed()
             self._start_decision_loop()
-        elif getattr(self, "_market_source", "event-store") == "binance-public":
+        elif getattr(self, "_market_source", "event-store") in ("binance-public", "binance-universe"):
             self._start_public_market()
         return status
 
@@ -1178,6 +1182,9 @@ class ProductRuntime:
 
         values = self._config_values()
         history_capacity = int(values.get("projection.history_capacity", 6_000) or 6_000)
+        if getattr(self, "_market_source", "event-store") == "binance-universe":
+            self._start_universe_platform(values)
+            return
         injected = getattr(self, "market_source_adapter", None)
         if injected is not None:
             adapter = injected
@@ -1221,6 +1228,90 @@ class ProductRuntime:
         self._service.market_history = lambda: history
         log_event("runtime", "public_market_start", runtime_id=self._identity.runtime_id,
                   run_id=self._session.run_id, source=adapter.source_id)
+
+    def _start_universe_platform(self, values: dict[str, object]) -> None:
+        """P0017.1：多标的市场数据平台（只发现/采集/落盘/查询；不构造 broker/engine）。"""
+        from connectors.binance.market_data.multi_collector import (
+            CollectorConfig, MultiSymbolMarketCollector)
+        from connectors.binance.market_data.snapshot import UrllibJsonClient
+        from connectors.binance.market_data.universe import parse_universe
+        from connectors.binance.market_data.endpoints import EXCHANGE_INFO_PATH
+        from product.market_platform import MarketPlatform
+        from storage.market_dataset import MarketDatasetReader, MarketDatasetWriter
+
+        rest_base = str(values.get("market.public_rest_base",
+                                    "https://fapi.binance.com"))
+        ws_host = str(values.get("market.public_ws_host", "wss://fstream.binance.com"))
+        dataset_root = str(values.get("market.dataset.dir",
+                                       str(Path.home() / ".probex" / "market-data")))
+        max_symbols = int(values.get("market.subscription.max_symbols", 16))
+        # 显式订阅集（逗号分隔）；缺省不自动订阅全市场（无界），只发现不订阅
+        selected = tuple(s.strip().upper() for s in
+                          str(values.get("market.universe.symbols", "")).split(",") if s.strip())
+        http = getattr(self, "_public_http_client", None) or UrllibJsonClient(base_url=rest_base)
+        transport_factory = getattr(self, "_public_transport_factory", None)
+        raw_info = http.get_json("/fapi/v1/exchangeInfo", {}, timeout_s=10.0)
+        universe = parse_universe(raw_info,
+                                   quote_assets=frozenset(str(q) for q in
+                                       str(values.get("market.universe.quote_assets", "USDT")).split(",")))
+        self._universe = universe
+        if selected:
+            unknown = [s for s in selected if universe.get(s) is None]
+            if unknown:
+                raise AssemblyError(f"symbols not discoverable/trading: {unknown}")
+            if len(selected) > max_symbols:
+                raise AssemblyError(
+                    f"subscription {len(selected)} exceeds market.subscription.max_symbols {max_symbols}")
+        # 每标的独立写器（book/trade；mark 后续批次）
+        writers: dict[tuple[str, str], object] = {}
+        if selected:
+            for symbol in selected:
+                writers[(symbol, "trade")] = MarketDatasetWriter(
+                    dataset_root, venue="binance", symbol=symbol, kind="trade")
+                writers[(symbol, "book")] = MarketDatasetWriter(
+                    dataset_root, venue="binance", symbol=symbol, kind="book")
+        collector = None
+        if selected:
+            collector = MultiSymbolMarketCollector(
+                CollectorConfig(symbols=selected, max_symbols=max_symbols,
+                                 rest_base=rest_base, ws_host=ws_host),
+                clock=self.profile.clock,
+                http_client_factory=(getattr(self, "_universe_http_factory", None)
+                                      or (lambda base: http)),
+                transport_factory=transport_factory,
+                on_batch=self._make_universe_sink(writers))
+            collector.connect()
+            if values.get("market.collector.autostart", True) is not False:
+                collector.start()
+        self._universe_collector = collector
+        self._universe_writers = writers
+
+        def _reader_factory(root, *, venue, symbol, kind):
+            return MarketDatasetReader(root, venue=venue, symbol=symbol, kind=kind)
+
+        platform = MarketPlatform(
+            universe_provider=lambda: universe.view(),
+            collector_provider=lambda: self._universe_collector,
+            dataset_root=dataset_root, reader_factory=_reader_factory)
+        self._service.market_platform = lambda: platform
+        log_event("runtime", "universe_platform_start", runtime_id=self._identity.runtime_id,
+                  run_id=self._session.run_id, discovered=len(universe.discovered),
+                  subscribed=len(selected), dataset_root=dataset_root)
+
+    def _make_universe_sink(self, writers):
+        from market.events.payloads import TradePayload
+
+        def sink(symbol, batch):
+            for event in getattr(batch, "market_events", ()):
+                payload = getattr(event, "payload", None)
+                if isinstance(payload, TradePayload):
+                    writer = writers.get((symbol, "trade"))
+                    if writer is not None:
+                        writer.append(exchange_ts=int(event.exchange_ts),
+                                       receive_ts=int(event.receive_ts),
+                                       payload={"price": float(payload.price),
+                                                 "qty": float(payload.quantity)})
+        return sink
 
     def _build_binance_public_source(self, *, history_capacity: int,
                                       values: dict[str, object]) -> tuple[object, object]:
@@ -1767,6 +1858,16 @@ class ProductRuntime:
         if self._public_pump is not None:
             self._public_pump.stop()
             self._public_pump = None
+        collector = getattr(self, "_universe_collector", None)
+        if collector is not None:
+            collector.stop()
+            self._universe_collector = None
+        for writer in getattr(self, "_universe_writers", {}).values():
+            try:
+                writer.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self._universe_writers = {}
         self._disconnect_connectors()       # P0001.15：两个 connector 各自断开
         if self._session.record.status.value == "RUNNING":
             self._host.finish(facts=self._build_summary_facts())
@@ -1861,7 +1962,7 @@ def build_profile_from_args(argv: Sequence[str] | None = None) -> RuntimeProfile
     parser.add_argument("--event-store", default=None,
                         help="event store path; required for replay/paper real runs")
     parser.add_argument("--market-source", default="event-store",
-                        choices=("event-store", "binance-public"),
+                        choices=("event-store", "binance-public", "binance-universe"),
                         help="market source: event-store (default) or binance-public (real continuous public data, read-only, no credentials)")
     args = parser.parse_args(list(argv) if argv is not None else None)
     cli_entries = tuple(ConfigEntry(name=name, source=ConfigSource.CLI, value=Fact.of(value))
@@ -1903,13 +2004,13 @@ def build_profile_from_args(argv: Sequence[str] | None = None) -> RuntimeProfile
                            price_levels=int(resolved["projection.price_levels"]),
                            history_capacity=int(resolved["projection.history_capacity"]),
                            view_depth=int(resolved["projection.view_depth"]))
-    elif mode in (RuntimeMode.REPLAY, RuntimeMode.PAPER) and args.market_source != "binance-public":
+    elif mode in (RuntimeMode.REPLAY, RuntimeMode.PAPER) and args.market_source == "event-store":
         raise AssemblyError(f"--event-store is required for a real {mode.value.lower()} run")
     market_source = args.market_source
-    if market_source == "binance-public":
+    if market_source in ("binance-public", "binance-universe"):
         if mode not in (RuntimeMode.REPLAY, RuntimeMode.PAPER):
             raise AssemblyError(
-                "--market-source binance-public is only allowed with replay/paper (public observation only)")
+                f"--market-source {market_source} is only allowed with replay/paper (read-only)")
     return RuntimeProfile(symbol=args.symbol, config_entries=entries, mode=mode,
                           environment=args.environment, venue=args.venue, host=args.host, port=args.port,
                           run_registry_dir=args.run_registry_dir, feed=feed,
