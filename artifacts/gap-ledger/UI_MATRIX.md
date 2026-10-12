@@ -195,3 +195,40 @@ Universe 只读。本轮按人类指令实现**真正可用的行情标的选择
 runtime 仍 PAPER/BTCUSDT 且订单/风险未受影响 → 不支持交易对明确报错。
 回归：`tests/ui/ui_entry_acceptance.mjs` 22/22；全量 **2574 passed / 0 failed / 24 skipped**。
 
+---
+
+## 五大工作区整体收口（本轮：按六层面逐区核对 + 修复真实缺口）
+
+**方法**：真实 Chrome 打开运行中的产品，逐工作区核对 ①信息架构 ②交互入口 ③真实数据 ④状态处理
+⑤上下文与导航 ⑥完整操作闭环；18 个页面/详情入口全部渲染正常（无 error 页、无 `[object Object]`、无卡死），
+再针对交互做真实点击验证。证据：`workspace_closure_probe.json`、`market_symbol_selector_acceptance.json`、`ui_entry_acceptance.json`。
+
+**本轮发现并修复的真实缺陷**：
+
+| # | 缺陷（实测） | 影响 | 修复 |
+|---|---|---|---|
+| W1 | 公开行情视图点 5m 后仍是 `interval=1m`（标签变了、数据没变）；且 5s 轮询每次都重取 5 个组件，被交易所限流 | Market 时间周期实际不可用 + 上游限流 | workbench 的 `onTimeframe` 接通真实重取（`refreshPublicCandles`）；周期状态持久化（不再被轮询重置为 1m）；轮询改为**只刷 K 线** |
+| W2 | 指标无法配置参数（设计要求"指标选择/参数/显示/移除"） | Market 缺少参数配置 | 工具栏新增参数输入（逗号分隔）+ 应用；调用 klinecharts `overrideIndicator` **真实生效**；非法输入（非 1–400 整数）被拒绝并提示，保持原参数；验收钩子暴露 `indicatorParams()` |
+| W3 | 成交事实投影缺 `symbol`/`side` ⇒ Performance 按标的只能显示 UNKNOWN | Performance 无法按标的查看（人类要求） | `Fill` 域对象本就有 symbol/side：`_FillFact` 与 `FillView` 搬运这两个字段；Performance 新增 "Per symbol (real fills in the bounded window)" 区块 + portfolio total + 明确"Market View Symbol 不进本口径" |
+| W4 | 公开视图未说明哪些能力属于 runtime 标的（静默缺失） | 上下文易混淆 | 新增 "quotes / decisions / prediction NOT_AVAILABLE"、"l2 heatmap NOT_AVAILABLE（原因）" 行 |
+| W5 | run-review 的 K 线标的硬编码 `BTCUSDT` | 非 BTC 运行会贴错标签 | 改为从 `/api/v1/runs/<id>` 读 run identity 的 symbol；取不到则 UNKNOWN |
+| W6 | 市场视图请求可能长时间挂起（重试等待 2.5s） | 页面/浏览器连接池压力 | 重试等待缩短为 1.2s（配合 5s 短 TTL 缓存与只刷 K 线的轮询） |
+
+**五大工作区状态（实测）**：
+- **Monitor**：运行实例/Mode/Environment/Venue/Symbol/数据新鲜度/四层健康/阻塞（原因+下一步）/可用操作
+  （Manifest 驱动，L2 走确认，实测 `runtime.request_reconciliation` → `SUCCEEDED`）/最近事件/详情入口 ✅
+- **Market**：交易对搜索选择、K 线 + 时间周期（真实重取）、指标选择与参数、画线工具、成交量、
+  Bid/Ask、Spread、Order Book、逐笔成交、L2 热力图（runtime 视图 canvas）、Quotes、Decisions、
+  数据来源/更新时间/不可用原因、与 Assistant 上下文一致 ✅（公开视图的热力图/报价按原因显式不可用）
+- **Activity**：因果链（13 阶段）、缺阶段显式、decision 钻取、order/fill/execution_event → Evidence（真实 facts）、
+  decision↔orders 双向反查、风控拒绝原因、跳 Market 时间点 ✅
+- **Performance**：run 列表/分页/选择/对比、权益与 PnL（已实现/未实现分开）、持仓与敞口、费用、回撤、
+  **按标的**、指标口径与钻取、历史 run 显式 NOT_AVAILABLE（不造假链接） ✅
+- **System**：health/risk/readiness/execution（Venue Limits、Rate Limits、Latency、Reconciliation、Anomalies）/
+  instruments/connections/configuration(只读)/capabilities(写入 unavailable_by_design)/ops ✅
+- **公共组件**：Header（Mode 显著 + 只读原因 + 启动参数说明）、Blocker Strip（severity/原因/下一步 + 跳 System）、
+  Assistant（真实输入/发送/会话/反馈/上下文/Market View Symbol/资本拒绝）、Manifest+Gateway（L0/L1/L2，L2 确认） ✅
+
+**回归**：`market_symbol_selector.mjs` 9/9、`ui_entry_acceptance.mjs` 22/22、workspace 探针 4/4；
+全量 **2574 passed / 0 failed / 24 skipped**（24 skipped 均为外部 opt-in：live/private smoke，需网络/凭据）。
+

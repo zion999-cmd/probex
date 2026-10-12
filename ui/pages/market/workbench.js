@@ -9,7 +9,8 @@
 
 import * as klinecharts from "klinecharts";   // import map → /ui/vendor/klinecharts-shim.js (UMD 桥接)
 import { arrow, fibonacciExtension, fibonacciSegment, measure, rect } from "/vendor/@klinecharts/extension/dist/index.js";
-import { PROBEX_INDICATORS, atrPointsFromBackend, overlayPointsFromBackend, registerProbexIndicators } from "/ui/pages/market/indicators.js";
+import { PROBEX_INDICATORS, atrPointsFromBackend, overlayPointsFromBackend,
+  parseCalcParams, registerProbexIndicators } from "/ui/pages/market/indicators.js";
 import { registerFactIndicators, registerProbexOverlays, semanticOverlays } from "/ui/pages/market/semantic_overlays.js";
 import { entityHash } from "/ui/app/navigation.js";
 
@@ -63,16 +64,27 @@ export function priceAt(candles, timestamp) {
   return best === null ? null : Number(best.close);
 }
 
-export function toolbarHtml({ timeframe = "1m", indicators = ["MA", "VOL"] } = {}) {
+export function toolbarHtml({ timeframe = "1m", indicators = ["MA", "VOL"], params = {} } = {}) {
   const tf = TIMEFRAMES.map((item) =>
     `<button data-timeframe="${item}" class="${item === timeframe ? "active" : ""}">${item}</button>`).join("");
   const ind = PROBEX_INDICATORS.map((item) =>
     `<button data-indicator="${item.name}" class="${indicators.includes(item.name) ? "active" : ""}">${item.name}</button>`).join("");
   const draw = DRAWING_TOOLS.map((item) =>
     `<button data-draw="${item.name}" title="${item.name}">${item.label}</button>`).join("");
+  // 指标参数：只对**已启用**且有参数的指标显示输入（真实 overrideIndicator，非装饰）
+  const activeParams = PROBEX_INDICATORS
+    .filter((item) => indicators.includes(item.name) && item.calcParams)
+    .map((item) => {
+      const value = (params[item.name] || item.calcParams).join(",");
+      return `<label class="wb-param" title="${item.name} ${item.label}（逗号分隔，1–400）">` +
+        `${item.name}<input data-param="${item.name}" value="${value}" size="9" ` +
+        `aria-label="${item.name} 参数" /></label>`;
+    }).join("");
   return `
     <div class="wb-group"><span class="wb-label">timeframe</span>${tf}</div>
     <div class="wb-group"><span class="wb-label">indicators</span>${ind}</div>
+    <div class="wb-group"><span class="wb-label">params</span>${activeParams}
+      <button data-param-apply="1">应用</button></div>
     <div class="wb-group"><span class="wb-label">draw</span>${draw}
       <button data-draw-clear="1">清空</button></div>
     <div class="wb-group"><span class="wb-label" id="wb-status">ready</span></div>`;
@@ -94,9 +106,14 @@ export function mountWorkbench(chartHost, toolbarHost, options = {}) {
   let trace = options.trace || [];
   let timeframe = options.timeframe || "1m";
   const activeIndicators = new Set(options.indicators || ["MA", "VOL"]);
+  const indicatorParams = {};
+  for (const item of PROBEX_INDICATORS) {
+    if (item.calcParams) indicatorParams[item.name] = item.calcParams.slice();
+  }
   const statusEl = () => toolbarHost.querySelector("#wb-status");
 
-  toolbarHost.innerHTML = toolbarHtml({ timeframe, indicators: [...activeIndicators] });
+  toolbarHost.innerHTML = toolbarHtml({ timeframe, indicators: [...activeIndicators],
+                                        params: indicatorParams });
   const chart = klinecharts.init(chartHost, { styles: DARK_STYLES, locale: "zh-CN" });
   chart.setSymbol({ ticker: options.symbol || "BTCUSDT", pricePrecision: 2, volumePrecision: 4 });
   chart.setPeriod(PERIODS[timeframe] || PERIODS["1m"]);
@@ -149,9 +166,31 @@ export function mountWorkbench(chartHost, toolbarHost, options = {}) {
     for (const item of PROBEX_INDICATORS) {
       const active = activeIndicators.has(item.name);
       const existing = chart.getIndicators({ name: item.name });
-      if (active && existing.length === 0) chart.createIndicator({ name: item.name });
+      if (active && existing.length === 0) {
+        chart.createIndicator({ name: item.name, calcParams: indicatorParams[item.name] });
+      }
       if (!active && existing.length > 0) chart.removeIndicator({ name: item.name });
     }
+  }
+
+  /** 应用指标参数（真实 overrideIndicator；非法输入拒绝并保持原参数）。 */
+  function applyIndicatorParams() {
+    let applied = 0;
+    let rejected = 0;
+    toolbarHost.querySelectorAll("input[data-param]").forEach((input) => {
+      const name = input.dataset.param;
+      const parsed = parseCalcParams(input.value);
+      if (parsed === null) { rejected += 1; input.classList.add("bad"); return; }
+      input.classList.remove("bad");
+      indicatorParams[name] = parsed;
+      if (activeIndicators.has(name)) {
+        chart.overrideIndicator({ name, calcParams: parsed });
+        applied += 1;
+      }
+    });
+    refreshStatus(rejected
+      ? `params: ${applied} applied, ${rejected} rejected (需 1–400 的整数)`
+      : `params: ${applied} applied`);
   }
 
   applyData();
@@ -190,6 +229,13 @@ export function mountWorkbench(chartHost, toolbarHost, options = {}) {
       refreshStatus(`drawing ${name}`);
     });
   });
+  const applyParams = toolbarHost.querySelector("button[data-param-apply]");
+  if (applyParams) applyParams.addEventListener("click", applyIndicatorParams);
+  for (const input of toolbarHost.querySelectorAll("input[data-param]")) {
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); applyIndicatorParams(); }
+    });
+  }
   const clear = toolbarHost.querySelector("button[data-draw-clear]");
   if (clear) {
     clear.addEventListener("click", () => {
@@ -208,6 +254,8 @@ export function mountWorkbench(chartHost, toolbarHost, options = {}) {
     markers: () => chart.getOverlays({ name: "probexSemantic" }).length,
     drawings: () => DRAWING_TOOLS.reduce((sum, tool) => sum + chart.getOverlays({ name: tool.name }).length, 0),
     indicators: () => chart.getIndicators().map((item) => item.name),
+    indicatorParams: () => chart.getIndicators().map((item) => ({
+      name: item.name, calcParams: item.calcParams })),
     refreshStatus,
   };
   if (chartHost) chartHost.__probex = api;

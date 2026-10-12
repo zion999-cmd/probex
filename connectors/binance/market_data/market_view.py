@@ -92,7 +92,7 @@ class MarketViewService:
                   sleeper: Callable[[float], None], base_url: str = REST_BASE_URL,
                   timeout_s: float = 10.0, exchange_info_ttl_s: float = 300.0,
                   venue: str = "binance", cache_ttl_ms: int = 5000,
-                  min_request_interval_ms: int = 650, rate_limit_retry_ms: int = 2500) -> None:
+                  min_request_interval_ms: int = 650, rate_limit_retry_ms: int = 1200) -> None:
         if not isinstance(base_url, str) or not base_url.startswith(("http://", "https://")):
             raise ValueError(f"base_url must be http(s), got {base_url!r}")
         self._client = client

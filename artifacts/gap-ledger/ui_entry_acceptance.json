@@ -4,27 +4,27 @@
     {
       "name": "workspace:monitor",
       "pass": true,
-      "detail": "{\"heading\":\"Instrument / venue\",\"len\":4827,\"isError\":false}"
+      "detail": "{\"heading\":\"Instrument / venue\",\"len\":5358,\"isError\":false}"
     },
     {
       "name": "workspace:market",
       "pass": true,
-      "detail": "{\"heading\":\"Market view\",\"len\":9109,\"isError\":false}"
+      "detail": "{\"heading\":\"Market view\",\"len\":9151,\"isError\":false}"
     },
     {
       "name": "workspace:activity",
       "pass": true,
-      "detail": "{\"heading\":\"Causal chain (time-ordered, F-08)\",\"len\":108435,\"isError\":false}"
+      "detail": "{\"heading\":\"Causal chain (time-ordered, F-08)\",\"len\":123653,\"isError\":false}"
     },
     {
       "name": "workspace:performance",
       "pass": true,
-      "detail": "{\"heading\":\"Trade statistics (real facts only)\",\"len\":4355,\"isError\":false}"
+      "detail": "{\"heading\":\"Trade statistics (real facts only)\",\"len\":4658,\"isError\":false}"
     },
     {
       "name": "workspace:system",
       "pass": true,
-      "detail": "{\"heading\":\"System surfaces\",\"len\":1319,\"isError\":false}"
+      "detail": "{\"heading\":\"System surfaces\",\"len\":2084,\"isError\":false}"
     },
     {
       "name": "header:read-only-reason",
@@ -34,32 +34,32 @@
     {
       "name": "header:mode-tag",
       "pass": true,
-      "detail": "PAPER · local · binance · BTCUSDT (fixed @startup) · runtime=paper-1791830169039"
+      "detail": "PAPER · local · binance · BTCUSDT (fixed @startup) · runtime=paper-1791836647769"
     },
     {
       "name": "blocker:reason-and-next-visible",
       "pass": true,
-      "detail": "{\"items\":[\"RISK:REDUCE_ONLY_WOULD_INCREASE [BLOCKING] risk gate rejected: REDUCE_ONLY_WOULD_INCREASE → 修正方向 / 数量。\",\"VENUE:VENUE_FACTS_UNAVAILABLE [BLOCKING] rate/order limit facts have no verified venue evidence yet → 确认 exchangeInfo/rateLimits 证据与 usage header 采集。\"],\"next\":[\"→ 修正方向 / 数量。\",\"→ 确认 exchangeInfo/rateLimits 证据与 usage header 采集。\"]}"
+      "detail": "{\"items\":[\"RISK:REDUCE_ONLY_WOULD_INCREASE [BLOCKING] risk gate rejected: REDUCE_ONLY_WOULD_INCREASE → 修正方向 / 数量。\",\"RISK:REDUCE_ONLY_WOULD_INCREASE [BLOCKING] risk gate rejected: REDUCE_ONLY_WOULD_INCREASE → 修正方向 / 数量。\"],\"next\":[\"→ 修正方向 / 数量。\",\"→ 修正方向 / 数量。\"]}"
     },
     {
       "name": "activity→evidence:order",
       "pass": true,
-      "detail": "{\"found\":true,\"href\":\"#/activity/evidence/order/probex-paper-1791830169039-000001\",\"heading\":\"Decision trace\",\"isError\":false,\"hasFactsTable\":true,\"text\":\"DECISION TRACE\\nts\\tstage\\tidentity\\toutcome\\treason code\\tdetail\\n1700000460000\\trisk\\tprobex-paper-1791830169039-000001\\tallow\\t— no reason code\\t\\n1700000460000\\trisk\\tprobex-paper-1791830169039-000002\\tallow\\t— no reason code\\t\\n170000\"}"
+      "detail": "{\"found\":true,\"href\":\"#/activity/evidence/order/probex-paper-1791836647769-000001\",\"heading\":\"Decision trace\",\"isError\":false,\"hasFactsTable\":true,\"text\":\"DECISION TRACE\\nts\\tstage\\tidentity\\toutcome\\treason code\\tdetail\\n1700000460000\\trisk\\tprobex-paper-1791836647769-000001\\tallow\\t— no reason code\\t\\n1700000460000\\trisk\\tprobex-paper-1791836647769-000002\\tallow\\t— no reason code\\t\\n170000\"}"
     },
     {
       "name": "activity→evidence:fill",
       "pass": true,
-      "detail": "{\"found\":true,\"href\":\"#/activity/evidence/fill/probex-paper-1791830169039-000006\",\"heading\":\"Decision trace\",\"isError\":false,\"hasFactsTable\":true,\"text\":\"DECISION TRACE\\nts\\tstage\\tidentity\\toutcome\\treason code\\tdetail\\n1700000460000\\trisk\\tprobex-paper-1791830169039-000001\\tallow\\t— no reason code\\t\\n1700000460000\\trisk\\tprobex-paper-1791830169039-000002\\tallow\\t— no reason code\\t\\n170000\"}"
+      "detail": "{\"found\":true,\"href\":\"#/activity/evidence/fill/probex-paper-1791836647769-000023\",\"heading\":\"Decision trace\",\"isError\":false,\"hasFactsTable\":true,\"text\":\"DECISION TRACE\\nts\\tstage\\tidentity\\toutcome\\treason code\\tdetail\\n1700000460000\\trisk\\tprobex-paper-1791836647769-000001\\tallow\\t— no reason code\\t\\n1700000460000\\trisk\\tprobex-paper-1791836647769-000002\\tallow\\t— no reason code\\t\\n170000\"}"
     },
     {
       "name": "activity→evidence:execution_event",
       "pass": true,
-      "detail": "{\"found\":true,\"href\":\"#/activity/evidence/execution_event/probex-paper-1791830169039-000001\",\"heading\":\"Decision trace\",\"isError\":false,\"hasFactsTable\":true,\"text\":\"DECISION TRACE\\nts\\tstage\\tidentity\\toutcome\\treason code\\tdetail\\n1700000460000\\trisk\\tprobex-paper-1791830169039-000001\\tallow\\t— no reason code\\t\\n1700000460000\\trisk\\tprobex-paper-1791830169039-000002\\tallow\\t— no reason code\\t\\n17"
+      "detail": "{\"found\":true,\"href\":\"#/activity/evidence/execution_event/probex-paper-1791836647769-000001\",\"heading\":\"Decision trace\",\"isError\":false,\"hasFactsTable\":true,\"text\":\"DECISION TRACE\\nts\\tstage\\tidentity\\toutcome\\treason code\\tdetail\\n1700000460000\\trisk\\tprobex-paper-1791836647769-000001\\tallow\\t— no reason code\\t\\n1700000460000\\trisk\\tprobex-paper-1791836647769-000002\\tallow\\t— no reason code\\t\\n17"
     },
     {
       "name": "orders:decision-reverse-lookup",
       "pass": true,
-      "detail": "{\"isError\":false,\"hasReverse\":true,\"text\":\"ACTIVE ORDERS\\nclient id\\tside\\tstatus\\tprice\\tqty\\tfilled\\tdecision\\tinstrument\\tvenue\\nprobex-paper-1791830169039-000085\\tsell\\tPENDING_CANCEL\\t61095\\t0.0002\\t0\\td-94b63ae15cd1-1700010610000\\tpaper:BTCUSDT\\tpaper\\nprobex-paper-1791830169039-000097\\tbuy\\tPENDING_CANCEL\\t61091\\t0.0002\\t0\\td-c32178692c8d-1700010785000\\tpaper:\"}"
+      "detail": "{\"isError\":false,\"hasReverse\":true,\"text\":\"ACTIVE ORDERS\\nclient id\\tside\\tstatus\\tprice\\tqty\\tfilled\\tdecision\\tinstrument\\tvenue\\nprobex-paper-1791836647769-000106\\tsell\\tPENDING_CANCEL\\t61100.5\\t0.0002\\t0\\td-c7edbb45d293-1700010720000\\tpaper:BTCUSDT\\tpaper\\nprobex-paper-1791836647769-000108\\tbuy\\tOPEN\\t61094\\t0.0002\\t0\\td-c22653408933-1700010795000\\tpaper:BTCUSDT\\t\"}"
     },
     {
       "name": "monitor:available-actions",
@@ -79,12 +79,12 @@
     {
       "name": "assistant:real-answers",
       "pass": true,
-      "detail": "{\"turns\":2,\"out\":[{\"q\":\"为什么现在没有下单？\",\"turnText\":\"you\\n为什么现在没有下单？\\nassistant\\n当前有 2 个 blocker：\\n[BLOCKING] RISK:REDUCE_ONLY_WOULD_INCREASE — risk gate rejected: REDUCE_ONLY_WOULD_INCREASE；下一步：修正方向 / 数量。\\n[BLOCKING] VENUE:VENUE_FACTS_UNAVAILABLE — rate/order limit facts have no verified venue evidence yet；下一步：确认 exchangeInfo/rateLimits 证据与 usage header 采\",\"status\":\"answered sources: /api/v1/blockers,"
+      "detail": "{\"turns\":2,\"out\":[{\"q\":\"为什么现在没有下单？\",\"turnText\":\"you\\n为什么现在没有下单？\\nassistant\\n当前有 7 个 blocker：\\n[BLOCKING] RISK:REDUCE_ONLY_WOULD_INCREASE — risk gate rejected: REDUCE_ONLY_WOULD_INCREASE；下一步：修正方向 / 数量。\\n[BLOCKING] RISK:REDUCE_ONLY_WOULD_INCREASE — risk gate rejected: REDUCE_ONLY_WOULD_INCREASE；下一步：修正方向 / 数量。\\n[BLOCKING] RISK:REDUCE_ONLY_WOULD_INCREASE —\",\"status\":\"answered sources: /api/v1/blockers"
     },
     {
       "name": "assistant:diagnostic-not-capital",
       "pass": true,
-      "detail": "{\"q\":\"为什么现在没有下单？\",\"turnText\":\"you\\n为什么现在没有下单？\\nassistant\\n当前有 2 个 blocker：\\n[BLOCKING] RISK:REDUCE_ONLY_WOULD_INCREASE — risk gate rejected: REDUCE_ONLY_WOULD_INCREASE；下一步：修正方向 / 数量。\\n[BLOCKING] VENUE:VENUE_FACTS_UNAVAILABLE — rate/order limit facts have no verified venue evidence yet；下一步：确认 exchang"
+      "detail": "{\"q\":\"为什么现在没有下单？\",\"turnText\":\"you\\n为什么现在没有下单？\\nassistant\\n当前有 7 个 blocker：\\n[BLOCKING] RISK:REDUCE_ONLY_WOULD_INCREASE — risk gate rejected: REDUCE_ONLY_WOULD_INCREASE；下一步：修正方向 / 数量。\\n[BLOCKING] RISK:REDUCE_ONLY_WOULD_INCREASE — risk gate rejected: REDUCE_ONLY_WOULD_INCREASE；下一步：修正方向 / 数量。\\n[BLOCKIN"
     },
     {
       "name": "assistant:capital-refused",
@@ -99,7 +99,7 @@
     {
       "name": "system:execution-safety-sections",
       "pass": true,
-      "detail": "{\"hasLimits\":true,\"hasRate\":true,\"hasLatency\":true,\"hasRecon\":true,\"hasHealth\":true,\"snippet\":1627}"
+      "detail": "{\"hasLimits\":true,\"hasRate\":true,\"hasLatency\":true,\"hasRecon\":true,\"hasHealth\":true,\"snippet\":1616}"
     },
     {
       "name": "performance:runs-and-metrics",
@@ -109,7 +109,7 @@
     {
       "name": "non-ideal:unknown-entity-no-crash",
       "pass": true,
-      "detail": "{\"isError\":false,\"text\":\"DECISION TRACE\\nts\\tstage\\tidentity\\toutcome\\treason code\\tdetail\\n1700000460000\\trisk\\tprobex-paper-1791830169039-000001\\tallow\\t— no reason code\\t\\n1700000460000\\trisk\\tprobex-paper-1791830169039-000002\\tallow\\t— no\"}"
+      "detail": "{\"isError\":false,\"text\":\"DECISION TRACE\\nts\\tstage\\tidentity\\toutcome\\treason code\\tdetail\\n1700000460000\\trisk\\tprobex-paper-1791836647769-000001\\tallow\\t— no reason code\\t\\n1700000460000\\trisk\\tprobex-paper-1791836647769-000002\\tallow\\t— no\"}"
     }
   ],
   "errors": [],

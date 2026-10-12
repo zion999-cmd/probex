@@ -29,7 +29,21 @@ export const BACKEND_FACT_INDICATORS = [
 
 /** 页面工具栏可选的指标集合（overlay / pane 两栏）。 */
 export const PROBEX_INDICATORS = [
-  { name: "MA", pane: "overlay" },
-  { name: "EMA", pane: "overlay" },
-  { name: "VOL", pane: "pane" },
+  { name: "MA", pane: "overlay", calcParams: [5, 10, 30], label: "周期" },
+  { name: "EMA", pane: "overlay", calcParams: [12, 26], label: "周期" },
+  { name: "VOL", pane: "pane", calcParams: [5, 10], label: "周期" },
 ];
+
+/** 指标参数校验：只接受 1–400 的正整数、最多 6 个（防非法输入进入图表库）。 */
+export function parseCalcParams(text) {
+  const parts = String(text || "").split(",").map((part) => part.trim()).filter(Boolean);
+  if (!parts.length || parts.length > 6) return null;
+  const values = [];
+  for (const part of parts) {
+    if (!/^[0-9]{1,3}$/.test(part)) return null;
+    const value = Number(part);
+    if (!Number.isInteger(value) || value < 1 || value > 400) return null;
+    values.push(value);
+  }
+  return values;
+}

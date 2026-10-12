@@ -72,6 +72,37 @@ export async function render(rest = []) {
   const snapshot = await fetchSnapshot();
   const fills = snapshot.execution.recent_fills || [];
   const fees = fills.reduce((sum, f) => sum + (f.fee.known ? Number(f.fee.value) : 0), 0);
+  // P0012.1 §Performance / 人类指令：按标的与整体组合查看结果（真实分组，缺失不猜）。
+  const bySymbol = new Map();
+  for (const fill of fills) {
+    const symbol = fill.symbol && fill.symbol.known ? String(fill.symbol.value) : "UNKNOWN";
+    const entry = bySymbol.get(symbol) || { count: 0, notional: 0.0, fees: 0.0 };
+    entry.count += 1;
+    entry.fees += fill.fee && fill.fee.known ? Number(fill.fee.value) : 0;
+    const price = fill.price && fill.price.known ? Number(fill.price.value) : 0;
+    const qty = fill.quantity && fill.quantity.known ? Number(fill.quantity.value) : 0;
+    entry.notional += price * qty;
+    bySymbol.set(symbol, entry);
+  }
+  const runtimeSymbol = (snapshot.runtime || {}).symbol || "UNKNOWN";
+  const perSymbolRows = [...bySymbol.entries()].sort((a, b) => b[1].notional - a[1].notional)
+    .map(([symbol, entry]) => [escapeHtml(symbol), String(entry.count),
+      escapeHtml(entry.notional.toFixed(6)), escapeHtml(entry.fees.toFixed(8))]);
+  const perSymbolSection = section(
+    "Per symbol (real fills in the bounded window)",
+    (perSymbolRows.length
+      ? table(["symbol", "fills", "fill notional", "fees"], perSymbolRows)
+      : rows([["fills by symbol", '<span class="unknown">UNKNOWN（窗口内无成交事实）</span>']])) +
+    rows([
+      ["runtime trading symbol", `${escapeHtml(runtimeSymbol)} ` +
+        `<span class="muted">（本运行实例只交易该标的；多标的组合结果见离线回测报告）</span>`],
+      ["portfolio total", `${escapeHtml(String(fills.length))} fills · fees ` +
+        `${escapeHtml(String(Number(fees.toFixed(8))))} ` +
+        `<span class="muted">（= 各标的之和，单标的运行时不重复计算）</span>`],
+      ["market view symbol", '<span class="muted">Market 页可另选标的做**行情研究**；它不属于本运行，' +
+        '不进入这里的绩效口径（见 docs/RUNBOOK.md §9）</span>'],
+    ]));
+
   const tradeStats = rows([
     ["trades (bounded window)", fills.length
       ? `${fills.length} <span class="muted">(recent_fill_limit=${snapshot.execution.recent_fill_limit}；账本总量见 /api/v1/orders)</span>`
@@ -88,6 +119,7 @@ export async function render(rest = []) {
   ]);
   lastPerformance = { timeline, summary, comparison: comparisonPayload };
   return section("Trade statistics (real facts only)", tradeStats) +
+    perSymbolSection +
     section("Runs (run is the unit)", runList) +
     section("Run selector", rows([
       ["selected run", selected ? `<code>${escapeHtml(selected)}</code>` : "none"],

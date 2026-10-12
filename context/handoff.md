@@ -2766,3 +2766,20 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - 验收：market 选择器 9/9；既有 UI 入口 22/22；全量 2574 passed / 0 failed / 24 skipped（含全部分层守卫）。
 - 未做：未新建 Proposal、未改 runtime 交易标的、未启用 Testnet/LIVE、未引入新依赖。
 
+## 2026-10-13（五大 UI 工作区整体收口，人类会话授权，未新建 Proposal）
+
+- 逐工作区按六层面（IA/入口/真实数据/状态/上下文/闭环）核对：18 个页面与详情入口实测全部正常。
+- 修复：
+  1) Market 公开视图时间周期：`onTimeframe` → 真实重取（`refreshPublicCandles`），周期状态持久化（轮询不再重置回 1m），
+     轮询改为仅刷新 K 线（避免每 5s 打 5 个上游端点触发交易所限流）；
+  2) Market 指标参数：工具栏参数输入 + 校验（1–400 整数，最多 6 个）+ klinecharts `overrideIndicator` 真实生效；
+     验收钩子 `indicatorParams()`；
+  3) Performance 按标的：`_FillFact`/`FillView` 搬运 `symbol`/`side`（来源 `portfolio.types.Fill`），
+     新增 per-symbol 表 + portfolio total + 明确 Market View Symbol 不进绩效口径；
+  4) Market 公开视图显式标注 quotes/decisions/prediction 与 L2 heatmap 的 NOT_AVAILABLE 及原因；
+  5) run-review K 线标的改为读 run identity（原硬编码 BTCUSDT）；
+  6) MarketView 限流重试等待 2.5s → 1.2s（配合 5s 短 TTL 缓存）。
+- 验收：真实浏览器 9/9（market selector）+ 22/22（全 UI 入口）+ 4/4（本轮修复探针）；
+  全量 2574 passed / 0 failed / 24 skipped。
+- 未做：未新建 Proposal、未改 runtime 交易语义、未启用 Testnet/LIVE、未引入依赖。
+

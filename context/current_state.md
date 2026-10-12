@@ -477,6 +477,23 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 - **验收**：`tests/ui/market_symbol_selector.mjs` **9/9 PASS**（证据 `artifacts/gap-ledger/market_symbol_selector_acceptance.json`）；
   既有 `tests/ui/ui_entry_acceptance.mjs` 22/22；全量 **2574 passed / 0 failed / 24 skipped**。
 
+
+### 五大 UI 工作区整体收口（2026-10-13，人类会话明确授权；未新建 Proposal）
+
+- **授权**：人类指令“完成五大 UI 工作区的整体产品交付，直接依据已有设计与审计线索实施”，不新建 Proposal；
+  `currentProposal` 保持 `null`。
+- **修复的真实缺陷**：公开视图时间周期未真实重取（且轮询重取 5 组件触发限流）→ 已接通真实重取 + 轮询只刷 K 线；
+  指标参数不可配置 → 工具栏参数输入 + `overrideIndicator` 真实生效（非法输入拒绝）；
+  成交投影缺 `symbol`/`side` → Performance 现可按标的查看（真实来源为 `portfolio.types.Fill`）；
+  公开视图能力边界显式化（quotes/decisions/prediction/heatmap 不可用 + 原因）；
+  run-review K 线标的去硬编码（改读 run identity）；市场视图重试等待 2.5s→1.2s。
+- **实测**：18 个工作区/详情入口全部正常渲染（无 error 页/无 `[object Object]`/无卡死）；
+  Market 时间周期与指标参数、Monitor 可用操作（L2 确认 SUCCEEDED）、Activity 钻取、Performance 按标的、
+  System 九区块均有真实内容。
+- **验收**：`market_symbol_selector.mjs` 9/9、`ui_entry_acceptance.mjs` 22/22、workspace 探针 4/4
+  （证据在 `artifacts/gap-ledger/`）；全量 **2574 passed / 0 failed / 24 skipped**。
+- 边界未变：单标的 runtime；测试网/实盘未启用；WS 受本机代理限制（真实实时采集仍 NOT RUN）。
+
 ## 下一步
 
 - **无授权中的步骤**：P0001.9.3 – P0001.9.6 均已收口，`currentProposal = null`。

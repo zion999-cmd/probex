@@ -490,6 +490,11 @@ class ProductService:
                     quantity=Fact.of(_get(fill, "quantity")),
                     fee=Fact.of(_get(fill, "fee")),
                     trade_id=Fact.of(_get(fill, "trade_id")),
+                    # 成交所属标的/方向来自 Fill 域对象本身（按标的查看绩效需要它）
+                    symbol=Fact.of(_get(fill, "symbol"), unknown_reason="fill without symbol"),
+                    side=Fact.of(str(getattr(_get(fill, "side"), "value", _get(fill, "side")))
+                                 if _get(fill, "side") is not None else None,
+                                 unknown_reason="fill without side"),
                 ))
         audit = self.adapter_audit()
         return ExecutionView(

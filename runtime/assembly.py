@@ -131,7 +131,11 @@ class _LifecycleFact:
 
 @dataclass(frozen=True, slots=True)
 class _FillFact:
-    """F-08：成交事实（字段搬运自 FillLedger；`order_id` 即 client_order_id）。"""
+    """F-08：成交事实（字段搬运自 FillLedger；`order_id` 即 client_order_id）。
+
+    另外搬运 `symbol` / `side`：它们就在 `portfolio.types.Fill` 上，是"按标的查看绩效"的真实来源；
+    不搬运会让 UI 只能显示 UNKNOWN（此前即如此）。
+    """
 
     client_order_id: str
     ts: int
@@ -139,6 +143,8 @@ class _FillFact:
     quantity: float
     fee: float
     trade_id: str
+    symbol: str | None = None
+    side: str | None = None
 #: 允许的启动模式（默认 REPLAY；TESTNET/LIVE 必须显式指定）
 ALLOWED_MODES = (RuntimeMode.REPLAY, RuntimeMode.PAPER, RuntimeMode.TESTNET, RuntimeMode.LIVE)
 #: loopback bind（不强制认证）；其它 bind 必须显式 opt-in + bearer token
@@ -1264,7 +1270,7 @@ class ProductRuntime:
                 exchange_info_ttl_s=float(values.get("market.view.exchange_info_ttl_s", 300.0)),
                 cache_ttl_ms=int(values.get("market.view.cache_ttl_ms", 5000)),
                 min_request_interval_ms=int(values.get("market.view.min_request_interval_ms", 650)),
-                rate_limit_retry_ms=int(values.get("market.view.rate_limit_retry_ms", 2500)))
+                rate_limit_retry_ms=int(values.get("market.view.rate_limit_retry_ms", 1200)))
             # 注意：**不注入** profile.clock —— Market View 取的是**实时外部数据**，
             # fetched_at_ms 必须是真实墙钟（用事件/回放时钟会误导成“在模拟时刻取到实时数据”）。
         except Exception as exc:  # noqa: BLE001 - 构造失败 ⇒ 保持未接线（端点 503，不伪造）
@@ -1806,9 +1812,14 @@ class ProductRuntime:
         fills = getattr(ledger, "fills", None) if ledger is not None else None
         if not fills:
             return ()
-        return tuple(_FillFact(client_order_id=str(fill.order_id), ts=int(fill.exchange_ts),
-                               price=float(fill.price), quantity=float(fill.quantity),
-                               fee=float(fill.fee), trade_id=str(fill.trade_id)) for fill in fills)
+        return tuple(_FillFact(
+            client_order_id=str(fill.order_id), ts=int(fill.exchange_ts),
+            price=float(fill.price), quantity=float(fill.quantity),
+            fee=float(fill.fee), trade_id=str(fill.trade_id),
+            symbol=(str(fill.symbol) if getattr(fill, "symbol", None) else None),
+            side=(str(getattr(getattr(fill, "side", None), "value", getattr(fill, "side", None)))
+                  if getattr(fill, "side", None) is not None else None),
+        ) for fill in fills)
 
     def _risk_decision_views(self) -> tuple[object, ...]:
         """F-08：engine 的风险判定观测（allow + reject）；未接线 ⇒ 空元组（如实 ABSENT）。"""

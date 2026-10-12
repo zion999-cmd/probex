@@ -364,7 +364,11 @@ class OrderView:
 
 @dataclass(frozen=True, slots=True)
 class FillView:
-    """成交事实视图（G1）：只搬运 FillLedger / execution 事实，不做任何推断。"""
+    """成交事实视图（G1）：只搬运 FillLedger / execution 事实，不做任何推断。
+
+    `symbol` / `side` 来自 Fill 域对象本身（`portfolio.types.Fill`），用于按标的/方向查看结果；
+    缺失时保持 UNKNOWN（不猜成当前 runtime 标的）。
+    """
 
     client_order_id: Fact
     ts: Fact
@@ -372,6 +376,8 @@ class FillView:
     quantity: Fact
     fee: Fact
     trade_id: Fact
+    symbol: Fact = field(default_factory=lambda: Fact.unknown("fill without symbol"))
+    side: Fact = field(default_factory=lambda: Fact.unknown("fill without side"))
 
 
 @dataclass(frozen=True, slots=True)
