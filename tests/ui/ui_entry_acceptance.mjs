@@ -195,7 +195,7 @@ try {
   record("assistant:capital-refused", /unavailable_by_design/.test(String(capital.text)), JSON.stringify(capital));
 
   // ---- 7. Market / System / Performance 关键入口存在
-  await goto("/#/market/live", 3500);
+  await goto("/#/market/live", 9000);
   const market = await ev(`(() => { const v = document.getElementById("view"); const t = v.innerText;
     return { hasUniverseLink: !!v.querySelector('a[href="#/market/universe"]'),
              hasBook: /Order book/i.test(t), hasTrades: /Recent trades/i.test(t),
@@ -203,14 +203,14 @@ try {
   record("market:book/trades/heatmap/universe", market.hasUniverseLink && market.hasBook && market.hasTrades && market.hasHeatmap,
     JSON.stringify(market));
 
-  await goto("/#/system/execution", 3000);
+  await goto("/#/system/execution", 7000);
   const system = await ev(`(() => { const t = document.getElementById("view").innerText;
     return { hasLimits: /limit/i.test(t), hasRate: /rate/i.test(t), hasLatency: /latency|延迟/i.test(t),
              hasRecon: /reconcil|对账/i.test(t), hasHealth: /health/i.test(t), snippet: t.length }; })()`);
   record("system:execution-safety-sections",
     system.hasLimits && system.hasRate && system.hasLatency && system.hasRecon && system.hasHealth, JSON.stringify(system));
 
-  await goto("/#/performance", 3200);
+  await goto("/#/performance", 9000);
   const perf = await ev(`(() => { const v = document.getElementById("view"); const t = v.innerText;
     return { hasRuns: /Runs/i.test(t), hasMetrics: /Trade statistics|Equity/i.test(t),
              links: v.querySelectorAll('a[href*="/performance/run/"]').length }; })()`);

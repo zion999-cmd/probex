@@ -19,12 +19,12 @@
     {
       "name": "3.real-data-for-other-symbol",
       "pass": true,
-      "detail": "{\"viewApi\":{\"symbol\":\"BNBUSDT\",\"source\":\"binance_public_rest\",\"available\":{\"candles\":true,\"depth\":false,\"trades\":false,\"mark\":false,\"overview\":false},\"errors\":{\"depth\":\"rate_limited\",\"trades\":\"rate_limited\",\"mark\":\"rate_limited\",\"overview\":\"rate_limited\"},\"lastClose\":747.92,\"fetchedAt\":1791837288794,\"now\":1791837288795},\"pageShows\":{\"mentionsOther\":true,\"mentionsRuntime\":true,\"statesResearchScope\":true,\"heatmapReason\":true}}"
+      "detail": "{\"viewApi\":{\"symbol\":\"BNBUSDT\",\"source\":\"binance_public_rest\",\"available\":{\"candles\":true,\"depth\":true,\"trades\":false,\"mark\":true,\"overview\":false},\"errors\":{\"trades\":\"rate_limited\",\"overview\":\"rate_limited\"},\"lastClose\":748.33,\"bestBid\":748.3,\"bestAsk\":748.31,\"mark\":748.3,\"fetchedAt\":1791838088117,\"now\":1791838088119},\"pageShows\":{\"mentionsOther\":true,\"mentionsRuntime\":true,\"statesResearchScope\":true,\"heatmapReason\":true}}"
     },
     {
       "name": "3b.other-symbol-data-differs-from-runtime",
       "pass": true,
-      "detail": "{\"runtimeClose\":61095.4,\"otherPrice\":747.92,\"source\":\"binance_public_rest\",\"available\":{\"candles\":true,\"depth\":false,\"trades\":false,\"mark\":false,\"overview\":false},\"errors\":{\"depth\":\"rate_limited\",\"trades\":\"rate_limited\",\"mark\":\"rate_limited\",\"overview\":\"rate_limited\"}}"
+      "detail": "{\"runtimeClose\":61095.4,\"otherPrice\":748.33,\"source\":\"binance_public_rest\",\"available\":{\"candles\":true,\"depth\":true,\"trades\":false,\"mark\":true,\"overview\":false},\"errors\":{\"trades\":\"rate_limited\",\"overview\":\"rate_limited\"}}"
     },
     {
       "name": "4.switch-back-restores-runtime-view",
@@ -34,12 +34,12 @@
     {
       "name": "5.assistant-uses-view-symbol-context",
       "pass": true,
-      "detail": "{\"turnText\":\"you\\n现在这个交易对的行情怎么样？盘口和标记价是多少？\\nassistant\\nBNBUSDT（Market View 研究上下文，**不一定等于**运行实例交易标的）\\nBNBUSDT: source=binance_public_rest fetched_at=1791837316760\\nbid/ask=748.05/748.06 spread=0.009999999999990905\\nmark=748.06\\n24h overview UNKNOWN (unavailable)\\ncandles UNKNOWN (unavailable)\\nrecent trades UNAVAILABLE (unavailable)\\nsources: /api/v1/market/view\\n前往 market/live?view=BNBUSDT\",\"status\":\"answered sources: /api/v1/market/view\"}"
+      "detail": "{\"turnText\":\"you\\n现在这个交易对的行情怎么样？盘口和标记价是多少？\\nassistant\\nBNBUSDT（Market View 研究上下文，**不一定等于**运行实例交易标的）\\nBNBUSDT: source=binance_public_rest fetched_at=1791838114194\\nbid/ask=748.3/748.31 spread=0.009999999999990905\\nmark UNKNOWN (rate_limited)\\n24h overview UNKNOWN (unavailable)\\ncandles UNKNOWN (unavailable)\\nrecent trades UNAVAILABLE (unavailable)\\nsources: /api/v1/market/view\\n前往 market/live?view=BNBUSDT\",\"status\":\"answered sources: /api/v1/market/view\"}"
     },
     {
       "name": "6.runtime-unchanged",
       "pass": true,
-      "detail": "{\"mode\":\"PAPER\",\"symbol\":\"BTCUSDT\",\"openOrders\":2,\"equityKnown\":true,\"blockers\":7}"
+      "detail": "{\"mode\":\"PAPER\",\"symbol\":\"BTCUSDT\",\"openOrders\":1,\"equityKnown\":true,\"blockers\":8}"
     },
     {
       "name": "7.unsupported-symbol-clear-feedback",

@@ -3,22 +3,22 @@
     {
       "name": "market.public.timeframe-refetches-real-candles",
       "pass": true,
-      "detail": "{\"before\":{\"candleRow\":\"candles\\n300 根 · interval=1m\",\"status\":\"loaded source=binance_public_rest · fetched_at=1791837194442\",\"timeframes\":[\"1m\",\"5m\",\"15m\",\"1h\"]},\"after\":{\"clicked\":true,\"candleRow\":\"candles\\n300 根 · interval=5m (source=binance_public_rest, fetched_at=1791837199301)\",\"status\":\"loaded 5m fetched_at=1791837199301\"}}"
+      "detail": "{\"before\":{\"candleRow\":\"candles\\n300 根 · interval=1m (source=binance_public_rest, fetched_at=1791837985231)\",\"status\":\"loaded 1m fetched_at=1791837985231\",\"timeframes\":[\"1m\",\"5m\",\"15m\",\"1h\"]},\"after\":{\"clicked\":true,\"candleRow\":\"candles\\n300 根 · interval=5m (source=binance_public_rest, fetched_at=1791837992134)\",\"status\":\"loaded 5m fetched_at=1791837992134\"}}"
     },
     {
       "name": "market.runtime.indicator-params-apply",
       "pass": true,
-      "detail": "{\"hasInput\":true,\"before\":[{\"name\":\"MA\",\"calcParams\":[5,10,30]},{\"name\":\"VOL\",\"calcParams\":[5,10]}],\"applied\":[{\"name\":\"MA\",\"calcParams\":[7,21,55]},{\"name\":\"VOL\",\"calcParams\":[5,10]}],\"afterInvalid\":[{\"name\":\"MA\",\"calcParams\":[7,21,55]},{\"name\":\"VOL\",\"calcParams\":[5,10]}],\"status\":\"181 CANDLES · 624 TRACE · 620 MARKERS · 0 DRAWINGS · PARAMS: 1 APPLIED, 1 REJECTED (需 1–400 的整数) · TRADES\"}"
+      "detail": "{\"hasInput\":true,\"before\":[{\"name\":\"MA\",\"calcParams\":[5,10,30]},{\"name\":\"VOL\",\"calcParams\":[5,10]}],\"applied\":[{\"name\":\"MA\",\"calcParams\":[7,21,55]},{\"name\":\"VOL\",\"calcParams\":[5,10]}],\"afterInvalid\":[{\"name\":\"MA\",\"calcParams\":[7,21,55]},{\"name\":\"VOL\",\"calcParams\":[5,10]}],\"status\":\"181 CANDLES · 446 TRACE · 442 MARKERS · 0 DRAWINGS · PARAMS: 1 APPLIED, 1 REJECTED (需 1–400 的整数) · TRADES\"}"
     },
     {
       "name": "performance.per-symbol-real-facts",
       "pass": true,
-      "detail": "{\"perSymbol\":true,\"rows\":[\"symbol fills fill notional fees\",\"BTCUSDT 20 243.041680 0.04860834\"],\"hasPortfolio\":true,\"mentionsMarketView\":true}"
+      "detail": "{\"perSymbol\":true,\"rows\":[\"symbol fills fill notional fees\",\"BTCUSDT 20 242.831060 0.04856621\"],\"hasPortfolio\":true,\"mentionsMarketView\":true}"
     },
     {
       "name": "system.health-renders",
       "pass": true,
-      "detail": "{\"len\":2084,\"sections\":[\"System surfaces\",\"Health\",\"Provider / accounting health (G4)\",\"Runtime / loop\",\"Market / stream\",\"Blockers (reason codes + explanation)\"],\"hasMarket\":true,\"hasPrivate\":true}"
+      "detail": "{\"len\":2254,\"sections\":[\"System surfaces\",\"Health\",\"Provider / accounting health (G4)\",\"Runtime / loop\",\"Market / stream\",\"Blockers (reason codes + explanation)\"],\"hasMarket\":true,\"hasPrivate\":true}"
     }
   ]
 }
