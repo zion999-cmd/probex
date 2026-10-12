@@ -2671,3 +2671,23 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
     §18/§19 加收口结论（保留原授权边界为历史记录）。
   - 实施前差距审计 `artifacts/p0017/P0017_3_GAP_AUDIT.md` 纳入版本控制，加"实施前证据/缺失项后已实现"归档头。
   - 核实证据链互引与提交 hash（03d9081/f33d6a9/a9484b9）均可解析；design↔artifacts 路径一致（旧的 P0017_3_DESIGN.md 悬空 target 仅存在于差距审计的历史描述中，已加归档说明）。
+
+## 2026-10-12（P0017.4 多标的确定性组合回测，Batch 1–4）
+
+人类批准并指示实施（currentProposal=P0017.4）。
+- `backtest/multi_adapter.py`：MultiSymbolSimulatedAdapter 按 symbol fan-out/fan-in 各自 SimulatedVenue（执行状态隔离）。
+- `backtest/multi_driver.py`：MultiBacktestConfig（有序 symbols + per-symbol tick/step 表）+
+  run_multi_backtest：统一 (exchange_ts,ordinal,symbol) 排序、per-symbol FeatureEngine、共享
+  AccountingCore/OrderTracker/RiskGate（P0017.2 组合 gross 硬闸）；未知/缺失 symbol → INVALID_INPUT；
+  声明了但数据没有的 symbol → INTEGRITY_FAILURE；多标的守恒/归属/组合 gross 完整性检查。
+- `backtest/driver.py` 修正 commitment provider 的误判：普通在途订单不再被错标 unresolved（此前 P0017.3
+  在组合限额启用时会对任何 pending symbol 误报 PORTFOLIO_EXPOSURE_UNKNOWN；缺 mark 的非 flat 持仓仍 fail-closed）。
+  预测每次用独立事件循环，避免多标的交错时的 stale 协程状态。
+- `backtest/runner.py`：按 backtest.symbols 自动选择多标的路径，per-symbol tick/step 构造独立 MakerPolicy。
+- `backtest/report.py`：summary 增加 symbols 与 per_symbol 明细（订单/成交/期末持仓）。
+- profile `profiles/backtest-multi-symbol.json`。
+- 新增 7 个多标的集成测试（隔离、跨标的组合限额对**新增暴露**生效、被拒无副作用、未知/缺 symbol、
+  双跑等价、未来事件订单/成交/equity 内容前缀一致）。全量 **2540 passed / 0 failed / 24 skipped**。
+- 重要语义：reduce-only 挂单按 P0017.2 可越过 gross 上限（只能降净敞口），故正确不变式是
+  “非 reduce-only 的 accepted 新增暴露 projected gross ≤ limit”，不是“所有在途名义之和 ≤ limit”。
+- CLI `probex backtest` 对含 backtest.symbols 的配置自动走多标的。待办：Batch 5 验收报告 + Closure Audit。

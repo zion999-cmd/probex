@@ -11,6 +11,7 @@ from pathlib import Path
 
 from backtest import BacktestError, BacktestStatus
 from backtest.driver import BacktestConfig, run_backtest
+from backtest.multi_driver import MultiBacktestConfig, run_multi_backtest
 from backtest.identity import dataset_identity, run_identity
 from backtest.report import write_artifacts
 from backtest.prediction import local_trial_runtime
@@ -26,26 +27,19 @@ REQUIRED_CONFIG_KEYS = (
 )
 
 
-def load_config(values: dict[str, object]) -> BacktestConfig:
-    missing = [k for k in REQUIRED_CONFIG_KEYS if k not in values]
-    if missing:
-        raise BacktestError(BacktestStatus.INVALID_INPUT,
-                              f"missing required backtest config keys: {missing}")
-
-    def num(key: str, default=None, required=False):
+def _base_config_kwargs(values: dict[str, object]) -> dict:
+    def num(key: str, default=None):
         if key not in values:
-            if required:
-                raise BacktestError(BacktestStatus.INVALID_INPUT, f"missing {key}")
             return default
         return float(values[key])
 
-    cfg = BacktestConfig(
+    return dict(
         symbol=str(values["backtest.symbol"]),
-        initial_balance=num("backtest.initial_balance", required=True),
-        maker_fee_rate=num("backtest.maker_fee_rate", required=True),
+        initial_balance=float(values["backtest.initial_balance"]),
+        maker_fee_rate=float(values["backtest.maker_fee_rate"]),
         fee_asset=str(values["backtest.fee_asset"]),
-        submit_latency_ms=int(num("backtest.submit_latency_ms", 0.0)),
-        cancel_latency_ms=int(num("backtest.cancel_latency_ms", 0.0)),
+        submit_latency_ms=int(float(values.get("backtest.submit_latency_ms", 0))),
+        cancel_latency_ms=int(float(values.get("backtest.cancel_latency_ms", 0))),
         max_position_notional=num("risk.max_position_notional"),
         max_portfolio_gross_notional=num("risk.max_portfolio_gross_notional"),
         max_open_order_exposure=num("risk.max_open_order_exposure"),
@@ -53,8 +47,44 @@ def load_config(values: dict[str, object]) -> BacktestConfig:
         max_drawdown_pct=num("risk.max_drawdown_pct"),
         max_book_age_ms=(int(values["risk.max_book_age_ms"])
                            if "risk.max_book_age_ms" in values else None),
-        seed=(int(values["backtest.seed"]) if "backtest.seed" in values else None))
-    return cfg
+        seed=(int(values["backtest.seed"]) if "backtest.seed" in values else None),
+    )
+
+
+def load_config(values: dict[str, object]) -> BacktestConfig:
+    missing = [k for k in REQUIRED_CONFIG_KEYS if k not in values]
+    if missing:
+        raise BacktestError(BacktestStatus.INVALID_INPUT,
+                              f"missing required backtest config keys: {missing}")
+    return BacktestConfig(**_base_config_kwargs(values))
+
+
+def load_multi_config(values: dict[str, object]) -> "MultiBacktestConfig":
+    """多标的配置：`backtest.symbols` 为有序标的列表；缺省回退 [backtest.symbol]。"""
+    missing = [k for k in REQUIRED_CONFIG_KEYS if k not in values]
+    if missing:
+        raise BacktestError(BacktestStatus.INVALID_INPUT,
+                              f"missing required backtest config keys: {missing}")
+    raw = values.get("backtest.symbols")
+    if isinstance(raw, str):
+        symbols = tuple(s.strip() for s in raw.split(",") if s.strip())
+    elif isinstance(raw, (list, tuple)):
+        symbols = tuple(str(s) for s in raw)
+    else:
+        symbols = (str(values["backtest.symbol"]),)
+    if len(set(symbols)) != len(symbols):
+        raise BacktestError(BacktestStatus.INVALID_INPUT, "duplicate backtest.symbols")
+
+    def _table(prefix: str) -> dict[str, float]:
+        raw_table = values.get(prefix)
+        if isinstance(raw_table, dict):
+            return {str(k): float(v) for k, v in raw_table.items()}
+        return {}
+
+    return MultiBacktestConfig(
+        **_base_config_kwargs(values), symbols=symbols,
+        tick_size_by_symbol=_table("backtest.tick_size_by_symbol"),
+        quantity_step_by_symbol=_table("backtest.quantity_step_by_symbol"))
 
 
 def execute_backtest(*, dataset: str | Path, config_path: str | Path, out_dir: str | Path,
@@ -73,19 +103,45 @@ def execute_backtest(*, dataset: str | Path, config_path: str | Path, out_dir: s
                               f"config is not valid JSON: {exc}") from exc
 
     identity = dataset_identity([dataset])
-    cfg = load_config(values)
+    is_multi = bool(values.get("backtest.symbols"))
+    cfg = load_multi_config(values) if is_multi else load_config(values)
     run_id, input_hash = run_identity(
         code_version=_git_commit() or "unknown",
         dataset_sha256=identity["sha256"], config=cfg.canonical(), seed=cfg.seed)
 
-    policy = build_maker_policy(values)
-    decision_fn = (None if policy is None
-                     else (lambda **kw: policy.decide(**kw)))
+    multi_symbols = cfg.symbols if isinstance(cfg, MultiBacktestConfig) and cfg.symbols else ()
+    is_multi = len(multi_symbols) >= 2
+
+    policies: dict[str, object] = {}
+    decision_map: object = None
+    if is_multi:
+        # 每个 symbol 用其 tick/step 构造独立策略；优先 per-symbol 表，其次全局 maker 键。
+        for sym in multi_symbols:
+            sym_values = dict(values)
+            tick = cfg.tick_size_by_symbol.get(sym) if isinstance(cfg, MultiBacktestConfig) else None
+            step = cfg.quantity_step_by_symbol.get(sym) if isinstance(cfg, MultiBacktestConfig) else None
+            if tick is not None:
+                sym_values["strategy.maker.tick_size"] = tick
+            if step is not None:
+                sym_values["strategy.maker.quantity_step"] = step
+            policy = build_maker_policy(sym_values)
+            if policy is not None:
+                policies[sym] = policy
+        decision_map = policies
+    else:
+        policy = build_maker_policy(values)
+        decision_map = (None if policy is None else (lambda **kw: policy.decide(**kw)))
+
     pred = local_trial_runtime() if prediction else None
 
-    result = run_backtest(dataset, cfg, run_id=run_id,
-                           dataset_sha256=identity["sha256"],
-                           decision_fn=decision_fn, prediction_runtime=pred)
+    if is_multi:
+        result = run_multi_backtest(
+            dataset, cfg, run_id=run_id, dataset_sha256=identity["sha256"],
+            decision_fn=decision_map, prediction_runtime=pred)
+    else:
+        result = run_backtest(dataset, cfg, run_id=run_id,
+                               dataset_sha256=identity["sha256"],
+                               decision_fn=decision_map, prediction_runtime=pred)
     paths = write_artifacts(result, out_dir=out_dir,
                               dataset_files=[dataset.name])
     summary = {

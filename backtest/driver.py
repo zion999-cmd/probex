@@ -185,13 +185,14 @@ def run_backtest(dataset_path: str | Path, config: BacktestConfig, *,
             if pos.notional:
                 positions[pos.symbol] = float(pos.notional)
         # L1：非 flat 持仓缺 mark ⇒ 不可量化（fail-closed）
-        unpriced = {s: True for s, p in
-                      ((p.symbol, p) for p in accounting.positions)
-                      if p.qty != 0.0 and p.notional is None}
+        unpriced = {s for s in (p.symbol for p in accounting.positions)
+                      if (lambda p: p.qty != 0.0 and p.notional is None)(accounting.position(s))}
         pending = tracker.exposure_by_symbol()
-        unresolved = {s: True for s in set(positions) | set(pending) | set(unpriced)}
-        for s in unpriced:
-            unresolved[s] = True
+        # 只有不可量化订单（unresolved_count>0）或缺 mark 的非 flat 持仓才标 unresolved；
+        # 普通在途订单有名义，不是 unresolved（P0017.4 修正：此前错误地把所有 pending symbol 标 True）。
+        unresolved: dict[str, bool] = {}
+        for s in set(positions) | set(pending) | unpriced:
+            unresolved[s] = s in unpriced or any((getattr(o, 'symbol', None) in (None, s)) for o in tracker.unresolved_orders())
         return PortfolioCommitment(
             position_by_symbol=positions,
             pending_by_symbol={s: float(v["total"]) for s, v in pending.items()},
@@ -268,15 +269,18 @@ def _predict(runtime: object | None, state, now: int):
     if clock is not None and hasattr(clock, "set"):
         clock.set(now)
     import asyncio
+    # 每次预测用独立事件循环：LocalTrial 内部为同步计算，但复用循环会在多标的交错调用时
+    # 残留调度任务/协程状态，导致结果被误判 stale。每调用独立循环可保证确定性。
     try:
+        loop = asyncio.new_event_loop()
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_closed():
-                raise RuntimeError
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(runtime.submit(state))
+            result = loop.run_until_complete(runtime.submit(state))
+        finally:
+            try:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            except Exception:  # noqa: BLE001
+                pass
+            loop.close()
         return getattr(result, "record", None)
     except Exception:  # noqa: BLE001 - 预测失败不致命（策略按 prediction=None 被动报价）
         return None

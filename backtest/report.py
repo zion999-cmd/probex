@@ -82,10 +82,29 @@ def build_summary(result: BacktestResult) -> dict:
     statuses: dict[str, int] = {}
     for order in result.tracker.orders:
         statuses[order.status.value] = statuses.get(order.status.value, 0) + 1
+    # P0017.4：标的级明细（订单数/成交数/成交量/期末持仓）
+    sym_set = {o.symbol for o in result.tracker.orders} | {p.symbol for p in accounting.positions}
+    per_symbol: dict[str, dict] = {}
+    for sym in sorted(sym_set):
+        sym_orders = [o for o in result.tracker.orders if o.symbol == sym]
+        sym_fills = [f for f in accounting.fills.fills if f.symbol == sym]
+        pos = next((pp for pp in accounting.positions if pp.symbol == sym), None)
+        per_symbol[sym] = {
+            "orders": len(sym_orders),
+            "fills": len(sym_fills),
+            "filled_quantity": round(sum(f.quantity for f in sym_fills), 10),
+            "end_position": (None if pos is None else
+                                {"qty": pos.qty, "notional": pos.notional,
+                                 "unrealized_pnl": pos.unrealized_pnl}),
+        }
+    declared_symbols = (
+        list(result.config.symbols)
+        if hasattr(result.config, "symbols") and result.config.symbols else None)
     return {
         "run_id": result.run_id,
         "status": result.status.value,
         "dataset_sha256": result.dataset_sha256,
+        "symbols": declared_symbols or sorted(sym_set),
         "trace": asdict(result.trace),
         "portfolio": {
             "initial_balance": result.config.initial_balance,
@@ -101,6 +120,7 @@ def build_summary(result: BacktestResult) -> dict:
             "end_positions": positions,
         },
         "orders_by_status": statuses,
+        "per_symbol": per_symbol,
         "integrity_checks": result.integrity_checks,
         "capability_declarations": {
             "slippage_model": SLIPPAGE_MODEL,
