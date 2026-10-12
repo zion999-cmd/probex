@@ -431,6 +431,22 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
   bar/OHLCV、slippage/funding/taker 仍为明确未支持。
 - `currentProposal = null`（收口）。
 
+
+### P0017.5 实时多标的模拟交易收口（2026-10-12 收口）
+
+- **已完成（注入式确定性 E2E 口径）**：实时多标的公开行情 → per-symbol 状态/MakerPolicy 决策 →
+  共享 ExecutionEngine（P0017.2 组合 gross 硬闸跨标的）→ 多个 SimulatedVenue → 共享会计/订单追踪 →
+  可审计 JSON 状态。新增 `runtime/live_multi_symbol.py`(LiveMultiSymbolRunner)、
+  `runtime/multi_symbol_core.py`(离线/实时**共享唯一步进**)、`runtime/live_collector_source.py`、
+  `runtime/live_paper_service.py` + CLI `live-paper` + `profiles/live-paper-multi-symbol.json`。
+- 生命周期：单线程确定性顺序 `(ts,symbol,arrival)`、per-symbol 单调时间门（乱序/重复跳过计数）、
+  单标的故障隔离、SIGTERM 有序停止（撤销模拟挂单并以终态核实，不强平/不虚构收盘价）。
+- 结构隔离：AST 守卫确认 live paper 路径不 import runtime.testnet/binance 写/private 入口；模拟不可能降级真实下单。
+- 证据：**2560 passed / 0 failed / 24 skipped**（工作树 + detached @a86627c）；验收报告/Closure Audit 见 artifacts/p0017/。
+- **B 类 NOT RUN [X]**：真实 Binance 公开行情长跑（HTTP 451/超时）。注入式 E2E 不等同真实长跑证据。
+- 明确排除（未做）：Testnet 写/撤/平、P0001.16 0.001 BTC 残留、LIVE、新策略、bar/真实滑点/funding/taker、3+ 标的专项。
+- `currentProposal = null`（收口）。
+
 ## 下一步
 
 - **无授权中的步骤**：P0001.9.3 – P0001.9.6 均已收口，`currentProposal = null`。

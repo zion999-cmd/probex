@@ -2712,3 +2712,18 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
   - 明确最终能力边界：离线、event-driven、多标的、共享 maker/risk 参数（C-4）；真实多标的行情 E2E（451）、
     Testnet/LIVE 写路径为 B 类未验证；C-1 reduce-only 术语澄清入档；C-3（3+ 标的）为 C 类后续。
   - 互引文件与提交 hash（2f52f0e/70b4ff6/efbe642）均可解析；design↔artifacts/roadmap/current_state/status 一致。
+
+## 2026-10-12（P0017.5 实时多标的模拟交易收口）
+
+- 新增：`runtime/multi_symbol_core.py`（离线/实时共享步进：process_market_event/decide_and_submit/
+  build_commitment_provider）、`runtime/live_multi_symbol.py`（LiveMultiSymbolRunner/批次/健康/生命周期）、
+  `runtime/live_collector_source.py`（只读 collector→BatchSource）、`runtime/live_paper_service.py`（组合根+信号+CLI 服务）、
+  `prediction/invoke.py`（中立同步 provider 调用，消除 runtime→backtest 反向依赖）。
+- 复用而非重写：`backtest/driver._predict` 与 `backtest/multi_driver` 改调共享核心；P0017.3/.4 测试全绿无行为变化。
+- 入口：`python3 -m cli.main live-paper --config profiles/live-paper-multi-symbol.json`（Ctrl-C 有序停止）。
+- 测试：+18（live E2E 11 / 入口 5 / AST 隔离 3），另 1 个既有 ownership 测试承认第二个显式模拟组合根。
+- 全量 **2560 passed / 0 failed / 24 skipped**；detached clean @a86627c 复验一致。
+- 遗留：B-live 真实 Binance 长跑（451，NOT RUN）；B-L3 Testnet 写（独立授权）+ testnet engine 未接组合预算 +
+  P0001.16 0.001 BTC；C：真实背压阈值、3+ 标的、bar/真实成本。
+- 实现提交 a86627c（已 push）；收口提交见 git。currentProposal→null。
+

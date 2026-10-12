@@ -92,4 +92,4 @@ P0001.15  Instrument Domain + Venue Integration Contract ← 已完成（2026-10
 | P0017.2 | 已完成（**离线组合预算验收**，2517 测试；第二道闸 + per-symbol 在途 + 缺 mark fail-closed + Closure Audit）；**Testnet/LIVE 组合预算与真实多标的行情 E2E 未验证**（B 类，外部/授权前置）；L2 策略 sizing 为独立 C 类优化项 |
 | P0017.3 | 已完成（**离线确定性回测**，2533 测试：event-driven driver/双跑可复现/内容级因果前缀/组合风险复用/CLI；bar、多标的回测、slippage/funding 为 B 类未支持能力，见验收/Closure Audit） |
 | P0017.4 | 已完成（**离线多标的确定性组合回测**，2541 测试：per-symbol 状态隔离/统一时间线/P0017.2 组合 gross 硬闸跨标的生效/会计勾稽/双跑与同 ts 预算竞争 C-2 确定性）；**真实多标的行情 E2E（Binance 451）与 Testnet/LIVE 多标的写路径未验证（B 类）**；bar 粒度、3+ 标的专项（C-3）、per-symbol 全套策略参数（C-4）为后续；slippage/funding 仍 UNSUPPORTED |
-| P0017.5 | 实现中（实时多标的行情驱动模拟交易链路收口：LiveMultiSymbolRunner + 离线/实时共享步进 + 组合风险/会计闭环 + 生命周期；注入式确定性 E2E 验收，真实行情长跑 Binance 451 NOT RUN；不含 Testnet/LIVE/0.001 残留/bar/滑点） |
+| P0017.5 | 已完成（**实时多标的公开行情→模拟交易链路，注入式确定性 E2E 已验证**，2560 测试：LiveMultiSymbolRunner + 离线/实时共享步进核心 + P0017.2 组合预算跨标的+同批竞争确定性 + 故障隔离/乱序重复处理/撤销验证式停止 + AST 结构隔离守卫 + CLI/profile）；**真实 Binance 长跑 NOT RUN（451，B 类外部）**；Testnet/LIVE/0.001 残留/bar/真实成本为排除或 B/C 类 |
