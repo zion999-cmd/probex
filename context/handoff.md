@@ -2653,3 +2653,12 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - 测试：新增 16（driver 10 + cli/report 6），全量 **2533 passed / 0 failed / 24 skipped**。
 - 结构隔离：backtest 包不 import connectors/runtime.testnet/runtime.assembly（守卫测试）。
 - 待办：detached 复核 + P0017.3_ACCEPTANCE_REPORT（§14），然后 Closure Audit。
+
+## 2026-10-12（P0017.3 路径 1 加固 + 正式收口）
+
+- 零行为变更加固：B03 升级为内容级前缀一致性测试（订单 client_id/状态/成交量/均价、fills、equity、realized/fees）；
+  验收报告 A03/C03/D08 措辞修正为"schema 层不可达 / P0017.2 独立验证 / 同步路径 INCOMPLETE 不可达"，
+  多标的回测登记为 B 类已知边界。生产/策略/风险/会计/CLI 行为零变更。
+- detached clean checkout 复核 2533 passed。
+- 人类据 Closure Audit（无 A 类缺陷、边界明确、证据一致）批准收口；`currentProposal: P0017.3 → null`。
+- 多标的回测、bar 粒度、slippage/funding 等 B 类能力留待后续提案；未跟踪的设计正文/差距审计文档按人类指示保持原状。

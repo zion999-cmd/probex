@@ -105,3 +105,26 @@
 - **路径 2**：接受当前证据强度（因果性已独立复跑成立、缺口仅为测试断言/措辞），直接收口，把 (a)(b) 记入后续 C 类清单。
 
 **不建议**在未确认单标的边界措辞前直接宣称"P0017.3 全部 SC [T] PASS"——C03 的多标的语义应按 §5 诚实表述。
+
+---
+
+## 8. 收口结论（路径 1 加固后，2026-10-12）
+
+人类选择路径 1。已完成零行为变更加固并复核：
+
+1. **B03 已固化为内容级回归**：`test_future_event_does_not_change_prior_decisions` 现比较同 run_id 双跑的
+   订单 `(client_id,status,filled_qty,avg_price,limit_price)` 内容前缀、fills `(symbol,trade_id,qty,price)`、
+   equity/realized/fees 终值；追加的未来事件只允许增加其后的订单。真实代码行为未变（仅增强断言）。
+2. **A03/C03/D08 措辞已修正**（验收报告 §2/§4/§5）：
+   - A03：BAR 在事件 schema 层不可表达，`UNSUPPORTED_CAPABILITY` 枚举 v1 无可达路径，bar=B 类未支持；
+   - C03：v1 单标的输入使多标的累计绕过不可达，跨标的组合闸由 **P0017.2 独立验证**（不等于回测 E2E 已覆盖多标的），多标的回测=B 类边界；
+   - D08：同步全量消费+尾部 poll 使 `INCOMPLETE` v1 不可达，末尾 OPEN 挂单为合法终态。
+3. **测试**：工作树 + detached clean checkout 均 **2533 passed / 0 failed / 24 skipped**（skipped 全为既有 opt-in 外部测试）。
+4. **生产行为零变更**：加固只改测试断言与文档；策略/风险/会计/CLI 交易逻辑未变。
+
+**最终五问**：承诺能力闭环（35 项离线 SC，3 项按"更低层满足/不可达/复用 P0017.2"准确表述）；无 A 类正确性缺陷；
+未支持能力（多标的回测、bar、slippage/funding、Testnet/LIVE）均显式 B 类声明、不会被误认为已验证；
+遗留项已分类并有启用条件；代码/测试/报告/roadmap/current_state 一致。
+
+**结论：满足正式收口条件，P0017.3 关闭（离线确定性回测能力）；`currentProposal → null`。**
+后续 B 类能力（多标的回测、bar 粒度、真实成本模型）须独立提案，不得把本次离线模拟结论外推为实盘/多标的保证。

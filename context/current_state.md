@@ -402,6 +402,20 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
   仅报价效率/reject 噪声）。
 - `currentProposal = null`（收口）。
 
+
+### P0017.3 确定性离线回测（2026-10-12 收口）
+
+- **已完成（离线验收口径）**：独立 `backtest/` 包——单线程同步事件步进（无 wall-clock/线程）、
+  dataset 内容 hash + canonical run_id、manifest/summary/report.md、`probex backtest` CLI、
+  复用 RiskGate + P0017.2 组合硬闸 + AccountingCore/SimulatedVenue；slippage/funding/market-impact 显式 UNSUPPORTED。
+- 证据：**2533 passed / 0 failed / 24 skipped**（工作树 + detached）；B03 已升级为订单/成交/equity 内容级因果前缀测试。
+- Closure Audit（`artifacts/p0017/P0017_3_CLOSURE_AUDIT.md`）结论：无 A 类正确性缺陷。
+- **B 类已声明能力边界（未实现，不代表已验证）**：多标的离线回测（C03 跨标的累计在 v1 不可达；组合闸正确性由 P0017.2 独立保证）；
+  bar/OHLCV 执行粒度（BAR 在事件 schema 层不可表达，UNSUPPORTED_CAPABILITY 枚举 v1 无可达路径）；
+  slippage/funding/taker/market-impact；Testnet/LIVE 回测路径结构性不可达。
+- 回测收益为给定假设下的模拟，不预测未来、不证明实盘收益。
+- `currentProposal = null`（收口）。
+
 ## 下一步
 
 - **无授权中的步骤**：P0001.9.3 – P0001.9.6 均已收口，`currentProposal = null`。
