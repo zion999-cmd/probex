@@ -34,7 +34,7 @@ Legend：**[T]** automated evidence ｜ **[S]** static/code-path ｜ **[X]** not
 |---|---|---|
 | A01 合法 event-store JSONL 可完成回测 | **[T] PASS** | `test_event_driven_run_completes_without_wall_clock`；CLI fixture 运行（1560 events → SUCCESS） |
 | A02 无效 schema → INVALID_INPUT | **[T] PASS** | `test_invalid_input_missing_file` |
-| A03 bar-only 输入 → UNSUPPORTED_CAPABILITY | **[T]（契约）** | v1 仅接受 event-store 事件；`BacktestStatus.UNSUPPORTED_CAPABILITY` 已定义；事件类型/粒度不被转换为虚假逐笔（`_validate_dataset` 按 MarketEvent 校验）。bar 路径在报告中声明为不支持（见 E08） |
+| A03 bar-only 输入 → UNSUPPORTED_CAPABILITY | **[S] 边界在输入 schema 层满足（状态本身 v1 不可达）** | `EventType.BAR` 无 payload 映射、无生产者，实测无法构造合法 `MarketEvent`（`event_type_for(dict)→InvalidEventError`），故 bar-only 数据无法进入 event-store；driver 不会把 bar 转成虚假逐笔。注意：枚举 `UNSUPPORTED_CAPABILITY` 在 v1 **无产生路径**（语义在更低层满足），不能当作运行时已覆盖。多粒度（bar）输入为 **B 类未支持能力**，启用条件=新增 bar payload + 显式 UNSUPPORTED 分支 |
 | A04 损坏/冲突/不可排序输入不静默修复 | **[T] PASS** | `test_invalid_input_out_of_order_events`（逆序 exchange_ts → INVALID_INPUT）；`test_symbol_mismatch_rejected` |
 | A05 同内容同数据集身份 | **[T] PASS** | `dataset_identity` 为内容 sha256（`test_artifacts...` 使用同一 store） |
 | A06 内容变身份变 | **[T] PASS** | `test_future_event...` 使用不同内容得到不同 identity（`dataset_identity` 按文件字节 hash） |
@@ -55,7 +55,7 @@ Legend：**[T]** automated evidence ｜ **[S]** static/code-path ｜ **[X]** not
 |---|---|---|
 | C01 候选经单标的 RiskGate | **[T] PASS** | driver 调 `engine.submit`（内部 `gate.evaluate`）；正常 fixture 出现 14 次 `REDUCE_ONLY_WOULD_INCREASE` 拒绝 |
 | C02 组合预算启用时候选经 P0017.2 硬闸 | **[T] PASS** | engine 注入 `portfolio_commitment_provider`；回测配置可设 `risk.max_portfolio_gross_notional`；复用已验收组合闸 |
-| C03 组合 gross 不可被多标的累计绕过 | **[T]（契约/单标的 v1）** | 回测 v1 单标的（多标的 event-store → INVALID_INPUT，见 `test_symbol_mismatch_rejected`）；组合闸在引擎层可用，跨标的绕过由 P0017.2 的 `test_two_symbols_each_ok_but_portfolio_over_limit_rejected` 保证 |
+| C03 组合 gross 不可被多标的累计绕过 | **[S] v1 场景不可达 + 复用闸经独立验证（非回测 E2E）** | 回测 v1 在输入层拒绝多 symbol（`driver.py:140`，`test_symbol_mismatch_rejected`），“多标的累计绕过”在回测中**不可达**；跨标的组合硬闸的正确性由 **P0017.2 独立测试**保证（`test_two_symbols_each_ok_but_portfolio_over_limit_rejected`、`..._pending_order_consumes_portfolio_budget_before_fill`）。两者必须分开：**多标的回测本身尚未实现（B 类已知边界）**，启用条件=driver 支持 per-symbol FeatureEngine/SimulatedVenue/决策上下文后再加多标的回测 E2E |
 | C04 缺 mark 跨标的 fail-closed | **[T]（引擎层）** | driver commitment provider 复用 L1 修正（非 flat 缺 mark → unresolved）；P0017.2 `test_missing_mark_on_one_holding_blocks_...` |
 | C05/C06 被拒单不进 tracker/无成交无会计副作用 | **[T] PASS** | `test_risk_rejected_orders_never_enter_tracker_or_accounting`（被拒单不在 tracker 状态集；fills 仅来自接受单） |
 | C07 回测构造中 Testnet/LIVE 写路径不可达 | **[T] PASS** | `test_no_testnet_or_live_import_in_backtest_package`（AST 扫描 backtest/ 不含 runtime.testnet/runtime.assembly/connectors 写模块） |
@@ -71,7 +71,7 @@ Legend：**[T]** automated evidence ｜ **[S]** static/code-path ｜ **[X]** not
 | D05 终态符合状态机 | **[T] PASS** | integrity `order_statuses_known` 枚举校验 |
 | D06 缺估值不伪造权益/收益 | **[T] PASS** | accounting 在缺 mark 时 equity/gross 返回 None；报告不填零（L1） |
 | D07 会计不一致 → INTEGRITY_FAILURE | **[T] PASS（机制）** | 任一 integrity check 失败 ⇒ 状态 INTEGRITY_FAILURE（`run_backtest` 末段）；checker 集合可扩展。当前 fixture 全 PASS |
-| D08 未完成最终结算 → 非成功 | **[T]（状态机）** | INCOMPLETE 六态之一已定义；正常完成路径为 SUCCESS，组件错误 → REPLAY_FAILURE |
+| D08 未完成最终结算 → 非成功 | **[S] v1 同步路径下 INCOMPLETE 不可达** | driver 单线程同步消费**全部**事件并在末尾再 poll 一次，无“未处理事件”可能；枚举 `INCOMPLETE` 因此 v1 无产生路径。运行结束时的 OPEN 挂单是**合法终态**（被估值、计入 summary），不等于运行不完整。未来引入异步/分批处理时该状态才需接线 |
 
 ### E. Manifest 与评估
 | SC | 结果 | 证据 |
@@ -111,14 +111,15 @@ Legend：**[T]** automated evidence ｜ **[S]** static/code-path ｜ **[X]** not
 ## 4. 能力边界（不扩大结论）
 
 1. **执行粒度仅 event-driven**（trades/order-book + MARK_PRICE）；OHLCV/bar 回测、intrabar 撮合 = 未实现（报告 UNSUPPORTED）。
-2. **v1 单标的**：driver 校验单 symbol event-store；多标的回测未实现（多标的风险由 P0017.2 引擎保证，但多 symbol 历史驱动是后续能力）。
+2. **v1 单标的（B 类已知能力边界，非缺陷）**：driver 在输入层显式拒绝多 symbol event-store（`INVALID_INPUT`），不会静默按单标的处理。多标的**回测**（per-symbol FeatureEngine/SimulatedVenue/决策上下文编排）尚未实现；其启用前提是新增多 symbol 历史驱动 + 多标的回测 E2E。注意区分：跨标的组合硬闸已由 **P0017.2 独立验证**（引擎级），但这不等于 P0017.3 已端到端验证多标的回测（见 C03）。
 3. **成本**：仅 maker fee；slippage/funding/market-impact/taker = UNSUPPORTED/NOT_MODELED，未以零呈现。
 4. 队列/延迟为 SimulatedVenue 的事件级近似，**未用真实订单簿历史校准**，不等同真实成交。
 5. 回测收益是"给定历史事件+策略+执行/成本假设"下的模拟，不预测未来、不证明实盘收益。
 6. Testnet/LIVE 写路径结构性不可达；P0017.2 的 Testnet/LIVE 组合预算仍是既有 B 类缺口，本阶段不改变。
 
 ## 5. 残留/后续（非 A 类缺陷）
-- 多标的离线回测、bar 执行粒度、可选 slippage/funding 模型、run registry 归档（当前写独立 out 目录）为后续能力候选。
+- **B 类（能力边界，明确未支持）**：多标的离线回测（启用条件见 §4.2）；bar/OHLCV 执行粒度（BAR 事件在 schema 层不可表达，`UNSUPPORTED_CAPABILITY` 枚举 v1 无产生路径）；可选 slippage/funding 成本模型；Testnet/LIVE 组合预算（仍为既有 B 类缺口）。
+- **C 类（优化）**：run registry 归档（当前写独立 out 目录）；result_hash 不含完整订单/成交明细列表（含聚合+trace，明细由 B04 双跑断言覆盖）；`INCOMPLETE` 枚举在同步 v1 下不可达（语义见 D08）。
 - 本次未发现影响决策/风险/会计/可复现性的 A 类正确性缺陷。
 
-**Closure**：§13 适用的离线强制标准全部 [T] PASS；[X] 项无（本提案离线验收不依赖外部条件）。建议进入 Closure Audit（§26.1）。
+**Closure**：§13 离线强制标准满足，其中 A03/D08 为输入 schema/同步语义在更低层满足（枚举不可达）、C03 为“v1 场景不可达 + P0017.2 独立验证”（多标的回测为 B 类边界），其余 [T] PASS；无 [X]（离线验收不依赖外部条件）。B03 已升级为内容级前缀一致性回归。

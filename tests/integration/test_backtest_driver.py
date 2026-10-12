@@ -59,6 +59,15 @@ class BacktestDriverTest(unittest.TestCase):
                              dataset_sha256=self.identity["sha256"], decision_fn=fn,
                              prediction_runtime=pred)
 
+    def _run_with_id(self, run_id: str, *, store=None, identity=None):
+        """同 run_id 运行，保证 client_order_id 跨双跑可比（因果性前缀测试用）。"""
+        store = store or self.store
+        ident = identity or self.identity
+        return run_backtest(store, _config(), run_id=run_id,
+                             dataset_sha256=ident["sha256"],
+                             decision_fn=lambda **kw: self.policy.decide(**kw),
+                             prediction_runtime=local_trial_runtime())
+
     def test_event_driven_run_completes_without_wall_clock(self) -> None:
         result = self._run()
         self.assertEqual(result.status, BacktestStatus.SUCCESS, result.reason)
@@ -79,27 +88,48 @@ class BacktestDriverTest(unittest.TestCase):
         self.assertEqual(orders1, orders2)
 
     def test_future_event_does_not_change_prior_decisions(self) -> None:
-        # 追加一个未来事件 ⇒ 此前已确定的决策/成交轨迹不变
-        base = self._run()
-        extended_store = self.tmp / "events_ext.jsonl"
+        """B03/B04：仅追加未来事件，此前已确定的**内容**（订单状态/成交量/均价、成交、权益）
+        必须逐笔一致；不是只比数量。两次使用相同 run_id（成交 id 才可比）。"""
+        base = self._run_with_id("bt-causal")
         from tests.support import trade_event, AggressorSide
-        extra = trade_event(999_999, price=60_001.0, quantity=1.0,
-                              aggressor=AggressorSide.BUY, exchange_ts=BASE_TS + 3_600_000 * 2)
-        writer_lines = self.store.read_text(encoding="utf-8").splitlines()
-        extended_store.write_text("\n".join(writer_lines) + "\n", encoding="utf-8")
         from storage.events.writer import JsonlEventWriter
+        extended_store = self.tmp / "events_ext.jsonl"
+        extended_store.write_text(self.store.read_text(encoding="utf-8"),
+                                   encoding="utf-8")
         with JsonlEventWriter(extended_store) as w:
-            w.append(extra)
-        identity2 = dataset_identity([extended_store])
-        ext = run_backtest(extended_store, _config(), run_id="bt-test-ext",
-                            dataset_sha256=identity2["sha256"],
-                            decision_fn=lambda **kw: self.policy.decide(**kw),
-                            prediction_runtime=local_trial_runtime())
-        # 前一个小时（原始输入）的拒绝结果不受尾部未来事件影响
-        self.assertEqual(ext.trace.decisions >= base.trace.decisions, True)
-        base_prefix = [r for r in base.trace.rejects_log if r["ts"] <= BASE_TS + 3_600_000]
-        ext_prefix = [r for r in ext.trace.rejects_log if r["ts"] <= BASE_TS + 3_600_000]
-        self.assertEqual(base_prefix, ext_prefix)
+            w.append(trade_event(999_999, price=60_001.0, quantity=1.0,
+                                   aggressor=AggressorSide.BUY,
+                                   exchange_ts=BASE_TS + 3_600_000 * 2))
+        ext = self._run_with_id("bt-causal", store=extended_store,
+                                  identity=dataset_identity([extended_store]))
+
+        cutoff = BASE_TS + 3_600_000
+        # 1) rejects：内容前缀一致
+        self.assertEqual([r for r in base.trace.rejects_log if r["ts"] <= cutoff],
+                         [r for r in ext.trace.rejects_log if r["ts"] <= cutoff])
+        # 2) 决策计数：追加事件只能增加，不改变此前已发生的决策数
+        self.assertGreaterEqual(ext.trace.decisions, base.trace.decisions)
+        # 3) 订单内容前缀：前 N 单（client id/状态/成交量/均价）逐笔相等
+        def order_content(result):
+            return [(o.client_order_id, o.status.value, round(o.filled_quantity, 10),
+                      round(o.avg_fill_price, 8), round(o.price, 8)) for o in result.tracker.orders]
+        ob, oe = order_content(base), order_content(ext)
+        self.assertEqual(ob, oe[: len(ob)],
+                          "appending a future event changed pre-existing order content")
+        # 4) 成交：原始窗口成交笔数与 ledger 一致且前缀相等
+        self.assertEqual(base.accounting.fills.count, ext.accounting.fills.count)
+        base_fills = [(f.symbol, f.trade_id, f.quantity, round(f.price, 8))
+                       for f in base.accounting.fills.fills]
+        ext_fills = [(f.symbol, f.trade_id, f.quantity, round(f.price, 8))
+                      for f in ext.accounting.fills.fills]
+        self.assertEqual(base_fills, ext_fills)
+        # 5) 权益序列终值（含费用）一致——未来事件不得改变此前会计结果
+        self.assertEqual(base.accounting.equity(), ext.accounting.equity())
+        self.assertEqual(base.accounting.realized_trade_pnl,
+                          ext.accounting.realized_trade_pnl)
+        self.assertEqual(base.accounting.trading_fees, ext.accounting.trading_fees)
+        # 追加事件可合法产生**之后**的新订单（不能要求整段完全相同）
+        self.assertGreaterEqual(len(oe), len(ob))
 
     def test_risk_rejected_orders_never_enter_tracker_or_accounting(self) -> None:
         # 较低但非零的限额：策略会报价，部分提交在 RiskGate 被拒；被拒单不进 tracker/会计
