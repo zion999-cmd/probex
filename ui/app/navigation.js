@@ -60,22 +60,34 @@ export function resolveRoute(surface, rest) {
   return { surface, detail: detail || null, args: rest, module: surfaceModule(surface.slug) };
 }
 
-export function surfaceHash(surface, detail, identity) {
+export function surfaceHash(surface, detail, identity, extra) {
   const parts = [surface];
   if (detail) parts.push(detail);
   if (identity !== undefined && identity !== null && identity !== "") parts.push(String(identity));
+  if (extra !== undefined && extra !== null && extra !== "") parts.push(String(extra));
   return `#/${parts.join("/")}`;
 }
 
-/** Order / Fill / Execution event → Activity / Evidence（canonical identity）。 */
+/** Order / Fill / Execution event → Activity / Evidence（canonical identity）。
+ *
+ * 事实钻取必须携带 **kind**：Evidence 页契约是 `#/activity/evidence/<kind>/<identity>`，
+ * 由它拼出 `facts` 只读端点的两段路径。早期版本漏掉 kind，导致点开身份单元格进入
+ * 错误页且查错端点。 */
 export function entityHash(kind, identity) {
   if (kind === "run") return surfaceHash("performance", "runs", identity);
   if (kind === "blocker") return surfaceHash("system", BLOCKER_SECTION[identity] || "execution");
-  const route = { order: ["activity", "evidence"], fill: ["activity", "evidence"],
-    execution_event: ["activity", "evidence"], decision: ["activity", "strategy"],
-    prediction: ["activity", "prediction"], evidence: ["activity", "evidence"] }[kind];
-  if (!route) return surfaceHash("activity", "evidence", identity);
-  return surfaceHash(route[0], route[1], identity);
+  if (kind === "decision") return surfaceHash("activity", "evidence", "decision", identity);
+  if (kind === "prediction") return surfaceHash("activity", "evidence", "prediction", identity);
+  const factKind = { order: "order", fill: "fill", execution_event: "execution_event",
+    evidence: "evidence" }[kind] || "evidence";
+  return surfaceHash("activity", "evidence", factKind, identity);
+}
+
+/** hash 查询参数解析（`#/activity/orders?decision=xxx`）；路由段之外的信息不丢。 */
+export function hashQuery() {
+  const raw = String((typeof window !== "undefined" && window.location.hash) || "");
+  const index = raw.indexOf("?");
+  return new URLSearchParams(index >= 0 ? raw.slice(index + 1) : "");
 }
 
 /** Activity event → Market 对应时间点（timestamp，不是字符串搜索）。 */

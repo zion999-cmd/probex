@@ -28,6 +28,28 @@ pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-size: 12px;
 #assistant-drawer header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
 #assistant-drawer button { background: #232936; color: #d7dae0; border: 1px solid #39404e; border-radius: 4px;
   padding: 3px 6px; margin: 2px 2px 2px 0; cursor: pointer; font: inherit; }
+#assistant-drawer button:disabled { opacity: .5; cursor: progress; }
+#assistant-form { display: flex; gap: 4px; margin: 6px 0 4px; }
+#assistant-input { flex: 1; background: #0f1218; color: #d7dae0; border: 1px solid #39404e;
+  border-radius: 4px; padding: 4px 6px; font: inherit; font-size: 11px; }
+#assistant-input:focus { outline: 1px solid #7aa2f7; }
+#assistant-thread { margin-top: 6px; max-height: 46vh; overflow: auto; }
+.assistant-turn { border-top: 1px solid #22262f; padding-top: 4px; margin-top: 4px; }
+.assistant-turn .v { text-align: left; white-space: normal; }
+
+/* 全局 Header 的不可切换项：显式说明原因，不伪装成控件 */
+#banner .tag.mode-paper { background: #23324a; color: #cfe0ff; }
+#banner .tag.mode-testnet { background: #4a3a1f; color: #ffd9a0; }
+#banner .tag.mode-live { background: #4a1f24; color: #ffb3ba; }
+#banner details.why { display: inline; }
+#banner details.why > summary { display: inline; cursor: pointer; color: #9aa4b2; list-style: none; }
+#banner details.why > summary::-webkit-details-marker { display: none; }
+#banner details.why[open] { flex-basis: 100%; }
+#banner .why-body { color: #8b93a1; font-size: 11px; margin-top: 4px; }
+
+/* Blocker strip：原因与下一步直接可见（不只藏在 title 里） */
+#strip .blocker-item { display: block; margin: 2px 0; }
+#strip .blocker-next { color: #6b7280; font-size: 11px; }
 main { padding-right: 340px; }
 
 /* F3/F7：typed value 渲染与折叠 detail（不再出现 [object Object]） */

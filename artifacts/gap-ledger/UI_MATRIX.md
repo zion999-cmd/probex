@@ -133,3 +133,33 @@
 - 已完成：**58**（surface 轮询已补齐，覆盖全部正文页）
 - 有缺口：0（授权范围内）
 - 受阻：3（I1/I2/I3，外部条件）
+
+---
+
+## 全量 UI 入口闭环审计与修复（本轮：真实浏览器驱动运行中的产品）
+
+**方法**：不用组件目录/接口定义判断完成度，而是用真实 Chrome 打开运行中的产品，逐 Surface 收集可交互元素、
+逐个点击内部链接、发送真实助手消息、执行真实 Action Gateway 调用，并断言真实反馈（含失败/空/未知）。
+
+**实测发现的真实缺陷（A 类：入口点击后报错或静默走错页面）与修复**：
+
+| # | 缺陷（实测） | 根因 | 修复 |
+|---|---|---|---|
+| U1 | Activity / Orders 的身份单元格（order / fill / execution_event）点开进入 **error 页**（`TypeError: Cannot read properties of undefined (reading 'replace')`） | `entityHash()` 漏掉 `kind` 段，生成 `#/activity/evidence/<id>`；Evidence 页契约需要 `kind+identity`，缺参时 `escapeHtml(undefined)` 抛错（且查错端点） | `entityHash` 补 kind（→ `#/activity/evidence/<kind>/<id>`）；`escapeHtml` 空值安全；Evidence 页缺参时显式说明而非抛错 |
+| U2 | `decision → orders` 与 `order → decision` 互跳链接**静默落到 Monitor** | 生成了 `#/orders?decision=…`、`#/activity?decision=…` 这类非 Surface 路由；且 hash query 未从路由解析中剥离 | 统一为 `#/activity/orders?decision=<id>`；`surfaceForHash`/`currentRoute` 先剥离 hash query |
+| U3 | 「同 decision 的其他订单」反查能力**只有 API、UI 未使用** | `fetchDecisionOrders` 已导出但从未被调用（§15 双向跳转未落地） | Orders 页读取 `?decision=` 并**真实反查**渲染候选订单表 |
+| U4 | Assistant Drawer **没有输入框与发送**（只有预置问题与动作按钮） | 设计要求 §7 的可输入助手未落地 | 新增输入框+发送+会话记录；确定性路由到既有只读能力；pending/answered/failed/NO_RESPONSE 显式反馈；动作仍只走 Manifest+Gateway |
+| U5 | Header 的可切换性没有任何说明（不可切换项看起来像普通文本） | 设计要求“不可切换必须显示原因”未落实 | Header 增加常显 `(fixed @startup)` 标记 + `why read-only?` 展开说明（启动参数决定；换标的需重启；集合见 universe） |
+| U6 | Blocker Strip 只在 `title` 里带原因 | 设计要求“原因/影响范围/下一步可见” | 条带直接显示 severity + 原因 + "→ 下一步"，仍链接到对应 System section |
+| U7 | Monitor 无法回答“我现在能执行哪些操作” | 设计要求 B 未落地 | 新增 Available actions 区：动作来自 Manifest，仅 AVAILABLE 可点；L2 走 confirmation；不可用动作显式给出原因 |
+| U8 | universe 未区分“查看当前标的”与“修改运行标的集合” | 要求 C 未落实 | 显式标注 traded symbol 固定于启动参数、采集集合由启动配置决定且本页只读（不造假控件） |
+| U9 | 助手把诊断问题“为什么**没有下单**？”误判为下单请求 | 关键词路由过宽 | 资本意图需**请求语气**才成立；诊断问题走 blockers + 订单事实 |
+
+**真实浏览器验收结果**：`tests/ui/ui_entry_acceptance.mjs` → **22/22 PASS**（证据：`artifacts/gap-ledger/ui_entry_acceptance.json`）。
+覆盖：五工作区可达且无控制台错误 / Header 只读原因 / Blocker 原因与下一步 / Activity→Evidence（order·fill·execution_event 三类）
+/ Orders 决策反查 / Monitor 可用动作 + L2 确认（`SUCCEEDED`）/ Assistant 输入·发送·追问·诊断路由·资本拒绝
+/ Market（book/trades/heatmap/universe）/ System（limits/rate/latency/reconciliation/health）/ Performance（runs+metrics+钻取）
+/ 不存在实体不崩页。
+
+**守卫**：`test_ui_api_contract`、`test_surface_architecture`、`test_ui_module_hygiene` 全部通过（本轮两次误伤已按守卫本意修正源码，未放宽断言）。
+**回归**：2560 passed / 0 failed / 24 skipped。

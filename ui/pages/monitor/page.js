@@ -4,6 +4,7 @@ import { escapeHtml, fact, positionFact, reasonCell, rows, section } from "/ui/c
 import { BLOCKER_SECTION, surfaceHash } from "/ui/app/navigation.js";
 import { SURFACES } from "/ui/app/surfaces.js";
 import { mountSparklines, sparklinesSection } from "/ui/monitor/sparklines.js";
+import { invoke } from "/ui/assistant/actions.js";
 
 let lastTimeline = null;
 
@@ -12,6 +13,7 @@ export const slug = "monitor";
 
 export async function render() {
   const snapshot = await fetchSnapshot();
+  const manifest = await fetchOrUnavailable(ENDPOINTS.actions);
   const overlays = await fetchJson(ENDPOINTS.marketOverlays);
   const decisions = (overlays.overlays || {}).decisions || [];
   const orders = snapshot.execution.active_orders || [];
@@ -111,6 +113,7 @@ export async function render() {
   return section("Instrument / venue", identityRow) + section("Connectors", connectorRow) +
     section("Process / runtime / readiness / execution", opsRow) +
     section("Runtime / loop", runtimeRow) + section("System now", metrics) +
+    actionsSection(manifest) +
     `<section class="wide"><h2>Trends (equity / PnL / exposure)</h2>${sparklinesSection()}</section>` +
     section("Execution safety", execSummary) +
     section("Blockers / warnings", rows(blockers)) +
@@ -118,6 +121,72 @@ export async function render() {
     section("Position / active orders", orderRows) +
     section("Recent activity", recent) +
     section("Surfaces", surfaceNav);
+}
+
+/**
+ * P0001.12.3：Monitor 必须能回答“我现在能执行哪些操作？”
+ * 动作**只能**来自 Action Manifest；只有 AVAILABLE 的才可点击，其余显示原因（不伪装可操作）。
+ * 执行仍走 Action Gateway（含 confirmation），结果原样回显（SUCCEEDED / REFUSED / FAILED / UNKNOWN）。
+ */
+function actionsSection(manifest) {
+  const actions = (manifest && manifest.actions) || [];
+  if (!actions.length) {
+    return section("Available actions", rows([["actions", '<span class="unknown">UNKNOWN (manifest unavailable)</span>']]));
+  }
+  const runnable = actions.filter((a) => availabilityOf(a) === "AVAILABLE");
+  const blocked = actions.filter((a) => availabilityOf(a) !== "AVAILABLE");
+  const buttons = runnable.length
+    ? runnable.map((a) => `<button data-action="${escapeHtml(a.action_id)}" ` +
+        `data-confirm="${a.confirmation_required ? "1" : ""}">${escapeHtml(a.action_id)}` +
+        `${a.confirmation_required ? " (confirm)" : ""}</button>`).join(" ")
+    : '<span class="unknown">none available now</span>';
+  const blockedRows = blocked.slice(0, 12).map((a) => [escapeHtml(a.action_id),
+    `<span class="unknown">${escapeHtml(availabilityOf(a))}</span> ` +
+    `<span class="muted">${escapeHtml(unavailableReason(a) || "")}</span>`]);
+  return section("Available actions",
+    rows([["runnable now", buttons],
+      ["note", '<span class="muted">动作来自 Action Manifest；经 Action Gateway 执行（L2 需确认）。' +
+        '资本类动作在设计中不可用。</span>']]) +
+    `<div id="monitor-action-status" class="row"><span class="k">last action</span><span class="v">—</span></div>` +
+    (blockedRows.length ? `<div class="muted">unavailable (${blocked.length})</div>` +
+      blockedRows.map(([id, why]) => `<div class="row"><span class="k">${id}</span><span class="v">${why}</span></div>`).join("")
+      : ""));
+}
+
+function availabilityOf(action) {
+  const value = action && action.availability;
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object") return value.state || value.value || "UNKNOWN";
+  return "UNKNOWN";
+}
+
+function unavailableReason(action) {
+  const value = action && action.availability;
+  if (value && typeof value === "object") return value.reason || value.unavailable_reason || "";
+  return action && (action.unavailable_reason || "");
+}
+
+/** 动作按钮：真实调用 Gateway，两步确认；状态如实回显（无假成功）。 */
+async function mountActions() {
+  const host = document.getElementById("monitor-action-status");
+  if (!host) return;
+  const status = host.querySelector(".v");
+  document.querySelectorAll("button[data-action]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      status.innerHTML = '<span class="unknown">pending…</span>';
+      let outcome = await invoke(button.dataset.action, { surface: "monitor" });
+      if (outcome.status === "CONFIRMATION_REQUIRED") {
+        status.innerHTML = '<span class="unknown">CONFIRMATION_REQUIRED — 确认执行…</span>';
+        outcome = await invoke(button.dataset.action,
+          { surface: "monitor", confirmation: outcome.confirmation_id });
+      }
+      const cls = outcome.status === "SUCCEEDED" ? "known" : "bad";
+      status.innerHTML = `<span class="${cls}">${escapeHtml(outcome.status)}</span> ` +
+        escapeHtml(outcome.reason_code || "");
+      button.disabled = false;
+    });
+  });
 }
 
 /** P0001.17：LOCAL_TRIAL 必须显式标注（不得描述为真实模型预测）。 */
@@ -134,4 +203,5 @@ function predictionSourceLabel(prediction) {
 
 export function mount() {
   mountSparklines(lastTimeline);
+  void mountActions();
 }

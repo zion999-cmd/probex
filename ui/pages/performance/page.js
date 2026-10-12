@@ -83,6 +83,8 @@ export async function render(rest = []) {
     ["drawdown", fact(snapshot.risk.drawdown)],
     ["win / loss counts", '<span class="unknown">NOT_AVAILABLE</span> <span class="muted">读模型没有"逐笔平仓 PnL"事实（Fill 只有单笔成交量/价，未按开平配对）</span>'],
     ["average pnl per trade", '<span class="unknown">NOT_AVAILABLE</span> <span class="muted">同上：缺少逐笔平仓 PnL ⇒ 不计算、不猜</span>'],
+    // 要求 E：从汇总指标能定位到相关成交 / 订单 / 运行记录（只给真实可达的目标）。
+    ["drill down", metricDrillDown(snapshot, selected)],
   ]);
   lastPerformance = { timeline, summary, comparison: comparisonPayload };
   return section("Trade statistics (real facts only)", tradeStats) +
@@ -103,4 +105,28 @@ export async function render(rest = []) {
 
 export function mount() {
   mountPerformanceCharts(lastPerformance || {});
+}
+
+/**
+ * 指标 → 实体钻取（P0001.12.1 drill-down 原则）。
+ *
+ * 只有**当前 runtime** 的订单/成交/因果链在当前产品 API 里可查；历史 run 只持久化了市场/run 事实，
+ * 订单与因果链未持久化 ⇒ 不提供假链接，显式说明不可用原因。
+ */
+function metricDrillDown(snapshot, selected) {
+  const currentRun = String((snapshot.runtime || {}).run_id || "");
+  const sameRun = !selected || selected === currentRun;
+  const links = [];
+  if (sameRun) {
+    links.push('<a href="#/activity/orders">orders</a>',
+      '<a href="#/activity">fills / causal chain</a>');
+    links.push(`<a href="#/market/run-review/${encodeURIComponent(currentRun)}">market @ run</a>`);
+  } else {
+    links.push(`<a href="#/market/run-review/${encodeURIComponent(selected)}">market facts of ${escapeHtml(selected)}</a>`);
+  }
+  const note = sameRun
+    ? '<span class="muted">当前运行：订单/成交/因果链可直接钻取</span>'
+    : '<span class="unknown">orders/fills NOT_AVAILABLE for historical runs</span> ' +
+      '<span class="muted">历史 run 未持久化订单与因果链（只有市场/run 事实）⇒ 不提供假链接</span>';
+  return `${links.join(" · ")} <span class="muted">|</span> ${note}`;
 }

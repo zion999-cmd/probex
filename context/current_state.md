@@ -447,6 +447,20 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 - 明确排除（未做）：Testnet 写/撤/平、P0001.16 0.001 BTC 残留、LIVE、新策略、bar/真实滑点/funding/taker、3+ 标的专项。
 - `currentProposal = null`（收口）。
 
+
+### UI 入口闭环补齐（2026-10-13，人类会话明确授权；未新建 Proposal）
+
+- **授权**：人类当前会话明确要求“直接依据已批准的 UI Proposal（P0001.12.1/.12.2/.12.3、P0001.13）完成产品，
+  不新建 Proposal”。本次工作在此授权下执行，`currentProposal` 保持 `null`（未新增/变更提案）。
+- **修复的真实入口缺陷（均由真实浏览器实测发现）**：证据钻取（order/fill/execution_event）报错、
+  decision↔orders 互跳静默走错页、同 decision 订单反查只有 API 无 UI、Assistant 无输入框/发送、
+  Header 无可切换性说明、Blocker 原因与下一步不可见、Monitor 无“可用动作”、universe 未区分查看标的与改集合、
+  助手把“为什么没有下单”误判为下单请求。详见 `artifacts/gap-ledger/UI_MATRIX.md` 末节。
+- **验收**：`tests/ui/ui_entry_acceptance.mjs`（真实 Chrome 驱动运行中的产品）**22/22 PASS**；
+  证据 `artifacts/gap-ledger/ui_entry_acceptance.json`。UI 契约守卫全绿；全量 **2560 passed / 0 failed / 24 skipped**。
+- **能力边界未变**：单标的 runtime（symbol 固定于启动参数）、Testnet/LIVE 未启用、
+  真实公网行情受本机代理/WS 限制（NOT RUN）——均在 UI 中显式说明，未伪装可操作。
+
 ## 下一步
 
 - **无授权中的步骤**：P0001.9.3 – P0001.9.6 均已收口，`currentProposal = null`。

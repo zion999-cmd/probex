@@ -66,6 +66,8 @@ export const HEADER_FIELDS = ["mode", "environment", "venue", "symbol", "runtime
 
 /** 仅用于 UI 展示的 Surface 标签（语义由本文件固定，视觉样式由实现层决定）。 */
 export function surfaceForHash(hash) {
-  const slug = String(hash || "").replace(/^#\/?/, "").split("/")[0];
+  // 剥离 hash query（`#/activity/orders?decision=x` 的 surface 仍是 activity）
+  const path = String(hash || "").replace(/^#\/?/, "").split("?")[0];
+  const slug = path.split("/")[0];
   return SURFACES.find((surface) => surface.slug === slug) || SURFACES[0];
 }

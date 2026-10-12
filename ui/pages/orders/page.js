@@ -3,10 +3,10 @@
  * P0001.15 §15/§25：每张订单都显示 canonical correlation（decision / instrument / venue / prediction），
  * 且能双向跳转（Order → Decision → 同 decision 的其他订单）。
  */
-import { ENDPOINTS, fetchJson, fetchSnapshot } from "/ui/client/api.js";
+import { ENDPOINTS, fetchDecisionOrders, fetchJson, fetchSnapshot } from "/ui/client/api.js";
 import { escapeHtml, fact, rows, section, table } from "/ui/client/render.js";
 import { updateSelection } from "/ui/client/selection.js";
-import { entityHash, marketPointHash } from "/ui/app/navigation.js";
+import { entityHash, hashQuery, marketPointHash } from "/ui/app/navigation.js";
 
 let lastSnapshot = null;
 
@@ -29,10 +29,14 @@ function orderLink(order) {
     `${escapeHtml(order.client_order_id)}</a>`;
 }
 
-/** Order → Decision：跳到 Activity 的同一决策（decision id 可点击，双向可查）。 */
+/** Order → Decision：跳到 Activity 的同一决策（decision id 可点击，双向可查）。
+ *
+ * 必须留在 Activity surface：`#/activity?decision=...` 不是合法路由（slug 含 query ⇒ 回落 Monitor），
+ * 故使用 `#/activity/orders?decision=<id>`，由本页读 hash query 做真实反查（同 decision 的其他订单）。 */
 function decisionCell(decisionId) {
   if (!decisionId || !decisionId.known) return fact(decisionId);
-  return `<a href="#/activity?decision=${encodeURIComponent(decisionId.value)}">${escapeHtml(decisionId.value)}</a>`;
+  return `<a href="#/activity/orders?decision=${encodeURIComponent(decisionId.value)}">` +
+    `${escapeHtml(decisionId.value)}</a>`;
 }
 export const slug = "orders";
 
@@ -44,6 +48,25 @@ export async function render() {
   }
   const { execution } = await fetchJson(ENDPOINTS.orders);
   const orders = execution.active_orders || [];
+  // §15 双向跳转：`?decision=<id>` 进入时，用 canonical correlation **真实反查**该决策的全部订单
+  const focusDecision = hashQuery().get("decision");
+  const related = focusDecision
+    ? await fetchDecisionOrders(focusDecision).catch(() => null)
+    : null;
+  const focusBlock = focusDecision
+    ? section(`Decision ${escapeHtml(focusDecision)} → orders (双向反查)`, related
+        ? table(["client id", "side", "status", "price", "qty"],
+            (related.orders || []).map((o) => [
+              `<a href="${entityHash("order", o.client_order_id)}">${escapeHtml(o.client_order_id)}</a>`,
+              escapeHtml(String(o.side || "")), escapeHtml(String(o.status || "")),
+              fact(o.price), fact(o.quantity)])) +
+          rows([["orders in this decision", escapeHtml(String(related.count ?? (related.orders || []).length))]])
+        : rows([["reverse lookup", '<span class="unknown">UNAVAILABLE (decision not in this runtime)</span>']]))
+    : "";
+  const focusNotice = focusDecision && !orders.some((o) => o.decision_id && o.decision_id.known
+    && String(o.decision_id.value) === focusDecision)
+    ? rows([["selected decision", `${escapeHtml(focusDecision)} <span class="muted">(该决策当前无挂单：可能已成交/已撤/已拒)</span>`]])
+    : "";
   const table_ = table(["client id", "side", "status", "price", "qty", "filled",
                         "decision", "instrument", "venue"],
     orders.map((o) => [orderLink(o), escapeHtml(o.side),
@@ -77,7 +100,7 @@ export async function render() {
       });
     });
   }
-  return section("Active orders", table_) + detail + section("Exposure", rows([
+  return section("Active orders", table_) + focusNotice + focusBlock + detail + section("Exposure", rows([
     ["uncertain exposure", fact(execution.uncertain_exposure)],
     ["open order exposure", fact(execution.open_order_exposure)],
     ["has unknown exposure", `<span class="${execution.has_unknown_exposure ? "bad" : "known"}">${execution.has_unknown_exposure}</span>`],

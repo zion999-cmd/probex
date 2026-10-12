@@ -42,7 +42,8 @@ function decisionOrderCell(entry) {
   const match = detail.match(/decision_id=([A-Za-z0-9:_-]+)/);
   if (!match) return '<span class="unknown">UNKNOWN</span>';
   const decisionId = match[1];
-  return `<a href="#/orders?decision=${encodeURIComponent(decisionId)}">${escapeHtml(decisionId)}</a>`;
+  // 必须停留在 Activity surface（`#/orders?...` 不是合法 Surface 路由，会被静默回落到 Monitor）
+  return `<a href="#/activity/orders?decision=${encodeURIComponent(decisionId)}">${escapeHtml(decisionId)}</a>`;
 }
 
 /** decision id → 可点击的 drill-down（拉取 /api/v1/decisions/detail）。 */

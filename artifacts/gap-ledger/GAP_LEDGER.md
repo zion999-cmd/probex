@@ -153,3 +153,9 @@
 - 2026-10-11 P0017.1（已批准）Batch1-5：universe 发现 / 共享市场数据集 / 多标的采集编排 / 只读 API / assembly+UI；2495 passed；真实 E2E 因 451 NOT RUN。
 - 2026-10-10 全量 UI 查漏补缺：补**正文 surface 轮询**（`console.js` SURFACE_REFRESH_MS=5000；优先页面非破坏 `refresh`，否则整体重渲染；交互保护：隐藏标签/焦点/打开的 drilldown）。Market 页新增非破坏 refresh（`liveWorkbench.refresh` 保留用户画线）。实测 7s 内 data_ts 前进、图表不重建；新增/扩展守卫。**2463 passed**。全量 UI 矩阵见 `UI_MATRIX.md`。
 - 2026-10-10 第二轮全局复核：重新抽取全部 38 个 Acceptance 段逐条核对（澄清 P0001.1 §2 的 10 项是原总架构文本、明确不属实施范围）；分层实测 unit 1591 / integration 489 / fault 308 / replay 49 全绿；detached clean checkout 2461 全绿；无空壳页面、无遗留进程。结论：无需新增授权的缺口已全部闭合。
+- 2026-10-13 全量 UI 入口闭环（真实浏览器驱动）：修 9 项真实入口缺陷（U1–U9，见 `UI_MATRIX.md`
+  末尾章节）：身份单元格钻取报错、decision↔orders 互跳静默走错页、决策反查未落地、
+  Assistant 无输入/发送、Header 无可切换性说明、Blocker 原因/下一步不可见、Monitor 无可用动作、
+  universe 未区分“查看标的/改集合”、助手误判诊断问题为下单请求。新增可重复验收脚本
+  `tests/ui/ui_entry_acceptance.mjs`（22 项真实操作断言，含 L2 动作确认与资本拒绝）。
+  全量 **2560 passed / 0 failed / 24 skipped**；UI 契约守卫全绿。

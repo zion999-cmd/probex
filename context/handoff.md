@@ -2727,3 +2727,22 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
   P0001.16 0.001 BTC；C：真实背压阈值、3+ 标的、bar/真实成本。
 - 实现提交 a86627c（已 push）；收口提交见 git。currentProposal→null。
 
+## 2026-10-13（UI 入口闭环补齐，人类会话授权，未新建 Proposal）
+
+- 会话授权：人类要求直接按已批准 UI 设计完成产品（P0001.12.1/.12.2/.12.3、P0001.13），不新建 Proposal；
+  `currentProposal` 保持 null。
+- 修复（真实浏览器实测出的缺陷，非推测）：
+  1) `entityHash` 补 kind → `#/activity/evidence/<kind>/<id>`（此前 order/fill/execution_event 点开必报错）；
+  2) `escapeHtml` 空值安全 + Evidence 页缺参显式说明（不再整页 error）；
+  3) `surfaceForHash`/`currentRoute` 剥离 hash query；`#/orders?decision=`、`#/activity?decision=` → `#/activity/orders?decision=`；
+  4) Orders 页真实反查同 decision 的其他订单（此前 `fetchDecisionOrders` 从未被 UI 调用）；
+  5) Assistant 新增输入框 + 发送 + 会话记录 + pending/answered/failed/NO_RESPONSE 反馈；
+     确定性路由到既有只读能力（snapshot/blockers/orders/runs/execution.*/explain/actions），不接 LLM、不造事实；
+     资本意图需请求语气（诊断问题“为什么没有下单”不再被误判）；
+  6) Header 常显 `(fixed @startup)` + why-read-only 说明；7) Blocker 条带直接显示原因与下一步；
+  8) Monitor 新增 Available actions（Manifest 驱动，仅 AVAILABLE 可点，L2 走确认）；
+  9) universe 明确“查看当前标的”与“采集集合”的区别及只读原因；10) Performance 指标 → 实体钻取（历史 run 显式 NOT_AVAILABLE）。
+- 验收：`node tests/ui/ui_entry_acceptance.mjs http://127.0.0.1:8897 /tmp/out.json` → **22/22 PASS**；
+  证据 `artifacts/gap-ledger/ui_entry_acceptance.json`。UI 契约守卫全绿；全量 2560 passed / 0 failed / 24 skipped。
+- 未做（保持边界）：未新建 Proposal、未启用 Testnet/LIVE、未改交易/风险语义、未做真实公网行情（受代理 WS 限制，NOT RUN）。
+

@@ -12,7 +12,9 @@ let surfaceRefreshTimer = null;
 let currentRouteKey = "";
 
 function currentRoute() {
-  const parts = window.location.hash.replace(/^#\/?/, "").split("/");
+  // 先剥 hash query：`#/activity/orders?decision=<id>` 的路径段只有 activity/orders
+  const parts = String(window.location.hash || "").replace(/^#\/?/, "").split("?")[0]
+    .split("/").filter((part) => part !== "");
   const surface = surfaceForHash(window.location.hash);
   return { surface, rest: parts.slice(1) };
 }
@@ -31,11 +33,26 @@ async function renderHeaderAndBlockers() {
     const id = snapshot.runtime;
     const blockers = snapshot.blockers || [];
     const blocking = blockers.filter((b) => b.severity === "BLOCKING");
+    const modeClass = `mode-${String(id.mode || "").toLowerCase()}`;
+    const health = snapshot.market.healthy.known
+      ? (snapshot.market.healthy.value ? "HEALTHY" : "UNHEALTHY") : "UNKNOWN";
+    // P0001.12.1 不变式 1：Mode 必须永远明显（PAPER/TESTNET/LIVE 视觉区分）。
     banner.innerHTML = [
-      `<span class="tag ${id.mode === "LIVE" ? "bad" : ""}">${id.mode}</span>`,
-      id.environment, id.venue, id.symbol, `runtime=${escapeHtml(id.runtime_id)}`,
-      `health=${snapshot.market.healthy.known ? (snapshot.market.healthy.value ? "HEALTHY" : "UNHEALTHY") : "UNKNOWN"}`,
+      `<span class="tag ${modeClass}">${escapeHtml(id.mode)}</span>`,
+      escapeHtml(id.environment), escapeHtml(id.venue),
+      `${escapeHtml(id.symbol)} <span class="muted" title="traded symbol 由启动参数 --symbol 决定，运行中不可切换">(fixed @startup)</span>`,
+      `runtime=${escapeHtml(id.runtime_id)}`,
+      `health=${health}`,
       `data_ts=${fact(id.data_timestamp)}`,
+      // 不可切换项必须**显示原因**，不得伪装成可操作控件。
+      `<details class="why"><summary title="为什么这些字段不能直接切换">why read-only?</summary>` +
+      `<div class="why-body">` +
+      `mode / environment / venue / symbol 由**启动参数**决定（\`--mode\`、\`--symbol\`），` +
+      `运行中更改会改变会计与风控 Owner 的归属，故不提供运行中切换；` +
+      `要换标的：重新启动进程（单标的运行），多标的集合见 ` +
+      `<a href="#/market/universe">Market → universe</a>（只读：集合由启动配置 \`market.universe.symbols\` 决定）。` +
+      `可执行的运行中动作以 Action Manifest 的 availability 为准（见 ` +
+      `<a href="#/system/capabilities">System → capabilities</a>）。</div></details>`,
     ].join(" · ");
     strip.innerHTML = blockers.length === 0
       ? '<span class="known">no blockers</span>'
@@ -45,8 +62,13 @@ async function renderHeaderAndBlockers() {
           const href = surfaceHash("system", BLOCKER_SECTION[b.owner] || "execution");
           const explanation = b.explanation || {};
           const title = explanation.explanation || b.message;
-          return `<a class="${cls}" href="${href}" title="${escapeHtml(title)}">${escapeHtml(b.owner)}:${escapeHtml(b.reason_code)}</a>`;
-        }).join(" · ");
+          // 要求：原因 / 影响范围（owner）/ 下一步 必须在条带上直接可见，不能只藏在 title。
+          const next = explanation.suggested_next_step
+            ? ` <span class="blocker-next">→ ${escapeHtml(explanation.suggested_next_step)}</span>` : "";
+          return `<span class="blocker-item"><a class="${cls}" href="${href}" ` +
+            `title="${escapeHtml(title)}">${escapeHtml(b.owner)}:${escapeHtml(b.reason_code)}</a>` +
+            ` <span class="muted">[${escapeHtml(b.severity)}] ${escapeHtml(b.message)}</span>${next}</span>`;
+        }).join("");
     document.getElementById("strip").dataset.blocking = String(blocking.length);
   } catch (error) {
     banner.innerHTML = `<span class="bad">snapshot unavailable: ${escapeHtml(String(error))}</span>`;

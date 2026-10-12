@@ -54,6 +54,12 @@ export async function renderUniverse() {
       ["quote assets", escapeHtml((universe.quote_assets || []).join(", "))],
       ["discovered / skipped",
        `${universe.discovered_count} / ${universe.skipped_count}`],
+      // 要求：区分“查看当前标的”与“修改运行的标的集合”；后者运行中不支持 ⇒ 显式说明原因。
+      ["traded symbol (this run)",
+       `${escapeHtml(tradedSymbol)} <span class="muted">（固定于启动参数 \`--symbol\`；运行中不可改）</span>`],
+      ["collection set",
+       `<span class="muted">由启动配置 \`market.universe.symbols\` 决定，本页只读：` +
+       `运行中修改会改变采集/存储 Owner 与已落盘分片的归属，故不提供。要增减标的：修改配置后重启进程。</span>`],
     ]),
   ) + section("Symbols", table(
     ["symbol", "product", "quote", "exchange status", "collection", "last event (ts)", "messages"],

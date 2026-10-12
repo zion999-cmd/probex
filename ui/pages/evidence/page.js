@@ -16,8 +16,15 @@ export async function render(rest = []) {
       escapeHtml(t.detail || "")]));
 
   const [kind, identity] = rest;
-  let factsBlock = rows([["raw facts", "open Activity and click an order / fill identity to drill down"]]);
-  if (kind && identity) {
+  // 契约：必须同时给出 kind 与 identity（`#/activity/evidence/<kind>/<identity>`）。
+  // 只有一段时**不猜测**：显式说明原因，而不是抛错或查错端点。
+  const hasFactTarget = Boolean(kind && identity);
+  let factsBlock = rows([["raw facts",
+    kind && !identity
+      ? `<span class="unknown">UNKNOWN (需要 kind + identity：当前只给了 ${escapeHtml(kind)}；` +
+        `从 Activity 的 order / fill / execution_event 身份单元格进入)</span>`
+      : "open Activity and click an order / fill identity to drill down"]]);
+  if (hasFactTarget) {
     const payload = await fetchOrUnavailable(
       `${ENDPOINTS.facts}/${encodeURIComponent(kind)}/${encodeURIComponent(identity)}`);
     if (payload.unavailable) {
@@ -34,7 +41,7 @@ export async function render(rest = []) {
     }
   }
   return section("Decision trace", trace) +
-    section(`Raw facts (G2)${kind ? ` · ${escapeHtml(kind)}:${escapeHtml(identity)}` : ""}`, factsBlock) +
+    section(`Raw facts (G2)${hasFactTarget ? ` · ${escapeHtml(kind)}:${escapeHtml(identity)}` : ""}`, factsBlock) +
     section("Blockers", rows([
       ["readiness blockers", escapeHtml((evidence.readiness_blockers || []).join(", ") || "none")],
       ["risk rejects", escapeHtml((evidence.risk_rejects || []).join(", ") || "none")],

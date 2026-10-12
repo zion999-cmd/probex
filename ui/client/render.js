@@ -7,8 +7,10 @@ export function fact(value) {
   return `<span class="known">${v === null ? "null" : escapeHtml(String(v))}</span>`;
 }
 
+/** 空值安全：缺失的路由参数/字段必须渲染成空串，**不得**让整个页面抛错（否则入口变成 error 页）。 */
 export function escapeHtml(text) {
-  return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  if (text === null || text === undefined) return "";
+  return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 export function rows(pairs) {

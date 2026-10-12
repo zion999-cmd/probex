@@ -3,8 +3,13 @@ import { ENDPOINTS, explain, fetchJson, fetchSnapshot } from "/ui/client/api.js"
 import { escapeHtml } from "/ui/client/render.js";
 import { currentSelection } from "/ui/assistant/context.js";
 import { invoke, loadSuggestions, renderActions } from "/ui/assistant/actions.js";
+import { answerQuestion } from "/ui/assistant/chat.js";
 
 export const DRAWER_ID = "assistant-drawer";
+
+/** 会话记录（仅内存、仅本会话；刷新即清空——不伪装成持久化历史）。 */
+const transcript = [];
+const ANSWER_TIMEOUT_MS = 20000;
 
 export function mountAssistant(container) {
   const drawer = document.createElement("aside");
@@ -15,13 +20,25 @@ export function mountAssistant(container) {
     <div id="assistant-body">
       <div class="row"><span class="k">context</span><span class="v">…</span></div>
       <div id="assistant-actions"></div>
+      <div id="assistant-thread"></div>
+      <form id="assistant-form" autocomplete="off">
+        <input id="assistant-input" type="text" name="q"
+               placeholder="问：为什么现在没有下单？/ 订单来自哪个 decision？"
+               aria-label="向助手提问" />
+        <button id="assistant-send" type="submit">发送</button>
+      </form>
       <div id="assistant-status"></div>
     </div>`;
   container.appendChild(drawer);
   drawer.querySelector("#assistant-toggle").addEventListener("click", () => {
     drawer.classList.toggle("collapsed");
   });
+  drawer.querySelector("#assistant-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    void submitQuestion();
+  });
   refreshAssistant();
+  renderThread();
   window.addEventListener("hashchange", refreshAssistant);
   // closure slice：图表选中变化（crosshair）时刷新 Assistant 上下文（去抖）
   let timer = null;
@@ -30,6 +47,75 @@ export function mountAssistant(container) {
     timer = setTimeout(refreshAssistant, 350);
   });
   return drawer;
+}
+
+/** 用户提问 → 真实只读能力 → 回显答案与来源；失败/无响应显式。 */
+async function submitQuestion() {
+  const input = document.getElementById("assistant-input");
+  const status = document.getElementById("assistant-status");
+  const send = document.getElementById("assistant-send");
+  if (!input || !status) return;
+  const question = input.value.trim();
+  if (!question) { status.innerHTML = '<span class="unknown">请输入问题</span>'; return; }
+  input.value = "";
+  if (send) send.disabled = true;
+  const entry = { question, state: "PENDING", text: "", sources: [] };
+  transcript.push(entry);
+  renderThread();
+  status.innerHTML = '<span class="unknown">thinking…</span>';
+  try {
+    const context = currentSelection() || {};
+    const outcome = await Promise.race([
+      answerQuestion(question, context),
+      new Promise((resolve) => setTimeout(() => resolve({ __timeout: true }), ANSWER_TIMEOUT_MS)),
+    ]);
+    if (outcome && outcome.__timeout) {
+      entry.state = "NO_RESPONSE";
+      entry.text = `未在 ${Math.round(ANSWER_TIMEOUT_MS / 1000)}s 内得到响应（后端可能未响应）。`;
+      status.innerHTML = '<span class="bad">NO_RESPONSE</span>';
+    } else if (outcome && outcome.error) {
+      entry.state = "FAILED";
+      entry.text = String(outcome.error);
+      status.innerHTML = '<span class="bad">FAILED</span>';
+    } else {
+      entry.state = "ANSWERED";
+      entry.text = outcome.text || "";
+      entry.sources = outcome.sources || [];
+      entry.surfaceHint = outcome.surfaceHint || null;
+      status.innerHTML = '<span class="known">answered</span>' +
+        (entry.sources.length ? ` <span class="muted">sources: ${entry.sources.map(escapeHtml).join(", ")}</span>` : "");
+    }
+  } catch (error) {
+    entry.state = "FAILED";
+    entry.text = String(error);
+    status.innerHTML = `<span class="bad">FAILED</span> ${escapeHtml(String(error))}`;
+  } finally {
+    if (send) send.disabled = false;
+    renderThread();
+  }
+}
+
+/** 会话渲染：问题 + 答案 + 来源 + （若答案指向某 surface）跳转入口。 */
+function renderThread() {
+  const host = document.getElementById("assistant-thread");
+  if (!host) return;
+  if (!transcript.length) {
+    host.innerHTML = '<div class="muted">可直接提问（只读解释 / 导航）。涉及下单、撤单、改风控等资本动作一律不可用。</div>';
+    return;
+  }
+  host.innerHTML = transcript.slice(-6).map((entry) => {
+    const stateClass = entry.state === "ANSWERED" ? "known" : (entry.state === "PENDING" ? "unknown" : "bad");
+    const navigate = entry.surfaceHint
+      ? ` <a href="#/${escapeHtml(entry.surfaceHint)}">前往 ${escapeHtml(entry.surfaceHint)}</a>`
+      : "";
+    const sources = entry.sources && entry.sources.length
+      ? `<div class="muted">sources: ${entry.sources.map(escapeHtml).join(", ")}</div>` : "";
+    return `<div class="assistant-turn">` +
+      `<div class="row"><span class="k">you</span><span class="v">${escapeHtml(entry.question)}</span></div>` +
+      `<div class="row"><span class="k">assistant</span><span class="v ${stateClass}">` +
+      `${escapeHtml(entry.text).replace(/\n/g, "<br>")}</span></div>${sources}${navigate}</div>`;
+  }).join("");
+  host.scrollTop = host.scrollHeight;
 }
 
 /** P0001.15 §27：把 instrument / venue / reference price 事实与可回答的问题放进 drawer。 */
