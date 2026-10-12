@@ -2662,3 +2662,12 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - detached clean checkout 复核 2533 passed。
 - 人类据 Closure Audit（无 A 类缺陷、边界明确、证据一致）批准收口；`currentProposal: P0017.3 → null`。
 - 多标的回测、bar 粒度、slippage/funding 等 B 类能力留待后续提案；未跟踪的设计正文/差距审计文档按人类指示保持原状。
+
+## 2026-10-12（P0017.3 文档归档治理）
+
+- 独立小任务（不改交易代码、不重开 P0017.3、不启动 P0017.4）：
+  - 正式设计正文 `proposals/P0017.3-offline-backtest-driver-evaluation-report.md` 纳入版本控制；
+    状态行改为"已关闭（离线验收完成）"，文首补证据链（gap/acceptance/closure 三份 artifacts + 实现提交），
+    §18/§19 加收口结论（保留原授权边界为历史记录）。
+  - 实施前差距审计 `artifacts/p0017/P0017_3_GAP_AUDIT.md` 纳入版本控制，加"实施前证据/缺失项后已实现"归档头。
+  - 核实证据链互引与提交 hash（03d9081/f33d6a9/a9484b9）均可解析；design↔artifacts 路径一致（旧的 P0017_3_DESIGN.md 悬空 target 仅存在于差距审计的历史描述中，已加归档说明）。
