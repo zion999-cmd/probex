@@ -2,12 +2,19 @@
 import { getSelection } from "/ui/client/selection.js";
 
 export function currentSelection(hash = typeof window !== "undefined" ? window.location.hash : "") {
-  const parts = String(hash || "").replace(/^#\/?/, "").split("/").filter(Boolean);
+  const parts = String(hash || "").replace(/^#\/?/, "").split("?")[0].split("/").filter(Boolean);
   const surface = parts[0] || "monitor";
   const selection = {};
   for (let index = 1; index < parts.length - 1; index += 2) {
     const key = parts[index];
     if (["run", "decision", "order", "fill"].includes(key)) selection[key] = parts[index + 1];
+  }
+  // Market View Symbol（研究上下文）：可能**不等于** runtime 交易标的，二者必须分开表达。
+  const query = String(hash || "").split("?")[1] || "";
+  const viewSymbol = new URLSearchParams(query).get("view");
+  if (viewSymbol) {
+    selection.market_view_symbol = String(viewSymbol).toUpperCase();
+    selection.market_context_kind = "market_view";
   }
   // closure slice：chart workbench 的选中（timestamp / timeframe / candle / drawing）
   const chart = getSelection ? getSelection() : {};

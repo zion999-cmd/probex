@@ -29,6 +29,11 @@ REST_BASE_URL = "https://fapi.binance.com"
 DEPTH_PATH = "/fapi/v1/depth"
 EXCHANGE_INFO_PATH = "/fapi/v1/exchangeInfo"
 SERVER_TIME_PATH = "/fapi/v1/time"
+#: 公开行情只读（P0001.12.x Market View：任意受支持交易对的行情研究视图；无凭据、无写能力）
+KLINES_PATH = "/fapi/v1/klines"
+TRADES_PATH = "/fapi/v1/trades"
+PREMIUM_INDEX_PATH = "/fapi/v1/premiumIndex"
+TICKER_24H_PATH = "/fapi/v1/ticker/24hr"
 
 #: 私有账户端点（P0001.9.2）。**只读**：本仓库不包含任何下单/撤单端点常量。
 ACCOUNT_PATH = "/fapi/v2/account"
@@ -98,8 +103,12 @@ __all__ = [
     "DEPTH_PATH",
     "EXCHANGE_INFO_PATH",
     "ALL_ORDERS_PATH",
+    "KLINES_PATH",
     "LISTEN_KEY_PATH",
     "OPEN_ORDERS_PATH",
+    "PREMIUM_INDEX_PATH",
+    "TICKER_24H_PATH",
+    "TRADES_PATH",
     "USER_TRADES_PATH",
     "INCOME_PATH",
     "POSITION_RISK_PATH",

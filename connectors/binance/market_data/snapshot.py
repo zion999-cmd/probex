@@ -38,10 +38,17 @@ class JsonHttpClient(Protocol):
 
 @dataclass
 class UrllibJsonClient:
-    """标准库 HTTP 客户端（`urllib.request`）。"""
+    """标准库 HTTP 客户端（`urllib.request`）。
+
+    `user_agent`（可选）：显式**标识自身**的 User-Agent。
+    事实依据（已实测）：币安对默认的 python-urllib UA 指纹返回 HTTP 418，而同一 URL 带
+    标识性 UA 返回 200 ⇒ 标识自身是让公开只读行情可用的必要条件，不是刷代理或伪装浏览器。
+    默认 None 保持既有请求语义不变。
+    """
 
     base_url: str = REST_BASE_URL
     opener: Callable[[urllib.request.Request, float], object] | None = None
+    user_agent: str | None = None
     #: 最近一次响应的真实头（供 usage fact 采集；additive，不改请求语义）
     last_headers: dict[str, str] = dataclasses.field(default_factory=dict)
 
@@ -50,7 +57,10 @@ class UrllibJsonClient:
         url = f"{self.base_url.rstrip('/')}{path}"
         if query:
             url = f"{url}?{query}"
-        request = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
+        headers = {"Accept": "application/json"}
+        if self.user_agent:
+            headers["User-Agent"] = self.user_agent
+        request = urllib.request.Request(url, headers=headers, method="GET")
         try:
             if self.opener is not None:
                 response = self.opener(request, timeout_s)

@@ -249,3 +249,56 @@ PROBEX_CONFIG_<key>=value                # ENV 层
 | `proposals/` | 各阶段 Proposal（实现契约） |
 | `runtime/assembly.py` | 产品入口（composition root） |
 | `scripts/` | 本手册的启动工具（非产品能力） |
+
+## 9. Market 行情视图与交易对切换（不改变运行实例交易标的）
+
+两个概念必须区分：
+
+- **Runtime Trading Symbol**：运行实例实际交易的标的（启动参数 `--symbol` 固定；订单/持仓/决策/风险只属于它）。
+- **Market View Symbol**：你在 Market 工作区**查看/研究**的交易对，可随时切换，**不会**修改运行实例、不会重启、不会下单。
+
+### 9.1 在 UI 里切换（推荐）
+
+1. 打开 `http://127.0.0.1:<port>/#/market/live`；
+2. 页顶 **market view symbol** 输入框输入交易对（如 `BNBUSDT`，支持搜索建议，来自交易所目录），回车或点「查看」；
+3. 快捷按钮：`BTCUSDT ETHUSDT BNBUSDT SOLUSDT XRPUSDT`；
+4. URL 形如 `#/market/live?view=BNBUSDT`（可分享/刷新保持）；K线、盘口、成交、标记价、24h 概览即加载该标的的**公开真实行情**；
+5. 回到运行实例标的：`#/market/live`（或 `?view=<runtime symbol>`）。
+
+页面会明确标注 `view symbol` 与 `runtime trading symbol` 的关系（`=` / `≠`）；
+查看其它交易对时，订单/持仓/决策/风险仍属于 runtime 标的（页面有 "Runtime context (unchanged)" 说明）。
+
+### 9.2 只读端点
+
+```bash
+# 交易对目录（选择器搜索用）
+curl -s "http://127.0.0.1:8897/api/v1/market/view/symbols?q=BNB&limit=10"
+# 单个交易对的公开行情（components 可限制取哪些项：candles,depth,trades,mark,overview）
+curl -s "http://127.0.0.1:8897/api/v1/market/view?symbol=BNBUSDT&candles=60&depth=20&trades=20"
+curl -s "http://127.0.0.1:8897/api/v1/market/view?symbol=BNBUSDT&components=depth,mark"
+```
+
+错误语义：`invalid_symbol` 400 / `invalid_interval` 400 / `invalid_components` 400 / `unsupported_symbol` 404 /
+上游失败或限流 503（带 code，如 `rate_limited`）。**每项能力独立标注可用性与原因**，缺失不会写成 0。
+
+### 9.3 实测环境事实（本机，2026-10-13）
+
+- **默认 UA 被拦**：交易所对默认 `python-urllib` UA 返回 `HTTP 418 (I'm a teapot)`；带**标识自身**的 UA
+  （默认 `probex/0.1 (market-view; read-only public data)`）返回 200。客户端标识自身，不伪装浏览器。
+- **连拍会限流**：同一秒连打多个端点会被限流 ⇒ 服务内置最小请求间隔、短 TTL 缓存、限流单次重试、
+  以及逐组件降级（某项不可用时其余照常显示，并显示该项原因与 code）。
+- **WS 在本机代理下不可达**：`fstream.binance.com:443` 直连超时（REST 经代理可达）⇒ 依赖 WS 的实时采集/
+  多标的平台仍为 NOT RUN；Market 行情视图走 REST，不受影响。
+
+### 9.4 相关配置（可选，均有默认值）
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `market.public_rest_base` | `https://fapi.binance.com` | 公开行情 REST 基址 |
+| `market.view.user_agent` | `probex/0.1 (market-view; read-only public data)` | 标识性 UA（默认 UA 会被交易所 418） |
+| `market.view.timeout_s` | `10` | 单次请求超时 |
+| `market.view.cache_ttl_ms` | `5000` | 行情短 TTL 缓存（防连拍限流） |
+| `market.view.min_request_interval_ms` | `650` | 请求最小间隔 |
+| `market.view.rate_limit_retry_ms` | `2500` | 遇到 418/429 的单次重试等待 |
+| `market.view.exchange_info_ttl_s` | `300` | 交易对目录缓存 |
+

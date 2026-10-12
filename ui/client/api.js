@@ -28,6 +28,8 @@ export const ENDPOINTS = {
   marketHealth: "/api/v1/market/health",
   marketOverlays: "/api/v1/market/overlays",
   marketCandles: "/api/v1/market/candles",
+  marketView: "/api/v1/market/view",
+  marketViewSymbols: "/api/v1/market/view/symbols",
   replay: "/api/v1/replay",
   facts: "/api/v1/facts",
   portfolioTimeline: "/api/v1/portfolio/timeline",

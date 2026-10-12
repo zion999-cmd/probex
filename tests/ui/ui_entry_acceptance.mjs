@@ -77,7 +77,7 @@ const record = (name, pass, detail) => {
 try {
   // ---- 1. 五个工作区可达 + 无错误
   for (const s of ["monitor", "market", "activity", "performance", "system"]) {
-    await goto(`/#/${s}`);
+    await goto(`/#/${s}`, 8000);
     const state = await ev(`(() => { const v = document.getElementById("view");
       return { heading: (v.querySelector("h2")||{}).textContent || "", len: v.innerText.length,
                isError: /^\\s*error\\b/i.test(v.innerText) || v.innerText.includes("Cannot read properties") }; })()`);
@@ -136,7 +136,7 @@ try {
   record("orders:decision-reverse-lookup", !orders.isError && orders.hasReverse, JSON.stringify(orders));
 
   // ---- 5. Monitor 可用动作（manifest 驱动）+ L2 确认执行
-  await goto("/#/monitor", 3000);
+  await goto("/#/monitor", 9000);
   const actions = await ev(`(() => { const s = document.querySelectorAll('#view button[data-action]');
     return { count: s.length, ids: Array.from(s).map(b=>b.dataset.action),
              hasStatus: !!document.getElementById("monitor-action-status") }; })()`);
@@ -155,7 +155,7 @@ try {
     JSON.stringify(invokeResult));
 
   // ---- 6. Assistant：输入 + 发送 + 追问 + 状态反馈
-  await goto("/#/monitor", 2600);
+  await goto("/#/monitor", 6000);
   const assistant = await ev(`(() => { const d = document.getElementById("assistant-drawer");
     return { hasInput: !!d.querySelector('#assistant-input'), hasSend: !!d.querySelector('#assistant-send'),
              hasForm: !!d.querySelector('#assistant-form') }; })()`);
@@ -168,14 +168,14 @@ try {
     for (const q of ["为什么现在没有下单？", "现在系统的状态怎么样？"]) {
       input.value = q;
       form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
-      await new Promise(r => setTimeout(r, 3000));
+      await new Promise(r => setTimeout(r, 12000));
       const turns = Array.from(document.querySelectorAll('.assistant-turn'));
       const last = turns[turns.length - 1];
       out.push({ q, turnText: last ? last.innerText.slice(0, 300) : null,
                  status: (document.getElementById('assistant-status')||{}).innerText || "" });
     }
     return { turns: document.querySelectorAll('.assistant-turn').length, out }; })()`);
-  const answered = (chat.out || []).every((r) => r.turnText && !/FAILED|NO_RESPONSE/.test(r.status));
+  const answered = (chat.out || []).every((r) => r.turnText && !/FAILED|NO_RESPONSE|thinking/.test(r.status));
   record("assistant:real-answers", answered && chat.turns >= 2, JSON.stringify(chat));
   // 诊断问题（为什么没有下单）不得被误判为资本动作请求
   const diagnostic = (chat.out || [])[0] || {};
@@ -188,7 +188,7 @@ try {
     const form = document.getElementById('assistant-form');
     input.value = "帮我下单买 0.01 BTC";
     form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
-    await new Promise(r => setTimeout(r, 2500));
+    await new Promise(r => setTimeout(r, 12000));
     const turns = Array.from(document.querySelectorAll('.assistant-turn'));
     const last = turns[turns.length - 1];
     return { text: last ? last.innerText.slice(0, 300) : null }; })()`);

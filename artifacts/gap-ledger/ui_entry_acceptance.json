@@ -4,22 +4,22 @@
     {
       "name": "workspace:monitor",
       "pass": true,
-      "detail": "{\"heading\":\"Instrument / venue\",\"len\":4817,\"isError\":false}"
+      "detail": "{\"heading\":\"Instrument / venue\",\"len\":4827,\"isError\":false}"
     },
     {
       "name": "workspace:market",
       "pass": true,
-      "detail": "{\"heading\":\"Market view\",\"len\":8688,\"isError\":false}"
+      "detail": "{\"heading\":\"Market view\",\"len\":9109,\"isError\":false}"
     },
     {
       "name": "workspace:activity",
       "pass": true,
-      "detail": "{\"heading\":\"Causal chain (time-ordered, F-08)\",\"len\":95961,\"isError\":false}"
+      "detail": "{\"heading\":\"Causal chain (time-ordered, F-08)\",\"len\":108435,\"isError\":false}"
     },
     {
       "name": "workspace:performance",
       "pass": true,
-      "detail": "{\"heading\":\"Trade statistics (real facts only)\",\"len\":3609,\"isError\":false}"
+      "detail": "{\"heading\":\"Trade statistics (real facts only)\",\"len\":4355,\"isError\":false}"
     },
     {
       "name": "workspace:system",
@@ -34,7 +34,7 @@
     {
       "name": "header:mode-tag",
       "pass": true,
-      "detail": "PAPER · local · binance · BTCUSDT (fixed @startup) · runtime=paper-1791823004869"
+      "detail": "PAPER · local · binance · BTCUSDT (fixed @startup) · runtime=paper-1791830169039"
     },
     {
       "name": "blocker:reason-and-next-visible",
@@ -44,22 +44,22 @@
     {
       "name": "activity→evidence:order",
       "pass": true,
-      "detail": "{\"found\":true,\"href\":\"#/activity/evidence/order/probex-paper-1791823004869-000001\",\"heading\":\"Decision trace\",\"isError\":false,\"hasFactsTable\":true,\"text\":\"DECISION TRACE\\nts\\tstage\\tidentity\\toutcome\\treason code\\tdetail\\n1700000460000\\trisk\\tprobex-paper-1791823004869-000001\\tallow\\t— no reason code\\t\\n1700000460000\\trisk\\tprobex-paper-1791823004869-000002\\tallow\\t— no reason code\\t\\n170000\"}"
+      "detail": "{\"found\":true,\"href\":\"#/activity/evidence/order/probex-paper-1791830169039-000001\",\"heading\":\"Decision trace\",\"isError\":false,\"hasFactsTable\":true,\"text\":\"DECISION TRACE\\nts\\tstage\\tidentity\\toutcome\\treason code\\tdetail\\n1700000460000\\trisk\\tprobex-paper-1791830169039-000001\\tallow\\t— no reason code\\t\\n1700000460000\\trisk\\tprobex-paper-1791830169039-000002\\tallow\\t— no reason code\\t\\n170000\"}"
     },
     {
       "name": "activity→evidence:fill",
       "pass": true,
-      "detail": "{\"found\":true,\"href\":\"#/activity/evidence/fill/probex-paper-1791823004869-000025\",\"heading\":\"Decision trace\",\"isError\":false,\"hasFactsTable\":true,\"text\":\"DECISION TRACE\\nts\\tstage\\tidentity\\toutcome\\treason code\\tdetail\\n1700000460000\\trisk\\tprobex-paper-1791823004869-000001\\tallow\\t— no reason code\\t\\n1700000460000\\trisk\\tprobex-paper-1791823004869-000002\\tallow\\t— no reason code\\t\\n170000\"}"
+      "detail": "{\"found\":true,\"href\":\"#/activity/evidence/fill/probex-paper-1791830169039-000006\",\"heading\":\"Decision trace\",\"isError\":false,\"hasFactsTable\":true,\"text\":\"DECISION TRACE\\nts\\tstage\\tidentity\\toutcome\\treason code\\tdetail\\n1700000460000\\trisk\\tprobex-paper-1791830169039-000001\\tallow\\t— no reason code\\t\\n1700000460000\\trisk\\tprobex-paper-1791830169039-000002\\tallow\\t— no reason code\\t\\n170000\"}"
     },
     {
       "name": "activity→evidence:execution_event",
       "pass": true,
-      "detail": "{\"found\":true,\"href\":\"#/activity/evidence/execution_event/probex-paper-1791823004869-000001\",\"heading\":\"Decision trace\",\"isError\":false,\"hasFactsTable\":true,\"text\":\"DECISION TRACE\\nts\\tstage\\tidentity\\toutcome\\treason code\\tdetail\\n1700000460000\\trisk\\tprobex-paper-1791823004869-000001\\tallow\\t— no reason code\\t\\n1700000460000\\trisk\\tprobex-paper-1791823004869-000002\\tallow\\t— no reason code\\t\\n17"
+      "detail": "{\"found\":true,\"href\":\"#/activity/evidence/execution_event/probex-paper-1791830169039-000001\",\"heading\":\"Decision trace\",\"isError\":false,\"hasFactsTable\":true,\"text\":\"DECISION TRACE\\nts\\tstage\\tidentity\\toutcome\\treason code\\tdetail\\n1700000460000\\trisk\\tprobex-paper-1791830169039-000001\\tallow\\t— no reason code\\t\\n1700000460000\\trisk\\tprobex-paper-1791830169039-000002\\tallow\\t— no reason code\\t\\n17"
     },
     {
       "name": "orders:decision-reverse-lookup",
       "pass": true,
-      "detail": "{\"isError\":false,\"hasReverse\":true,\"text\":\"ACTIVE ORDERS\\nclient id\\tside\\tstatus\\tprice\\tqty\\tfilled\\tdecision\\tinstrument\\tvenue\\nprobex-paper-1791823004869-000083\\tbuy\\tPENDING_CANCEL\\t61090.6\\t0.0002\\t0\\td-2530249eb7fd-1700010615000\\tpaper:BTCUSDT\\tpaper\\nprobex-paper-1791823004869-000085\\tsell\\tOPEN\\t61095.4\\t0.0002\\t0\\td-d22a06390ba3-1700010795000\\tpaper:BTCUSD\"}"
+      "detail": "{\"isError\":false,\"hasReverse\":true,\"text\":\"ACTIVE ORDERS\\nclient id\\tside\\tstatus\\tprice\\tqty\\tfilled\\tdecision\\tinstrument\\tvenue\\nprobex-paper-1791830169039-000085\\tsell\\tPENDING_CANCEL\\t61095\\t0.0002\\t0\\td-94b63ae15cd1-1700010610000\\tpaper:BTCUSDT\\tpaper\\nprobex-paper-1791830169039-000097\\tbuy\\tPENDING_CANCEL\\t61091\\t0.0002\\t0\\td-c32178692c8d-1700010785000\\tpaper:\"}"
     },
     {
       "name": "monitor:available-actions",
@@ -99,17 +99,17 @@
     {
       "name": "system:execution-safety-sections",
       "pass": true,
-      "detail": "{\"hasLimits\":true,\"hasRate\":true,\"hasLatency\":true,\"hasRecon\":true,\"hasHealth\":true,\"snippet\":1626}"
+      "detail": "{\"hasLimits\":true,\"hasRate\":true,\"hasLatency\":true,\"hasRecon\":true,\"hasHealth\":true,\"snippet\":1627}"
     },
     {
       "name": "performance:runs-and-metrics",
       "pass": true,
-      "detail": "{\"hasRuns\":true,\"hasMetrics\":true,\"links\":11}"
+      "detail": "{\"hasRuns\":true,\"hasMetrics\":true,\"links\":19}"
     },
     {
       "name": "non-ideal:unknown-entity-no-crash",
       "pass": true,
-      "detail": "{\"isError\":false,\"text\":\"DECISION TRACE\\nts\\tstage\\tidentity\\toutcome\\treason code\\tdetail\\n1700000460000\\trisk\\tprobex-paper-1791823004869-000001\\tallow\\t— no reason code\\t\\n1700000460000\\trisk\\tprobex-paper-1791823004869-000002\\tallow\\t— no\"}"
+      "detail": "{\"isError\":false,\"text\":\"DECISION TRACE\\nts\\tstage\\tidentity\\toutcome\\treason code\\tdetail\\n1700000460000\\trisk\\tprobex-paper-1791830169039-000001\\tallow\\t— no reason code\\t\\n1700000460000\\trisk\\tprobex-paper-1791830169039-000002\\tallow\\t— no\"}"
     }
   ],
   "errors": [],

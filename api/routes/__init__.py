@@ -13,6 +13,7 @@ from api.routes import (
     market_health,
     market_overlays,
     market_timeline,
+    market_view,
     market_trades,
     execution,
     execution_safety,
@@ -52,6 +53,9 @@ MARKET_DEPTH_PATH = market_depth.PATH
 MARKET_TRADES_PATH = market_trades.PATH
 MARKET_HEALTH_PATH = market_health.PATH
 MARKET_OVERLAYS_PATH = market_overlays.PATH
+#: Market View（公开行情研究视图；与 runtime 交易标的无关）
+MARKET_VIEW_PATH = market_view.PATH
+MARKET_VIEW_SYMBOLS_PATH = market_view.SYMBOLS_PATH
 REPLAY_PATH = replay.PATH
 FACTS_PATH = facts.PATH
 ACTIONS_PATH = actions.PATH

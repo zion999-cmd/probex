@@ -20,7 +20,9 @@ const EXTRA_DEPS = {
                               "ui/pages/market/indicators.js", "ui/pages/market/semantic_overlays.js",
                               "ui/pages/market/workbench.js", "ui/pages/market/prediction_panel.js",
                               "ui/pages/market/heatmap.js", "ui/pages/market/overlays.js",
-                              "ui/pages/market/replay.js", "ui/pages/market/timeline.js"],
+                              "ui/pages/market/replay.js", "ui/pages/market/timeline.js",
+                              // Market View 交易对选择器（P0001.12.1 Market 工作区）
+                              "ui/pages/market/symbol_selector.js"],
   "ui/pages/performance/page.js": ["ui/client/charts.js", "ui/pages/performance/charts.js"],
   "ui/pages/monitor/page.js": ["ui/client/charts.js", "ui/monitor/sparklines.js"],
   "ui/pages/system/page.js": ["ui/client/charts.js", "ui/system/ops_charts.js"],

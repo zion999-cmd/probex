@@ -175,6 +175,8 @@ class ProductService:
     ops: Callable[[], Mapping[str, object] | None] = lambda: None
     #: P0017.1：多标的市场数据平台（universe / 订阅状态 / 共享数据集查询；只读）
     market_platform: Callable[[], object | None] = lambda: None
+    #: Market View：任意受支持交易对的**公开行情研究视图**（只读 REST；与 runtime 交易标的无关）
+    market_view: Callable[[], object | None] = lambda: None
 
     def run_summary_view(self, run_id: str | None = None) -> object | None:
         """取 Run Summary：`run_id` 给定时走 durable 记录；否则走当前 session provider。
@@ -192,6 +194,10 @@ class ProductService:
     def market_platform_view(self) -> object | None:
         """P0017.1：多标的市场平台只读投影；未接线 ⇒ None（端点 503，不伪造）。"""
         return self.market_platform()
+
+    def market_view_service(self) -> object | None:
+        """Market View：公开行情研究视图服务；未接线 ⇒ None（端点 503，不伪造数据）。"""
+        return self.market_view()
 
     def projection_config_view(self) -> object | None:
         """取显示参数；未配置 ⇒ None（工作台端点必须 503，不得无限加载）。"""

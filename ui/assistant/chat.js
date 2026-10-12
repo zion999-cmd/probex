@@ -55,14 +55,49 @@ async function answerStatus() {
   };
 }
 
-async function answerMarket() {
+async function answerMarket(question, ctx) {
+  // 若正在查看某个 Market View Symbol，市场问题就用**该标的**的公开行情回答，
+  // 并明确它可能不等于 runtime 交易标的（不混淆两个上下文）。
+  const selection = (ctx && ctx.selection) || {};
+  const viewSymbol = selection.market_view_symbol;
+  if (viewSymbol) {
+    try {
+      const payload = await fetchJson(`${ENDPOINTS.marketView}?symbol=${encodeURIComponent(viewSymbol)}` +
+        "&components=depth,mark&depth=5");
+      const view = payload.market_view || {};
+      const avail = view.available || {};
+      const errs = view.errors || {};
+      const lines = [
+        `${view.symbol}: source=${view.source} fetched_at=${view.fetched_at_ms}`,
+        avail.depth ? `bid/ask=${view.depth.best_bid}/${view.depth.best_ask} spread=${view.depth.spread}`
+          : `bid/ask UNKNOWN (${(errs.depth || {}).code || "unavailable"})`,
+        avail.mark ? `mark=${view.mark.price}` : `mark UNKNOWN (${(errs.mark || {}).code || "unavailable"})`,
+        avail.overview ? `24h last=${view.overview.last_price} chg=${view.overview.change_pct_24h}%`
+          : `24h overview UNKNOWN (${(errs.overview || {}).code || "unavailable"})`,
+        avail.candles ? `candles=${(view.candles || []).length} (${view.interval})`
+          : `candles UNKNOWN (${(errs.candles || {}).code || "unavailable"})`,
+        avail.trades ? `recent trades=${(view.trades || []).length}`
+          : `recent trades UNAVAILABLE (${(errs.trades || {}).code || "unavailable"})`,
+      ];
+      return {
+        text: `${viewSymbol}（Market View 研究上下文，**不一定等于**运行实例交易标的）\n` +
+          lines.join("\n"),
+        sources: [ENDPOINTS.marketView],
+        surfaceHint: `market/live?view=${encodeURIComponent(viewSymbol)}`,
+      };
+    } catch (error) {
+      return { text: `${viewSymbol} 公开行情 UNAVAILABLE (${String(error)})`,
+        sources: [ENDPOINTS.marketView] };
+    }
+  }
   const [snapshot, health] = await Promise.all([fetchSnapshot(), fetchJson(ENDPOINTS.marketHealth)]);
   const market = snapshot.market || {};
   return {
     text: `market.healthy=${market.healthy && market.healthy.known ? market.healthy.value : "UNKNOWN"}；` +
       `book health=${factText((health.book_health || {}).state, "UNKNOWN")}；` +
       `spread=${factText(health.spread, "UNKNOWN")}；mid=${factText(health.mid, "UNKNOWN")}；` +
-      `data_ts=${factText((snapshot.runtime || {}).data_timestamp)}`,
+      `data_ts=${factText((snapshot.runtime || {}).data_timestamp)}（runtime 交易标的 ` +
+      `${factText((snapshot.runtime || {}).symbol)}）`,
     sources: [ENDPOINTS.snapshot, ENDPOINTS.marketHealth],
     surfaceHint: "market/live",
   };
@@ -224,7 +259,7 @@ export async function answerQuestion(question, ctx = {}) {
   }
   if (has(q, "execution", "执行", "延迟", "latency", "限流", "rate", "venue limit", "对账", "reconcil",
       "anomal")) return answerExecution(q);
-  if (has(q, "market", "行情", "盘口", "book", "spread", "mark", "数据新鲜", "fresh")) return answerMarket();
+  if (has(q, "market", "行情", "盘口", "book", "spread", "mark", "数据新鲜", "fresh")) return answerMarket(q, ctx);
   if (has(q, "订单", "order")) return answerOrders(q, ctx);
   if (has(q, "决策", "decision", "为什么这样", "为什么交易", "为什么取消", "why")) return answerDecision(q, ctx);
   if (has(q, "run", "表现", "收益", "pnl", "performance", "绩效")) return answerPerformance();

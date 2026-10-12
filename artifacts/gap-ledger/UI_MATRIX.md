@@ -163,3 +163,35 @@
 
 **守卫**：`test_ui_api_contract`、`test_surface_architecture`、`test_ui_module_hygiene` 全部通过（本轮两次误伤已按守卫本意修正源码，未放宽断言）。
 **回归**：2560 passed / 0 failed / 24 skipped。
+
+---
+
+## Market View 交易对选择器（本轮：真实行情可切换，Market View Symbol ≠ Runtime Trading Symbol）
+
+**背景**：此前 Market 工作区只画运行实例的交易标的（启动参数固定），用户找不到查看 BNBUSDT 等其它交易对的入口；
+Universe 只读。本轮按人类指令实现**真正可用的行情标的选择器**，并严格分离两个概念：
+
+- **Market View Symbol**（研究上下文）：用户在 Market 选择/搜索的交易对，可随时切换；**不**修改运行实例标的。
+- **Runtime Trading Symbol**：运行实例实际交易的标的（启动参数固定）；订单/持仓/决策/风险只属于它。
+
+**新增能力**：
+
+| # | 能力 | 位置 | 说明 |
+|---|---|---|---|
+| M1 | 交易对选择器 | `ui/pages/market/symbol_selector.js` | 可输入可搜索（datalist 来自交易所目录）、快捷按钮、键盘 Enter 可提交；显示 view symbol 与 runtime symbol 并标注 `= / ≠ runtime trading symbol` |
+| M2 | 公开行情研究视图 | `ui/pages/market/page.js` | `#/market/live?view=<SYMBOL>`；K线工作台（klinecharts）、盘口快照、最近成交、标记价、24h 概览；**渐进渲染**（先出选择器+加载态，数据异步填充，不阻塞页面） |
+| M3 | 只读公开行情服务 | `connectors/binance/market_data/market_view.py` | 按 symbol 取公开 REST（klines/depth/trades/premiumIndex/ticker24h）；**按组件可用性**（每项独立标可用性与失败 code）；短 TTL 缓存 + 请求节流 + 限流单次重试；不 import time/urllib（clock/sleeper 由组合根注入，符合分层守卫） |
+| M4 | 只读端点 | `GET /api/v1/market/view`、`GET /api/v1/market/view/symbols` | 400 `invalid_symbol`/`invalid_interval`/`invalid_components`、404 `unsupported_symbol`、503 upstream 失败；`components=` 可限制取哪些组件（助手只取 depth,mark） |
+| M5 | 助手市场上下文 | `ui/assistant/context.js` / `chat.js` | 在 `?view=X` 页面提问时，答案用 **X** 的公开行情，并明确"不一定等于运行实例交易标的" |
+| M6 | 运行实例隔离 | 全链 | 查看其它交易对**不**改 runtime 标的、不重启、不触发交易；UI 明确标注 runtime context 未受影响 |
+
+**实测发现的环境事实（已写入 RUNBOOK）**：币安对默认 `python-urllib` UA 返回 HTTP 418（I'm a teapot），
+带**标识性 UA**（`probex/0.1 ...`）返回 200 ⇒ 客户端显式标识自身（非伪装浏览器）；连拍 5 个端点会触发限流 ⇒
+节流 650ms + 短 TTL 缓存 + 逐组件降级。WS 主机 `fstream.binance.com:443` 在本机代理下不可达（REST 可达）。
+
+**真实浏览器验收**：`tests/ui/market_symbol_selector.mjs` → **9/9 PASS**
+（证据 `artifacts/gap-ledger/market_symbol_selector_acceptance.json`）：打开 Market 见 runtime 标的 → 搜索选择 BNBUSDT →
+组件加载 BNBUSDT 真实数据（且与 BTC 不同）→ 切回 BTC 数据恢复 → BNBUSDT 页面问助手得到 BNBUSDT 市场上下文 →
+runtime 仍 PAPER/BTCUSDT 且订单/风险未受影响 → 不支持交易对明确报错。
+回归：`tests/ui/ui_entry_acceptance.mjs` 22/22；全量 **2574 passed / 0 failed / 24 skipped**。
+

@@ -159,3 +159,10 @@
   universe 未区分“查看标的/改集合”、助手误判诊断问题为下单请求。新增可重复验收脚本
   `tests/ui/ui_entry_acceptance.mjs`（22 项真实操作断言，含 L2 动作确认与资本拒绝）。
   全量 **2560 passed / 0 failed / 24 skipped**；UI 契约守卫全绿。
+- 2026-10-13 Market 行情标的选择器（人类指令；未新建 Proposal）：新增 `MarketViewService`
+  （`connectors/binance/market_data/market_view.py`，只读公开 REST、按组件可用性、节流+短 TTL 缓存）与两个只读端点
+  `/api/v1/market/view[/symbols]`；Market 工作区新增可搜索交易对选择器 + 公开行情研究视图（K线/盘口/成交/标记价/24h 概览，
+  渐进渲染），Assistant 在 `?view=X` 下用 X 的市场上下文回答。**Market View Symbol 与 Runtime Trading Symbol 严格分离**：
+  查看其它交易对不修改运行实例标的、不重启、不触发交易。实测记录：默认 python-urllib UA 被币安 418 拦截（改标识性 UA 后 200）；
+  连拍端点触发限流（改节流+缓存+逐组件降级）。真实浏览器验收 9/9（+ 既有 22/22 回归）；全量 2574 passed。
+

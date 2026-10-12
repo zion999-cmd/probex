@@ -2746,3 +2746,23 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
   证据 `artifacts/gap-ledger/ui_entry_acceptance.json`。UI 契约守卫全绿；全量 2560 passed / 0 failed / 24 skipped。
 - 未做（保持边界）：未新建 Proposal、未启用 Testnet/LIVE、未改交易/风险语义、未做真实公网行情（受代理 WS 限制，NOT RUN）。
 
+## 2026-10-13（Market 行情标的选择器，人类会话授权，未新建 Proposal）
+
+- 授权：人类指令“直接修复现有 Market UI：增加真正可用的行情标的选择器”，明确 Market View Symbol 与
+  Runtime Trading Symbol 必须分离。`currentProposal` 保持 null。
+- 新增：
+  - `connectors/binance/market_data/market_view.py`：只读公开行情服务（klines/depth/trades/premiumIndex/ticker24h），
+    按组件可用性（errors 带 code：rate_limited / unsupported_symbol / market_view_unavailable），
+    短 TTL 缓存 + 最小请求间隔 + 单次限流重试；clock/sleeper 注入（该目录禁 re/time，符合隔离守卫）。
+  - `api/routes/market_view.py` + `api/server.py::_serve_market_view`：`GET /api/v1/market/view[/symbols]`，
+    400/404/503 明确语义，`components=` 可限制组件。
+  - `ui/pages/market/symbol_selector.js` + `ui/pages/market/page.js`：可搜索交易对选择器、`?view=<SYMBOL>` 路由、
+    公开行情研究视图（渐进渲染：先选择器+加载态，数据异步填充）、L2 热力图对 REST 视图显式 NOT_AVAILABLE（含原因）。
+  - `ui/assistant/context.js` / `chat.js`：`market_view_symbol` 进入助手上下文；市场问题用该标的行情回答并标注
+    “不一定等于运行实例交易标的”。
+  - `tests/integration/test_market_view.py`（14 项，注入假客户端离线）、`tests/ui/market_symbol_selector.mjs`（9 项真实浏览器验收）。
+- 实测环境事实（写入 RUNBOOK §9）：默认 python-urllib UA 被币安 418，标识性 UA 200；连拍端点触发限流；
+  WS 主机在本机代理下不可达（REST 可达）⇒ 实时采集/多标的平台仍 NOT RUN。
+- 验收：market 选择器 9/9；既有 UI 入口 22/22；全量 2574 passed / 0 failed / 24 skipped（含全部分层守卫）。
+- 未做：未新建 Proposal、未改 runtime 交易标的、未启用 Testnet/LIVE、未引入新依赖。
+

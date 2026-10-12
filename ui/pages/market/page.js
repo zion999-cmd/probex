@@ -14,6 +14,11 @@ import { mountWorkbench, TIMEFRAMES, toolbarHtml } from "/ui/pages/market/workbe
 import { mountPredictionPanel, predictionSection } from "/ui/pages/market/prediction_panel.js";
 import { renderSymbolDetail, renderUniverse } from "/ui/pages/market/universe.js";
 import { updateSelection } from "/ui/client/selection.js";
+import { hashQuery } from "/ui/app/navigation.js";
+import {
+  L2_HEATMAP_REASON, marketViewFacts, marketViewHash, mountSymbolSelector,
+  normalizeSymbol, symbolSelectorHtml,
+} from "/ui/pages/market/symbol_selector.js";
 
 export const title = "Market";
 export const slug = "market";
@@ -55,8 +60,7 @@ function instrumentVenueSection(snapshot) {
 export async function render(rest = []) {
   const active = VIEWS.includes(rest[0]) ? rest[0] : "live";
   const runId = rest[1] || null;
-  const focusTs = active !== "run-review" && rest[1] && /^\d+$/.test(String(rest[1])) ? String(rest[1]) : null;
-  const header = section("Market view", nav(active) + (runId
+  const focusTs = active !== "run-review" && rest[1] && /^\d+$/.test(String(rest[1])) ? String(rest[1]) : null;  const header = section("Market view", nav(active) + (runId
     ? `<div class="row"><span class="k">run</span><span class="v">${escapeHtml(runId)}</span></div>` : "")
     + (focusTs ? `<div class="row"><span class="k">focused timestamp</span><span class="v">${escapeHtml(focusTs)}</span></div>` : ""));
 
@@ -82,9 +86,18 @@ export async function render(rest = []) {
         `<div class="row"><span class="k">recorded market</span><span class="v unknown">UNKNOWN (${escapeHtml(String(error))})</span></div>`);
     }
     if (payload.source === "durable") {
-      // P0001.17 §9：历史 run ⇒ 用该 run 的**持久化事实**画图并定位（只读；缺失事实如实标注）
+      // P0017.17 §9：历史 run ⇒ 用该 run 的**持久化事实**画图并定位（只读；缺失事实如实标注）
       const candles = ((payload.candles || {}).candles) || [];
+      // run 的标的必须来自 run identity，**不得**硬编码（否则别的标的的 run 会被贴错标签）
+      let runSymbol = "UNKNOWN";
+      try {
+        const identity = await fetchJson(`${ENDPOINTS.runs}/${encodeURIComponent(runId)}`);
+        runSymbol = String(((identity.run || {}).runtime || {}).symbol || "UNKNOWN");
+      } catch (error) {
+        runSymbol = "UNKNOWN";
+      }
       lastRunReview = { runId: payload.run_id || runId, candles, facts: payload.facts || [],
+                        symbol: runSymbol,
                         atrPoints: (((payload.indicators || {}).atr || {}).points || []) };
       const factRows = (payload.facts || []).slice(-60).reverse().map((item) => [
         String(item.ts), escapeHtml(String(item.kind || "")),
@@ -92,7 +105,7 @@ export async function render(rest = []) {
         escapeHtml(String(item.status || item.mode || "")),
         `<button data-locate="${escapeHtml(String(item.ts))}">locate on chart</button>`]);
       return header +
-        `<section class="wide"><h2>Recorded market chart (durable facts)</h2>` +
+        `<section class="wide"><h2>Recorded market chart (durable facts) · ${escapeHtml(runSymbol)} · ${escapeHtml(runId)}</h2>` +
         `<div id="wb-toolbar-runreview" class="wb-toolbar"></div>` +
         `<div id="kline-chart-runreview" class="kline-chart"></div>` +
         `<div class="muted">source=<code>durable</code> · ${escapeHtml(String(payload.note || ""))}</div></section>` +
@@ -136,6 +149,21 @@ export async function render(rest = []) {
       section("Projection bounds", boundsNote(payload));
   }
 
+  // Market View 分支：查看**非 runtime 交易标的**时，用公开行情研究视图（真实 REST，只读）。
+  // 这不修改 Runtime Trading Symbol，也不重启运行实例、不触发任何交易动作。
+  const runtimeSymbol = normalizeSymbol((await fetchSnapshot()).runtime.symbol);
+  const viewSymbol = normalizeSymbol(hashQuery().get("view") || "");
+  if (viewSymbol && viewSymbol !== runtimeSymbol) {
+    // 渐进渲染：不阻塞页面；数据由 mount() 异步填充。
+    lastMarket = null;
+    pendingPublicView = { symbol: viewSymbol, runtimeSymbol };
+    lastPublicView = null;
+    return header + publicMarketViewShell(viewSymbol, runtimeSymbol);
+  }
+  // 回到 runtime 交易标的视图：清掉公开视图状态（否则 mount() 会挂错图表）
+  pendingPublicView = null;
+  lastPublicView = null;
+
   const [snapshot, candles1m, trades, depth, health, overlays, evidence, timeline] = await Promise.all([
     fetchSnapshot(),
     fetchJson(`${ENDPOINTS.marketCandles}?interval=1m&limit=300`),
@@ -148,6 +176,11 @@ export async function render(rest = []) {
   const chart = `
     <section class="wide">
       <h2>K-line workbench · ${escapeHtml(snapshot.runtime.symbol)} · ${snapshot.runtime.mode}</h2>
+      ${symbolSelectorHtml({ viewSymbol: runtimeSymbol, runtimeSymbol, sameAsRuntime: true })}
+      <div class="row"><span class="k">other symbols</span><span class="v muted">
+        <a href="#/market/universe">Market → universe</a>：多标的采集/落盘视图（需 runtime 接线多标的数据平台；
+        本运行未接线时为 UNAVAILABLE）。要看/交易别的标的，用 \`--symbol &lt;SYMBOL&gt;\` 重启产品，
+        并使用覆盖该标的的行情源（真实公网源会自动取该标的价格精度）。</span></div>
       <div id="chart-toolbar" class="toolbar"></div>
       <div id="kline-chart" class="chart-host" style="height:460px"></div>
       <div class="row"><span class="k">candles source</span><span class="v">${escapeHtml((candles1m.candles || {}).source || "unknown")}</span>
@@ -179,15 +212,120 @@ export async function render(rest = []) {
 
 let lastMarket = null;
 let lastRunReview = null;
+let lastPublicView = null;
+let pendingPublicView = null;
 let liveWorkbench = null;
 let liveTimeframe = "1m";
 
+/**
+ * 公开行情研究视图外壳（**渐进渲染**）：先立即返回选择器 + 加载占位，
+ * 由 `mount()` 异步取真实行情后填充，避免整个页面被上游请求阻塞（交易所限流时可达数秒）。
+ */
+function publicMarketViewShell(viewSymbol, runtimeSymbol) {
+  const selector = symbolSelectorHtml({ viewSymbol, runtimeSymbol, sameAsRuntime: false });
+  return `<section class="wide">
+      <h2>Market view · ${escapeHtml(viewSymbol)} · public REST (research)</h2>
+      ${selector}
+      <div class="row"><span class="k">scope</span><span class="v muted">
+        这是**公开行情研究视图**：不修改运行实例的交易标的，也不代表该标的在当前运行中被交易。</span></div>
+      <div class="row"><span class="k">load state</span><span class="v" id="mv-status">loading…</span></div>
+      <div id="mv-chart-host"></div>
+    </section>` +
+    section("Public market facts", '<div id="mv-facts"></div>') +
+    section("Order book (snapshot)", '<div id="mv-book"><span class="muted">loading…</span></div>') +
+    section("Recent trades", '<div id="mv-trades"><span class="muted">loading…</span></div>') +
+    `<section class="wide"><h2>L2 depth heatmap</h2>` +
+      `<div class="row"><span class="k">heatmap</span><span class="v unknown">NOT_AVAILABLE</span></div>` +
+      `<div class="muted">${escapeHtml(L2_HEATMAP_REASON)}</div></section>` +
+    section("Runtime context (unchanged)", rows([
+      ["runtime trading symbol", `${escapeHtml(runtimeSymbol)} <span class="muted">（本视图为研究上下文，未受影响）</span>`],
+      ["orders / positions / decisions", `<a href="#/activity/orders">Activity → orders</a> ` +
+        `<span class="muted">（只属于 runtime 标的；不会因为查看 ${escapeHtml(viewSymbol)} 而归到它名下）</span>`],
+      ["run / risk state", `<a href="#/monitor">Monitor</a> · <a href="#/system/risk">System → risk</a>`],
+    ]));
+}
+
+/** 异步加载并填充公开行情视图（由 mount 调用；失败只影响该区域并显示原因）。 */
+async function mountPublicMarketView() {
+  const request = pendingPublicView;
+  if (!request) return;
+  const status = document.getElementById("mv-status");
+  const setStatus = (html) => { if (status) status.innerHTML = html; };
+  let payload;
+  try {
+    payload = await fetchJson(`${ENDPOINTS.marketView}?symbol=${encodeURIComponent(request.symbol)}` +
+      "&interval=1m&candles=300&depth=50&trades=100");
+  } catch (error) {
+    setStatus(`<span class="bad">UNAVAILABLE (${escapeHtml(String(error))})</span> ` +
+      `<span class="muted">检查交易对是否受支持；若是交易所限流（HTTP 418/429）请稍后重试；` +
+      `查看运行实例标的：<a href="#/market/live">${escapeHtml(request.runtimeSymbol)}</a></span>`);
+    const facts = document.getElementById("mv-facts");
+    if (facts) facts.innerHTML = rows([["public market data",
+      `<span class="unknown">UNKNOWN</span> <span class="muted">（请求未被服务，不展示任何占位数）</span>`]]);
+    return;
+  }
+  const view = payload.market_view || {};
+  lastPublicView = { symbol: view.symbol || request.symbol,
+                     candles: view.candles || [], interval: view.interval || "1m" };
+  const available = view.available || {};
+  const errors = view.errors || {};
+  setStatus(`<span class="known">loaded</span> <span class="muted">source=` +
+    `${escapeHtml(view.source || "unknown")} · fetched_at=${escapeHtml(String(view.fetched_at_ms))}</span>`);
+  const facts = document.getElementById("mv-facts");
+  if (facts) facts.innerHTML = rows(marketViewFacts(view));
+  const depth = view.depth || {};
+  const bookHost = document.getElementById("mv-book");
+  if (bookHost) {
+    bookHost.innerHTML = available.depth
+      ? table(["side", "price", "qty"],
+          (depth.bids || []).slice(0, 12).map(([p, q]) => ["bid", escapeHtml(String(p)), escapeHtml(String(q))])
+            .concat((depth.asks || []).slice(0, 12).map(([p, q]) => ["ask", escapeHtml(String(p)), escapeHtml(String(q))])))
+      : `<div class="row"><span class="k">order book</span><span class="v unknown">UNAVAILABLE (` +
+        `${escapeHtml((errors.depth || {}).code || "unknown")})</span></div>`;
+  }
+  const tradesHost = document.getElementById("mv-trades");
+  if (tradesHost) {
+    tradesHost.innerHTML = available.trades
+      ? table(["ts", "price", "qty", "aggressor"], (view.trades || []).slice(0, 20).map((t) =>
+          [String(t.ts), escapeHtml(String(t.price)), escapeHtml(String(t.quantity)),
+           escapeHtml(String(t.aggressor))]))
+      : `<div class="row"><span class="k">recent trades</span><span class="v unknown">UNAVAILABLE (` +
+        `${escapeHtml((errors.trades || {}).code || "unknown")})</span></div>` +
+        `<div class="muted">交易所限流/反爬导致该能力不可用；缺失不会被当成零成交。</div>`;
+  }
+  const chartHost = document.getElementById("mv-chart-host");
+  if (chartHost) {
+    chartHost.innerHTML = available.candles
+      ? `<div id="mv-toolbar" class="toolbar"></div>` +
+        `<div id="mv-kline-chart" class="chart-host" style="height:420px"></div>`
+      : `<div class="row"><span class="k">candles</span><span class="v unknown">UNAVAILABLE (` +
+        `${escapeHtml((errors.candles || {}).code || "unknown")})</span></div>`;
+  }
+  if ((lastPublicView.candles || []).length) {
+    mountWorkbench(document.getElementById("mv-kline-chart"),
+                   document.getElementById("mv-toolbar"), {
+      candles: lastPublicView.candles, trace: [], timeframe: lastPublicView.interval,
+      symbol: lastPublicView.symbol, source: "public_rest (read-only)",
+      indicators: ["MA", "EMA", "VOL"],
+    });
+  }
+}
+
 export async function mount(rest = []) {
+  // Market View（公开行情研究视图）：选择器立即可用，行情异步填充（渐进渲染）
+  if (pendingPublicView) {
+    const request = pendingPublicView;
+    mountSymbolSelector();
+    await mountPublicMarketView();
+    if (!lastPublicView) lastPublicView = { symbol: request.symbol, candles: [], interval: "1m" };
+    return;
+  }
   // P0001.17 §9：Run Review 的记录事实图表（历史 run；只读展示 + 事实定位）
   if (rest[0] === "run-review" && lastRunReview && lastRunReview.candles.length) {
     const workbench = mountWorkbench(document.getElementById("kline-chart-runreview"),
                                     document.getElementById("wb-toolbar-runreview"), {
-      candles: lastRunReview.candles, trace: [], timeframe: "1m", symbol: "BTCUSDT",
+      candles: lastRunReview.candles, trace: [], timeframe: "1m",
+      symbol: lastRunReview.symbol || "UNKNOWN",
       atrPoints: lastRunReview.atrPoints || [],
       source: "durable run facts", indicators: ["MA", "EMA", "VOL"],
     });
@@ -198,6 +336,7 @@ export async function mount(rest = []) {
                       decision: null, order: null, fill: null });
   }
   const context = lastMarket;
+  if (context) mountSymbolSelector();
   if (!context) return;
   const { candles1m, trace, focusTs, depth, symbol } = context;
   const snapshot = await fetchSnapshot();
@@ -274,6 +413,11 @@ export async function refresh(rest = []) {
     host.innerHTML = rest[1]
       ? await renderSymbolDetail(String(rest[1]))
       : await renderUniverse();
+    return;
+  }
+  // 公开行情研究视图：轮询时也刷新（服务端有短 TTL 缓存，不会连拍上游）
+  if (pendingPublicView) {
+    await mountPublicMarketView();
     return;
   }
   if (!liveWorkbench) return;

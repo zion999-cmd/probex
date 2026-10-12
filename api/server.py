@@ -51,6 +51,7 @@ from api.routes.market_platform import (
     SYMBOL_STATUS_PREFIX,
 )
 from api.routes.market_universe import PATH as MARKET_UNIVERSE_PATH
+from api.routes.market_view import PATH as MARKET_VIEW_PATH, SYMBOLS_PATH as MARKET_VIEW_SYMBOLS_PATH
 
 from product.serialization import snapshot_to_jsonable
 from product.service import ProductService
@@ -430,6 +431,57 @@ class ProductApiHandler(BaseHTTPRequestHandler):
         if path.startswith(DATASET_PREFIX):
             return self._serve_dataset(platform, path, query)
         return False
+
+    def _serve_market_view(self, path: str, query: str) -> bool:
+        """Market View：任意受支持交易对的公开行情研究视图（只读；与 runtime 交易标的无关）。
+
+        错误语义（明确，不伪装）：
+
+        - 未接线 ⇒ 503 `market_view_unavailable`
+        - 交易对格式非法 ⇒ 400 `invalid_symbol`；周期非法 ⇒ 400 `invalid_interval`
+        - 格式合法但该交易所不支持的交易对 ⇒ 404 `unsupported_symbol`
+        - 上游网络/读取失败 ⇒ 503，带具体 code（不返回空图）
+        """
+        if path not in (MARKET_VIEW_PATH, MARKET_VIEW_SYMBOLS_PATH):
+            return False
+        service = self.service.market_view_service()
+        if service is None:
+            self._error(503, "market_view_unavailable",
+                        "public market view service is not wired in this runtime")
+            return True
+        params = dict(pair.split("=", 1) for pair in query.split("&") if "=" in pair)
+        try:
+            if path == MARKET_VIEW_SYMBOLS_PATH:
+                view = service.symbols_view(
+                    query=params.get("q"),
+                    limit=int(params.get("limit", 200)),
+                    quote_asset=params.get("quote_asset") or None)
+            else:
+                view = service.view(
+                    params.get("symbol", ""),
+                    interval=params.get("interval", "1m"),
+                    candles=int(params.get("candles", 200)),
+                    depth_levels=int(params.get("depth", 100)),
+                    trades=int(params.get("trades", 50)),
+                    components=(tuple(c for c in params["components"].split(",") if c)
+                                 if params.get("components") else None))
+        except ValueError as exc:
+            # MarketView 的明确失败：不 import connector 层类型，按契约读 code/detail（duck typing）。
+            code = getattr(exc, "code", None)
+            if not code:
+                self._error(400, "invalid_market_view_params", str(exc))
+                return True
+            status = {"invalid_symbol": 400, "invalid_interval": 400,
+                      "invalid_components": 400,
+                      "unsupported_symbol": 404}.get(code, 503)
+            self._error(status, code, getattr(exc, "detail", str(exc)))
+            return True
+        except (TypeError, ValueError):
+            self._error(400, "invalid_market_view_params",
+                        "limit/candles/depth/trades must be integers")
+            return True
+        self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE, "market_view": view})
+        return True
 
     def _serve_dataset(self, platform: object, path: str, query: str) -> bool:
         rest = path[len(DATASET_PREFIX):].strip("/")
@@ -874,6 +926,8 @@ class ProductApiHandler(BaseHTTPRequestHandler):
             self._serve_market_workbench(path, query)
             return
         if self._serve_market_platform(path, query):
+            return
+        if self._serve_market_view(path, query):
             return
         if path.startswith(f"{RUNS_PATH}/") and path.endswith("/market"):
             self._serve_run_market(path)

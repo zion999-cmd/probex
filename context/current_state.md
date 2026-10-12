@@ -461,6 +461,22 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 - **能力边界未变**：单标的 runtime（symbol 固定于启动参数）、Testnet/LIVE 未启用、
   真实公网行情受本机代理/WS 限制（NOT RUN）——均在 UI 中显式说明，未伪装可操作。
 
+
+### Market 行情标的选择器（2026-10-13，人类会话明确授权；未新建 Proposal）
+
+- **授权**：人类当前会话指令“直接修复现有 Market UI：增加真正可用的行情标的选择器”，不新建 Proposal；
+  `currentProposal` 保持 `null`。
+- **实现**：`MarketViewService`（`connectors/binance/market_data/market_view.py`，只读公开 REST，按组件可用性，
+  节流 + 短 TTL 缓存 + 限流重试；clock/sleeper 由组合根注入以符分层守卫）+ 只读端点
+  `/api/v1/market/view`、`/api/v1/market/view/symbols`；Market 工作区可搜索交易对选择器与公开行情研究视图
+  （K线/盘口/成交/标记价/24h 概览，渐进渲染）；Assistant 在 `?view=X` 下使用 X 的市场上下文。
+- **语义边界**：**Market View Symbol ≠ Runtime Trading Symbol**。查看 BNBUSDT 不修改运行实例标的、不重启、不下单；
+  订单/持仓/决策/风险仍属 runtime 标的（页面显式标注）。
+- **实测环境事实**：默认 python-urllib UA 被币安 418（标识性 UA 200）；连拍触发限流（已加节流/缓存/逐组件降级）；
+  WS 主机在本机代理下不可达（REST 可达）。详见 `docs/RUNBOOK.md` §9。
+- **验收**：`tests/ui/market_symbol_selector.mjs` **9/9 PASS**（证据 `artifacts/gap-ledger/market_symbol_selector_acceptance.json`）；
+  既有 `tests/ui/ui_entry_acceptance.mjs` 22/22；全量 **2574 passed / 0 failed / 24 skipped**。
+
 ## 下一步
 
 - **无授权中的步骤**：P0001.9.3 – P0001.9.6 均已收口，`currentProposal = null`。

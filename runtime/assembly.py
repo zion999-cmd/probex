@@ -927,6 +927,9 @@ class ProductRuntime:
             reconciliation_requester=_request_reconciliation)
         return ProductService(
             identity=self._identity,
+            # Market View：公开行情研究视图（只读 REST；任意受支持交易对）。
+            # 与 runtime 交易标的无关⇒不修改运行实例、不触发任何交易动作；未接线时端点 503。
+            market_view=self._build_market_view_service,
             config_snapshot=lambda: self._cfg,
             run_registry=lambda: self._registry,
             runtime_status=lambda: self._tracker.status(),
@@ -1232,6 +1235,45 @@ class ProductRuntime:
         self._service.market_history = lambda: history
         log_event("runtime", "public_market_start", runtime_id=self._identity.runtime_id,
                   run_id=self._session.run_id, source=adapter.source_id)
+
+    def _build_market_view_service(self) -> object | None:
+        """构造 Market View 服务（公开行情只读 REST；模块级缓存，避免每次请求重建）。
+
+        使用与其它公开行情相同的 REST 基址配置（`market.public_rest_base`）；无凭据、无写能力。
+        任何模式下都可用（包括 event-store 离线运行）——这正是“查看别的交易对行情”的入口。
+        """
+        existing = getattr(self, "_market_view_service", None)
+        if existing is not None:
+            return existing
+        try:
+            from connectors.binance.market_data.snapshot import UrllibJsonClient
+            from connectors.binance.market_data.market_view import MarketViewService
+
+            values = self._config_values()
+            rest_base = str(values.get("market.public_rest_base",
+                                        "https://fapi.binance.com"))
+            user_agent = str(values.get("market.view.user_agent",
+                                        "probex/0.1 (market-view; read-only public data)"))
+            service = MarketViewService(
+                client=UrllibJsonClient(base_url=rest_base, user_agent=user_agent),
+                # 墙钟 + 睡眠由组合根注入（connector 层不做环境访问）：
+                # fetched_at_ms 必须是真实取数时刻，不能用事件/回放时钟。
+                clock=lambda: int(time.time() * 1000), sleeper=time.sleep,
+                base_url=rest_base,
+                timeout_s=float(values.get("market.view.timeout_s", 10.0)),
+                exchange_info_ttl_s=float(values.get("market.view.exchange_info_ttl_s", 300.0)),
+                cache_ttl_ms=int(values.get("market.view.cache_ttl_ms", 5000)),
+                min_request_interval_ms=int(values.get("market.view.min_request_interval_ms", 650)),
+                rate_limit_retry_ms=int(values.get("market.view.rate_limit_retry_ms", 2500)))
+            # 注意：**不注入** profile.clock —— Market View 取的是**实时外部数据**，
+            # fetched_at_ms 必须是真实墙钟（用事件/回放时钟会误导成“在模拟时刻取到实时数据”）。
+        except Exception as exc:  # noqa: BLE001 - 构造失败 ⇒ 保持未接线（端点 503，不伪造）
+            log_event("runtime", "market_view_unavailable",
+                      runtime_id=self._identity.runtime_id,
+                      reason=f"{type(exc).__name__}: {exc}")
+            return None
+        self._market_view_service = service
+        return service
 
     def _start_universe_platform(self, values: dict[str, object]) -> None:
         """P0017.1：多标的市场数据平台（只发现/采集/落盘/查询；不构造 broker/engine）。"""
