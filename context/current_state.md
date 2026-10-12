@@ -388,6 +388,20 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
   解除 451 后须按提案 §7-B 补跑 ≥2 symbol 持续更新/单流故障隔离/重启续读/浏览器真实验证并回填 LIMITS_FINDINGS。
 - `currentProposal` 暂保持 `P0017.1`（提案未正式完成）；P0017.2（多标的 PAPER + 组合级风险预算）/ P0017.3（回测）未批准。
 
+
+### P0017.2 组合 gross-notional 预算（2026-10-11 收口）
+
+- **已完成（离线验收口径）**：组合第二道闸 `risk/portfolio_budget.py`（gross 非 net、持仓+在途+候选单、
+  reduce-only/反手/缺净数量保守、unresolved/缺 mark fail-closed、等值放行）；`max_open_order_exposure`
+  正式 per-symbol（D7）+ 守恒；OrderTracker `exposure_by_symbol()`；engine 先组合闸后单标的闸、
+  候选被拦不登记（无重复消费窗口）；L1 缺 mark 跨标的低估缺陷已修。
+- 证据：2517 passed / 0 failed / 24 skipped（工作树 + detached）；Closure Audit `artifacts/p0017/P0017_2_CLOSURE_AUDIT.md`。
+- **B 类未验证（外部/授权前置，不代表已支持）**：Testnet/LIVE 组合预算（runtime/testnet 未接组合闸）、
+  真实多标的行情 E2E（Binance HTTP 451）。
+- **C 类优化（独立，不阻塞 P0017.3）**：L2 MakerPolicy sizing 感知组合限额（硬 submit 闸已保证不超限，
+  仅报价效率/reject 噪声）。
+- `currentProposal = null`（收口）。
+
 ## 下一步
 
 - **无授权中的步骤**：P0001.9.3 – P0001.9.6 均已收口，`currentProposal = null`。

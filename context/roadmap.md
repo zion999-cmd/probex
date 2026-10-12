@@ -89,5 +89,5 @@ P0001.15  Instrument Domain + Venue Integration Contract ← 已完成（2026-10
 | P0001.14 | 已完成（Runtime Decision Loop Integration：Market→Prediction→Maker→Risk→PAPER 闭环） |
 | P0001.15 | 已完成（Instrument Domain + Venue Integration Contract；SC-24…SC-28 PASS） |
 | P0017.1 | **离线验收完成，真实 E2E 待验证**（多标的市场数据平台：发现/采集/共享数据集/只读 API/UI 全部离线 PASS，2495 测试；§7-B 因 Binance HTTP 451 NOT RUN，不标全部完成） |
-| P0017.2 | 组合 gross-notional 预算已实施（第二道闸 + per-symbol 在途作用域，2513 测试）；多标的 PAPER 编排沿用单决策线程 |
+| P0017.2 | 已完成（**离线组合预算验收**，2517 测试；第二道闸 + per-symbol 在途 + 缺 mark fail-closed + Closure Audit）；**Testnet/LIVE 组合预算与真实多标的行情 E2E 未验证**（B 类，外部/授权前置）；L2 策略 sizing 为独立 C 类优化项 |
 | P0017.3 | 未批准（回测与评估报告） |

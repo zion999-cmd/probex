@@ -2630,3 +2630,11 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - 新增 4 项 `test_portfolio_gate_engine` 测试：跨标的缺 mark 拦截、mark 恢复、flat 不阻断、未交易 symbol 不标记。
 - L2（MakerPolicy sizing 感知组合限额）按人类决定暂缓；Testnet/LIVE 组合风险仍未验证（runtime/testnet 不接组合闸）。
 - 全量 **2517 passed / 0 failed / 24 skipped**。
+
+## 2026-10-11（P0017.2 正式收口：离线组合预算）
+
+- 人类据 Closure Audit 批准收口；`currentProposal: P0017.2 → null`；不改代码、不回滚。
+- 完成口径仅限**离线**组合 gross-notional 预算（2517 passed + detached）。
+- B 类未验证：Testnet/LIVE 组合预算（runtime/testnet 未接线，独立提案+写授权）、真实多标的行情 E2E（451）。
+- C 类独立优化：L2 MakerPolicy sizing 感知组合限额（不阻塞回测）。
+- 下一步：P0017.3 只读差距审计（不直接实施）。
