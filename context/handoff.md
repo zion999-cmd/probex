@@ -2638,3 +2638,18 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - B 类未验证：Testnet/LIVE 组合预算（runtime/testnet 未接线，独立提案+写授权）、真实多标的行情 E2E（451）。
 - C 类独立优化：L2 MakerPolicy sizing 感知组合限额（不阻塞回测）。
 - 下一步：P0017.3 只读差距审计（不直接实施）。
+
+## 2026-10-12（P0017.3 确定性离线回测 driver 实施，Batch 1–4）
+
+人类重写并批准 P0017.3 设计后指示实施（currentProposal=P0017.3）。
+- 新 `backtest/` 包：`driver.py`（单线程同步事件步进：ReplaySource→FeatureEngine→MakerPolicy→
+  RiskGate+P0017.2 组合硬闸→ExecutionEngine/SimulatedVenue→Accounting；无 wall-clock/线程）、
+  `identity.py`（dataset 内容 hash + canonical run_id）、`report.py`（manifest/summary/report.md，
+  slippage/funding/market-impact 显式 UNSUPPORTED）、`runner.py`（配置加载+编排）、`prediction.py`
+  （确定性 LocalTrial runtime + FixedClock）、六态结果状态。
+- CLI：`probex backtest --dataset --config --out [--no-prediction]`（离线，无 API/key，INVALID_INPUT 退出 2、非成功 30）。
+- `profiles/backtest-default.json`：回测显式配置（maker 策略 + 仅 maker fee）。
+- 驱动事实：1h fixture → 1319 决策 / 1576 提交 / 14 风险拒绝 / 965 成交；双跑 result_hash 等价。
+- 测试：新增 16（driver 10 + cli/report 6），全量 **2533 passed / 0 failed / 24 skipped**。
+- 结构隔离：backtest 包不 import connectors/runtime.testnet/runtime.assembly（守卫测试）。
+- 待办：detached 复核 + P0017.3_ACCEPTANCE_REPORT（§14），然后 Closure Audit。

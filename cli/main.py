@@ -171,6 +171,14 @@ def build_parser() -> argparse.ArgumentParser:
     invoke.add_argument("--surface", default="monitor")
     invoke.add_argument("--json", action="store_true")
 
+    backtest = subparsers.add_parser(
+        "backtest", help="offline deterministic backtest (local event store; no exchange access)")
+    backtest.add_argument("--dataset", required=True, help="path to event-store JSONL")
+    backtest.add_argument("--config", required=True, help="backtest config JSON")
+    backtest.add_argument("--out", required=True, help="output directory for manifest/summary/report")
+    backtest.add_argument("--no-prediction", action="store_true",
+                            help="run without the local trial prediction provider (passive quotes)")
+
     run = subparsers.add_parser("run", help="inspect one run / compare two runs")
     run_sub = run.add_subparsers(dest="run_mode", metavar="mode")
     show = run_sub.add_parser("show", help="show one run")
@@ -192,6 +200,24 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--format", choices=["json", "markdown"], default="json")
     report.add_argument("--json", action="store_true")
     return parser
+
+
+def _run_backtest(args, *, stdout, stderr) -> int:
+    """离线回测子命令（不触网、不走 API server）。失败以退出码区分。"""
+    from backtest import BacktestStatus
+    from backtest.runner import execute_backtest
+
+    try:
+        summary = execute_backtest(dataset=args.dataset, config_path=args.config,
+                                     out_dir=args.out, prediction=not args.no_prediction)
+    except Exception as exc:  # noqa: BLE001 - CLI 边界：分类后稳定退出
+        from backtest import BacktestError  # noqa: F401
+        status = getattr(exc, "status", BacktestStatus.REPLAY_FAILURE)
+        stdout.write(json.dumps({"status": status.value, "reason": str(exc)},
+                                   ensure_ascii=False) + "\n")
+        return EXIT_USAGE if status is BacktestStatus.INVALID_INPUT else 30
+    stdout.write(json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
+    return EXIT_OK if summary["status"] == BacktestStatus.SUCCESS.value else 30
 
 
 def _emit(payload: dict, *, as_json: bool, stdout, stderr) -> None:
@@ -229,6 +255,8 @@ def main(argv: Sequence[str] | None = None, *, stdout=None, stderr=None,
     api_url = args.api_url
     command = args.command
     try:
+        if command == "backtest":
+            return _run_backtest(args, stdout=stdout, stderr=stderr)
         if command == "report":
             path = f"{REPORT_PATH}?format={args.format}"
             if args.format == "markdown":
