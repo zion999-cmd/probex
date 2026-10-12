@@ -416,6 +416,21 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 - 回测收益为给定假设下的模拟，不预测未来、不证明实盘收益。
 - `currentProposal = null`（收口）。
 
+
+### P0017.4 多标的确定性组合回测（2026-10-12 收口）
+
+- **已完成（离线验收口径）**：多标的 event-driven 确定性回测——`MultiSymbolSimulatedAdapter`（per-symbol SimulatedVenue fan-out/in）、
+  `(exchange_ts,ordinal,symbol)` 统一排序、per-symbol FeatureEngine 状态隔离、共享 AccountingCore/OrderTracker/RiskGate
+  （P0017.2 组合 gross 硬闸跨标的生效）、runner 按 `backtest.symbols` 自动分流、summary 增 `symbols`/`per_symbol`。
+- C-1 术语澄清（重要）：组合预算约束的对象是 **accepted 非 reduce-only 新增暴露的 projected gross**；
+  reduce-only 挂单按 P0017.2 已裁决语义 increment=0（只降净敞口），**不能**表述为"所有在途名义敞口总和始终 ≤ 限额"。
+- C-2 已完成：同时间戳预算只够一个标的时，store ordinal 较小者（BTC）确定性胜出，ETH 被 `PORTFOLIO_NOTIONAL_LIMIT` 拒、无成交/会计副作用，双跑一致。
+- 证据：2541 passed / 0 failed / 24 skipped（工作树 + detached）；验收报告/Closure Audit 见 artifacts/p0017/。
+- **B 类未验证**：真实多标的行情 E2E（Binance 451，P0017.1 外部）、Testnet/LIVE 多标的写路径（结构性不可达）。
+- **C 类后续**：3+ 标的专项（C-3，当前 2 标的满足"至少两个"）、per-symbol 全套 maker 参数（C-4，当前仅 tick/step 可分）；
+  bar/OHLCV、slippage/funding/taker 仍为明确未支持。
+- `currentProposal = null`（收口）。
+
 ## 下一步
 
 - **无授权中的步骤**：P0001.9.3 – P0001.9.6 均已收口，`currentProposal = null`。

@@ -91,3 +91,4 @@ P0001.15  Instrument Domain + Venue Integration Contract ← 已完成（2026-10
 | P0017.1 | **离线验收完成，真实 E2E 待验证**（多标的市场数据平台：发现/采集/共享数据集/只读 API/UI 全部离线 PASS，2495 测试；§7-B 因 Binance HTTP 451 NOT RUN，不标全部完成） |
 | P0017.2 | 已完成（**离线组合预算验收**，2517 测试；第二道闸 + per-symbol 在途 + 缺 mark fail-closed + Closure Audit）；**Testnet/LIVE 组合预算与真实多标的行情 E2E 未验证**（B 类，外部/授权前置）；L2 策略 sizing 为独立 C 类优化项 |
 | P0017.3 | 已完成（**离线确定性回测**，2533 测试：event-driven driver/双跑可复现/内容级因果前缀/组合风险复用/CLI；bar、多标的回测、slippage/funding 为 B 类未支持能力，见验收/Closure Audit） |
+| P0017.4 | 已完成（**离线多标的确定性组合回测**，2541 测试：per-symbol 状态隔离/统一时间线/P0017.2 组合 gross 硬闸跨标的生效/会计勾稽/双跑与同 ts 预算竞争 C-2 确定性）；**真实多标的行情 E2E（Binance 451）与 Testnet/LIVE 多标的写路径未验证（B 类）**；bar 粒度、3+ 标的专项（C-3）、per-symbol 全套策略参数（C-4）为后续；slippage/funding 仍 UNSUPPORTED |

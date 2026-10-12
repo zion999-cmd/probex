@@ -2691,3 +2691,14 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - 重要语义：reduce-only 挂单按 P0017.2 可越过 gross 上限（只能降净敞口），故正确不变式是
   “非 reduce-only 的 accepted 新增暴露 projected gross ≤ limit”，不是“所有在途名义之和 ≤ limit”。
 - CLI `probex backtest` 对含 backtest.symbols 的配置自动走多标的。待办：Batch 5 验收报告 + Closure Audit。
+
+## 2026-10-12（P0017.4 C-2 加固 + 正式收口）
+
+- C-2（第一阶段）：新增 `test_same_timestamp_budget_contention_winner_is_deterministic`——同时间戳两个标的竞争
+  500 组合预算（各 400 新增暴露）时，按 (exchange_ts,ordinal) 契约 store 中先出现的 BTC 被接受为唯一 OPEN，
+  ETH 被 PORTFOLIO_NOTIONAL_LIMIT 拒、0 成交/equity 不变，双跑订单与拒绝轨迹一致。未改任何生产/风险/排序代码。
+- 第二阶段收口：currentProposal→null；roadmap/current_state 更新；C-1 术语澄清（组合预算约束非 reduce-only
+  新增暴露 projected gross，非全部在途名义之和）；C-3（3+ 标的）登记为独立 C 类增强；真实多标的行情 E2E（451）、
+  Testnet/LIVE 写路径明确 B 类未验证。
+- 全量 **2541 passed / 0 failed / 24 skipped**（detached 复核）。
+- 第三阶段（文档归档）另行处理；P0017.4 设计正文本次仍保持未跟踪。
