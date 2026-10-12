@@ -259,31 +259,13 @@ def run_backtest(dataset_path: str | Path, config: BacktestConfig, *,
 
 
 def _predict(runtime: object | None, state, now: int):
-    """同步调用可选 PredictionRuntime（离线本地 provider 确定性、无随机性）。"""
-    if runtime is None:
-        return None
-    # 若提供的是 (runtime, clock) 元组，先把时钟锚定到历史 now
-    clock = None
-    if isinstance(runtime, tuple):
-        runtime, clock = runtime
-    if clock is not None and hasattr(clock, "set"):
-        clock.set(now)
-    import asyncio
-    # 每次预测用独立事件循环：LocalTrial 内部为同步计算，但复用循环会在多标的交错调用时
-    # 残留调度任务/协程状态，导致结果被误判 stale。每调用独立循环可保证确定性。
-    try:
-        loop = asyncio.new_event_loop()
-        try:
-            result = loop.run_until_complete(runtime.submit(state))
-        finally:
-            try:
-                loop.run_until_complete(loop.shutdown_asyncgens())
-            except Exception:  # noqa: BLE001
-                pass
-            loop.close()
-        return getattr(result, "record", None)
-    except Exception:  # noqa: BLE001 - 预测失败不致命（策略按 prediction=None 被动报价）
-        return None
+    """同步调用可选 PredictionProvider（离线本地 provider 确定性、无随机性）。
+
+    P0017.5：实现已抽取到中立的 `prediction.invoke.invoke_provider_record`，
+    供离线回测与实时运行共享同一事件循环/失败语义（保留此名以兼容既有导入与测试）。
+    """
+    from prediction.invoke import invoke_provider_record
+    return invoke_provider_record(runtime, state, now)
 
 
 def _decide_once(decision_fn, engine: ExecutionEngine, tracker: OrderTracker,

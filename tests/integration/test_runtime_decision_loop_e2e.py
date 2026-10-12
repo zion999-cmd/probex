@@ -275,7 +275,9 @@ class DecisionLoopE2ETest(unittest.TestCase):
                    for path in (Path(__file__).resolve().parents[2] / "runtime").glob("*.py")}
         construction = sorted(name for name, text in sources.items()
                               if "PaperBroker(" in text or "SimulatedVenue(" in text)
-        self.assertEqual(construction, ["assembly.py"])                         # 唯一构造点
+        # P0017.5：新增实时多标的模拟组合根 live_multi_symbol.py（多 SimulatedVenue，模拟隔离）；
+        # 单标的产品装配仍唯一在 assembly.py。两者都是显式组合根，非业务模块私造。
+        self.assertEqual(construction, ["assembly.py", "live_multi_symbol.py"])
 
     def test_decision_loop_has_no_venue_connector_coupling(self) -> None:
         text = (Path(__file__).resolve().parents[2] / "runtime" / "decision_loop.py").read_text()

@@ -179,6 +179,16 @@ def build_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--no-prediction", action="store_true",
                             help="run without the local trial prediction provider (passive quotes)")
 
+    live_paper = subparsers.add_parser(
+        "live-paper",
+        help="real-time multi-symbol SIMULATED trading driven by public market data "
+             "(paper only; no exchange writes)")
+    live_paper.add_argument("--config", required=True, help="live paper config JSON (>=2 symbols)")
+    live_paper.add_argument("--status-every", type=float, default=5.0,
+                             help="seconds between JSON status lines (default 5)")
+    live_paper.add_argument("--pump-interval", type=float, default=0.5,
+                             help="seconds between collector pumps when idle (default 0.5)")
+
     run = subparsers.add_parser("run", help="inspect one run / compare two runs")
     run_sub = run.add_subparsers(dest="run_mode", metavar="mode")
     show = run_sub.add_parser("show", help="show one run")
@@ -220,6 +230,25 @@ def _run_backtest(args, *, stdout, stderr) -> int:
     return EXIT_OK if summary["status"] == BacktestStatus.SUCCESS.value else 30
 
 
+def _run_live_paper(args, *, stdout, stderr) -> int:
+    """实时多标的**模拟**交易子命令（真实公开行情驱动；模拟成交，无交易所写）。"""
+    from runtime.live_paper_service import run_live_paper
+    try:
+        return run_live_paper(
+            args.config, stdout=stdout, pump_interval_s=args.pump_interval,
+            status_every_s=args.status_every)
+    except FileNotFoundError:
+        stdout.write(json.dumps({"status": "INVALID_INPUT",
+                                   "reason": f"config not found: {args.config}"},
+                                  ensure_ascii=False) + "\n")
+        return EXIT_USAGE
+    except Exception as exc:  # noqa: BLE001 - CLI 边界：连接/配置失败如实打印，不伪装成功
+        stdout.write(json.dumps({"status": "FAILED",
+                                   "reason": f"{type(exc).__name__}: {exc}"},
+                                  ensure_ascii=False) + "\n")
+        return 30
+
+
 def _emit(payload: dict, *, as_json: bool, stdout, stderr) -> None:
     if as_json:
         json.dump(payload, stdout, ensure_ascii=False, allow_nan=False, sort_keys=True, indent=2)
@@ -257,6 +286,8 @@ def main(argv: Sequence[str] | None = None, *, stdout=None, stderr=None,
     try:
         if command == "backtest":
             return _run_backtest(args, stdout=stdout, stderr=stderr)
+        if command == "live-paper":
+            return _run_live_paper(args, stdout=stdout, stderr=stderr)
         if command == "report":
             path = f"{REPORT_PATH}?format={args.format}"
             if args.format == "markdown":

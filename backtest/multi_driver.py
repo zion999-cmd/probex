@@ -19,7 +19,6 @@ from backtest.driver import (
     BacktestConfig,
     BacktestTrace,
     BacktestResult,
-    _predict,
     run_integrity_checks,
 )
 from backtest.multi_adapter import MultiSymbolSimulatedAdapter
@@ -32,11 +31,14 @@ from execution.tracker import OrderTracker
 from market.events.types import EventType, MarketEvent, Venue
 from market.features.engine import FeatureEngine
 from portfolio.accounting import AccountingCore
-from risk.budget import remaining_exposure_budget
 from risk.gate import RiskGate
-from risk.portfolio_budget import PortfolioCommitment
+from runtime.multi_symbol_core import (
+    StepConfig,
+    StepCounters,
+    build_commitment_provider,
+    process_market_event,
+)
 from storage.events.reader import JsonlEventReader
-from strategy.maker.types import QuoteAction
 
 
 @dataclass
@@ -80,30 +82,8 @@ def _ordered_events(records, *, declared_symbols: set[str]) -> list[tuple[int, i
 
 
 def _build_commitment(accounting: AccountingCore, tracker: OrderTracker):
-    def provider():
-        positions: dict[str, float] = {}
-        net: dict[str, float] = {}
-        unpriced: set[str] = set()
-        for pos in accounting.positions:
-            net[pos.symbol] = float(pos.qty)
-            if pos.qty != 0.0 and pos.notional is None:
-                unpriced.add(pos.symbol)
-            elif pos.notional:
-                positions[pos.symbol] = float(pos.notional)
-        pending = tracker.exposure_by_symbol()
-        # 只有真正有不可量化订单（unresolved_count>0）或缺 mark 的非 flat 持仓才标 unresolved；
-        # 普通在途订单（pending 有名义）不是 unresolved。
-        unresolved: dict[str, bool] = {}
-        for sym in set(positions) | set(pending) | set(unpriced):
-            unresolved[sym] = (
-                sym in unpriced
-                or any(getattr(o, 'symbol', None) in (None, sym) for o in tracker.unresolved_orders())
-            )
-        return PortfolioCommitment(
-            position_by_symbol=positions,
-            pending_by_symbol={s: float(v["total"]) for s, v in pending.items()},
-            has_unresolved_by_symbol=unresolved), net
-    return provider
+    """P0017.5：委托给共享核心（离线/实时同口径）。保留名字兼容既有导入/测试。"""
+    return build_commitment_provider(accounting, tracker)
 
 
 def run_multi_backtest(dataset_path: str | Path, config: MultiBacktestConfig, *,
@@ -158,10 +138,10 @@ def run_multi_backtest(dataset_path: str | Path, config: MultiBacktestConfig, *,
         accounting=accounting, gate=RiskGate(limits), manager=manager,
         portfolio_commitment_provider=_build_commitment(accounting, tracker))
 
-    trace = BacktestTrace()
-    decide_set = set(config.decide_on)
+    step_config = StepConfig(decide_on=tuple(config.decide_on))
+    counters = StepCounters()
 
-    def fn_for(symbol: str):
+    def fn_for_symbol(symbol: str):
         if decision_fn is None:
             return None
         if isinstance(decision_fn, dict):
@@ -169,40 +149,27 @@ def run_multi_backtest(dataset_path: str | Path, config: MultiBacktestConfig, *,
         return decision_fn  # 单一函数用于全部 symbol
 
     try:
-        last_state: dict[str, object] = {}
         for ts, _ordinal, symbol, event in ordered:
             now = int(ts)
-            etype = event.event_type
-            if etype is EventType.MARK_PRICE:
-                try:
-                    accounting.update_mark_price(symbol, float(event.payload.price),
-                                                   timestamp=int(getattr(event.payload, "receive_ts", now)))
-                except (AttributeError, TypeError, ValueError):
-                    pass
-            else:
-                state = engines_feature[symbol].on_market_event(event)
-                last_state[symbol] = state
-                adapter.on_market_event(event)
-            # 所有 symbol 的在途成交/到期在此时点统一结算（确定性 fan-in）
-            polled = engine.poll(now_ms=now)
-            trace.fills += len(polled.fills)
-            trace.events += 1
-            # 仅在产生了该 symbol 市场状态且可交易时决策
-            if etype is not EventType.MARK_PRICE and etype.value in decide_set:
-                state = last_state.get(symbol)
-                if state is not None and state.quality.tradeable:
-                    fn = fn_for(symbol)
-                    if fn is not None:
-                        prediction = _predict(prediction_runtime, state, now)
-                        _decide_multi(fn, engine, tracker, symbol, state, config, now,
-                                       trace, prediction=prediction)
+            # P0017.5：每个事件的决策/风险/执行/会计步进走离线/实时共享核心（唯一实现）。
+            process_market_event(
+                event=event, now=now, engine=engine, features=engines_feature,
+                decision_fn_for=fn_for_symbol, config=step_config, counters=counters,
+                prediction_runtime=prediction_runtime)
         tail = engine.poll(now_ms=int(ordered[-1][0]))
-        trace.fills += len(tail.fills)
+        counters.fills += len(tail.fills)
     except BacktestError:
         raise
     except Exception as exc:  # noqa: BLE001
         raise BacktestError(BacktestStatus.REPLAY_FAILURE,
                               f"{type(exc).__name__}: {exc}") from exc
+
+    # 共享计数器 → 回测 trace（保持 BacktestResult 契约不变）
+    trace = BacktestTrace(
+        decisions=counters.decisions, submits=counters.submits,
+        risk_rejects=counters.risk_rejects, fills=counters.fills,
+        events=counters.events, decisions_log=counters.decisions_log,
+        rejects_log=counters.rejects_log)
 
     result = BacktestResult(
         status=BacktestStatus.SUCCESS, run_id=run_id, config=config, trace=trace,
@@ -226,43 +193,16 @@ def _seen(ordered) -> set[str]:
 def _decide_multi(fn, engine: ExecutionEngine, tracker: OrderTracker, symbol: str,
                    state, config: BacktestConfig, now: int, trace: BacktestTrace, *,
                    prediction=None) -> None:
-    snapshot = engine.snapshot(symbol, now_ms=now)
-    position = engine.accounting.position(symbol)
-    budget = None
-    try:
-        budget = remaining_exposure_budget(snapshot, engine.gate.limits).remaining_notional
-    except Exception:  # noqa: BLE001
-        budget = None
-    common = dict(state=state, prediction=prediction, position=position, snapshot=snapshot,
-                  existing_orders=tuple(o for o in tracker.active() if o.symbol == symbol),
-                  remaining_risk_budget=budget,
-                  kill_switch=engine.gate.limits.effective_kill_switch_mode)
-    # 接受可调用 fn(...) 或具有 .decide(...) 的策略对象（MakerPolicy）
-    decision = fn(**common) if callable(fn) and not hasattr(fn, "decide") else fn.decide(**common)
-    if decision is None:
-        return
-    trace.decisions += 1
-    trace.decisions_log.append({"ts": now, "symbol": symbol,
-                                  "mode": getattr(decision, "mode", None)
-                                  and decision.mode.value,
-                                  "decision_id": getattr(decision, "decision_id", None)})
-    for side in (getattr(decision, "bid", None), getattr(decision, "ask", None)):
-        if side is None:
-            continue
-        action = getattr(side, "action", None)
-        if action in (QuoteAction.KEEP, QuoteAction.NONE, None):
-            continue
-        proposal = getattr(side, "proposal", None)
-        if proposal is None:
-            continue
-        result = engine.submit(proposal, now_ms=now)
-        if result.submitted:
-            trace.submits += 1
-        elif result.rejected:
-            trace.risk_rejects += 1
-            code = result.decision.reason_code
-            trace.rejects_log.append({"ts": now, "symbol": symbol,
-                                        "reason": code.value if code is not None else None})
+    """P0017.5：委托给离线/实时共享决策步进（保留名字兼容既有导入/测试）。"""
+    from runtime.multi_symbol_core import StepCounters, decide_and_submit, StepConfig
+    counters = StepCounters()
+    decide_and_submit(fn=fn, engine=engine, tracker=tracker, symbol=symbol, state=state,
+                        now=now, counters=counters, prediction=prediction)
+    trace.decisions += counters.decisions
+    trace.submits += counters.submits
+    trace.risk_rejects += counters.risk_rejects
+    trace.decisions_log.extend(counters.decisions_log)
+    trace.rejects_log.extend(counters.rejects_log)
 
 
 def _multi_integrity_checks(result: BacktestResult, symbols: tuple[str, ...], *,
