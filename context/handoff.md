@@ -2702,3 +2702,13 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
   Testnet/LIVE 写路径明确 B 类未验证。
 - 全量 **2541 passed / 0 failed / 24 skipped**（detached 复核）。
 - 第三阶段（文档归档）另行处理；P0017.4 设计正文本次仍保持未跟踪。
+
+## 2026-10-12（P0017.4 文档归档治理）
+
+- 独立文档任务（不改生产代码/测试/风险语义；currentProposal 保持 null）：
+  - 正式设计正文 `proposals/P0017.4-deterministic-multi-symbol-portfolio-backtest.md` 纳入 Git；
+    状态行 Draft/待审阅 → 已关闭（离线验收完成）；文首补证据链（acceptance/closure artifacts + 三个实现提交）；
+    §6/§9 加收口状态说明，保留原批次/授权边界为历史记录。
+  - 明确最终能力边界：离线、event-driven、多标的、共享 maker/risk 参数（C-4）；真实多标的行情 E2E（451）、
+    Testnet/LIVE 写路径为 B 类未验证；C-1 reduce-only 术语澄清入档；C-3（3+ 标的）为 C 类后续。
+  - 互引文件与提交 hash（2f52f0e/70b4ff6/efbe642）均可解析；design↔artifacts/roadmap/current_state/status 一致。
