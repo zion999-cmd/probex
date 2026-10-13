@@ -93,6 +93,35 @@ class StartupScriptsTest(unittest.TestCase):
         self.assertIn("docs/RUNBOOK.md", readme)
         self.assertIn("unavailable_by_design", readme)
 
+    def test_lifecycle_subcommands_are_start_stop_status(self) -> None:
+        """P0001.12.x：生命周期只有简单三条（start / stop / status），旧名保留为别名。"""
+        text = MAIN.read_text(encoding="utf-8")
+        for sub in ("start", "stop", "status", "list"):
+            with self.subTest(subcommand=sub):
+                self.assertIn(f"{sub}) cmd_", text.replace("list|ps) cmd_list", "list) cmd_list"))
+        # 兼容旧名：up/demo 必须仍然可用（不要让既有文档/脚本失效）
+        self.assertIn("up) cmd_start", text)
+        self.assertIn("demo) cmd_start", text)
+
+    def test_stop_is_graceful_first_and_never_kills_blindly(self) -> None:
+        """stop 必须先优雅（SIGINT→TERM），只在最后才 KILL；且必须做进程身份校验。"""
+        text = MAIN.read_text(encoding="utf-8")
+        self.assertIn("is_probex_process", text, "stop 必须先校验进程身份")
+        self.assertIn("kill -INT", text, "stop 必须先发 SIGINT（优雅，可 finalize run）")
+        self.assertIn("kill -TERM", text, "超时后降级 SIGTERM")
+        self.assertIn("kill -KILL", text, "最后才允许 KILL（并如实标注非优雅）")
+        self.assertNotIn("pkill", text, "stop 不得用 pkill 按名字盲杀")
+        # 端口占用必须给出可执行的下一步，而不是让用户去手动 kill
+        self.assertIn("scripts/probex.sh stop --port", text)
+
+    def test_stop_and_list_only_inspect_local_processes(self) -> None:
+        """stop/list 只读本地进程表与端口，不碰仓库外状态、不联网。"""
+        text = MAIN.read_text(encoding="utf-8")
+        for tool in ("lsof", "ps -o command=", "pgrep -f"):
+            self.assertIn(tool, text)
+        self.assertNotIn("curl ", text.split("cmd_stop()")[1].split("cmd_list()")[0],
+                         "stop 不得发网络请求")
+
     def test_runbook_documents_the_verified_default_ports(self) -> None:
         runbook = RUNBOOK.read_text(encoding="utf-8")
         for port in ("8899", "8898", "8897"):

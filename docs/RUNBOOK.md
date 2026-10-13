@@ -10,10 +10,13 @@
 
 | 我想…… | 命令 |
 | --- | --- |
-| **最快看到产品**（浏览器 + 图表 + 本地交易闭环） | `scripts/probex.sh demo` → 打开 `http://127.0.0.1:8897/` |
-| **正式启动产品**（本地可写，PAPER） | `scripts/probex.sh up --mode paper` → 打开 `http://127.0.0.1:8899/` |
-| **只回放、不下单**（REPLAY 观察模式） | `scripts/probex.sh up --mode replay` → 打开 `http://127.0.0.1:8898/` |
-| 查看运行中的系统（只读） | `scripts/probex.sh status --port 8899` |
+| **启动产品**（浏览器 + 图表 + 本地交易闭环） | `scripts/probex.sh start` → 打开 `http://127.0.0.1:8899/` |
+| **后台启动**（终端可关掉） | `scripts/probex.sh start -d` → 同上，`stop` 收尾 |
+| **停止**（优雅，会 finalize run） | `scripts/probex.sh stop`（或 `stop --port N` / `stop --all`） |
+| **查看运行中的系统**（只读） | `scripts/probex.sh status` |
+| 只回放、不下单（REPLAY 观察模式） | `scripts/probex.sh start --mode replay` → `http://127.0.0.1:8898/` |
+| 列出正在运行的实例（PID/端口/时长） | `scripts/probex.sh list` |
+| 兼容旧名 | `up` = `start`；`demo` = `start --mode paper --port 8897`（UI 截图/验收脚本用的 8897） |
 | 停止 | 在该终端按 `Ctrl-C`（优雅关闭） |
 | 重新生成行情数据 | `python3 scripts/make_event_store.py ~/.probex/local-run/events.jsonl --hours 3 --force` |
 
@@ -26,9 +29,11 @@
 
 | 脚本 | 作用 | 默认端口 | 会写什么 |
 | --- | --- | --- | --- |
-| `scripts/probex.sh demo` | 一键：合成数据 → 本地 PAPER runtime → 等到出现一笔**模拟成交** → 打开浏览器 | 8897 | `~/.probex/local-run/demo.json` + `~/.probex/local-run/runs/` |
-| `scripts/probex.sh up` | 产品入口（REPLAY / PAPER；默认 event-store；可 `--market-source binance-public` 吃真实持续公网行情，只读无需凭据） | paper 8899 / replay 8898 | `~/.probex/local-run/events.jsonl`（若缺）+ runs |
+| `scripts/probex.sh start` | **产品入口**（默认 PAPER；`--mode replay` 只观察；默认 event-store，可 `--market-source binance-public` 吃真实公网行情，只读无需凭据）。`-d` = 后台 | paper 8899 / replay 8898 | `~/.probex/local-run/events.jsonl`（若缺）+ runs + `probex-<port>.pid` / `.log` |
+| `scripts/probex.sh stop` | **优雅停止**：先 SIGINT（assembly 会先 finalize run）→ 超时 SIGTERM → 最后才 SIGKILL。只停**已知 probex 入口**，端口被别的程序占用时**拒绝**执行 | `--port N`（默认 8899）/ `--all` | 删对应 pid 文件 |
 | `scripts/probex.sh status` | 只读查看运行中的 runtime（状态 / 事实 / blockers / runs） | 读 8899 | 不写 |
+| `scripts/probex.sh list` | 列出运行中的实例（PID / 端口 / 运行时长 / 入口命令） | 只读进程表 | 不写 |
+| `scripts/probex.sh demo` | 旧名（= `start --mode paper --port 8897`，UI 截图与 `tests/ui/*.mjs` 验收用的端口） | 8897 | 同上 |
 | `scripts/make_event_store.py` | 生成合成 event store（**试验数据**） | — | 你指定的路径 |
 
 > **REPLAY vs PAPER**：REPLAY 是观察模式（`quoting=false`，零写）；PAPER 会真实走
@@ -302,3 +307,25 @@ curl -s "http://127.0.0.1:8897/api/v1/market/view?symbol=BNBUSDT&components=dept
 | `market.view.rate_limit_retry_ms` | `2500` | 遇到 418/429 的单次重试等待 |
 | `market.view.exchange_info_ttl_s` | `300` | 交易对目录缓存 |
 
+## 10. 关闭与停止（不必再手动 kill）
+
+```bash
+scripts/probex.sh stop                 # 默认停 8899（前台 Ctrl-C 同样可以，二者等价）
+scripts/probex.sh stop --port 8897     # 停指定端口
+scripts/probex.sh stop --all           # 停全部正在运行的 probex 实例
+scripts/probex.sh list                 # 先看有谁在跑（PID / 端口 / 时长 / 命令）
+```
+
+语义与安全边界：
+
+- **优雅优先**：先发 `SIGINT`（等于 Ctrl-C 语义）⇒ `runtime.assembly` 会先 `stop()` 并 **finalize run**
+  （日志出现 `runtime_stop` → `shutdown`，状态 `STOPPED`），再退出；10s 未退出降级 `SIGTERM`，仍未退出才 `SIGKILL`
+  并**明确标注为非优雅**（该 run 可能未 finalize）。
+- **只杀自己的进程**：`stop` 先校验目标命令行是否匹配已知 probex 入口（`runtime.assembly` / `local_paper_demo.py` /
+  `cli.main live-paper`）；若该端口被**别的程序**占用，则**拒绝执行**并打印对方的真实命令（退出码 3），绝不误杀。
+- **幂等**：没在跑时 `stop` 打印“端口 N 上没有 probex 在运行”，退出码 0。
+- **端口占用不再是手忙脚乱**：`start` 检测到端口被占会直接给出两条可执行命令
+  （`stop --port N` 或 `start --port N+1`）。
+- `start -d` 会在 `~/.probex/local-run/` 写 `probex-<port>.pid` 与 `probex-<port>.log`；`stop` 会清理 pid 文件。
+
+前台运行的正常停止：终端里 **Ctrl-C**（与 `stop` 同一条优雅路径）。

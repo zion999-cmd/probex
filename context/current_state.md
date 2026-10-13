@@ -494,6 +494,14 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
   （证据在 `artifacts/gap-ledger/`）；全量 **2574 passed / 0 failed / 24 skipped**。
 - 边界未变：单标的 runtime；测试网/实盘未启用；WS 受本机代理限制（真实实时采集仍 NOT RUN）。
 
+
+### 启动工具简化为 start / stop / status（2026-10-13，人类会话授权）
+
+- 生命周期收敛为三条：`scripts/probex.sh start`（默认 PAPER/8899，`-d` 后台）、`stop`（优雅，先 finalize run）、
+  `status`；另有只读 `list` 与 `data`。旧名 `up`/`demo` 保留为别名（`demo` = `start --mode paper --port 8897`）。
+- `stop` 安全边界：只停已知 probex 入口；端口被别的程序占用时拒绝执行（rc=3）；SIGINT→TERM→KILL 逐级降级并如实标注。
+- 无需再手动 `kill`；端口冲突时 `start` 会直接给出可执行的下一步命令。
+
 ## 下一步
 
 - **无授权中的步骤**：P0001.9.3 – P0001.9.6 均已收口，`currentProposal = null`。

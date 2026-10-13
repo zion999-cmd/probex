@@ -2783,3 +2783,22 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
   全量 2574 passed / 0 failed / 24 skipped。
 - 未做：未新建 Proposal、未改 runtime 交易语义、未启用 Testnet/LIVE、未引入依赖。
 
+## 2026-10-13（启动工具简化为 start / stop / status，人类会话授权）
+
+- 人类指令：`scripts/probex.sh demo` 命名不清；统一成 `start` / `stop` / `status`，越简单越好。
+- 改动（`scripts/probex.sh`，仍是唯一入口，未引入新依赖）：
+  - `start [--mode paper|replay] [--port N] [-d|--background] [--hours/--symbol/--local-dir/--config-file/--market-source] [-- ...]`
+    默认 PAPER/8899，REPLAY/8898；`-d` 后台运行并在 `~/.probex/local-run/` 写 `probex-<port>.pid` / `.log`；
+    **端口被占用时直接给出可执行命令**（`stop --port N` 或 `start --port N+1`）。
+  - `stop [--port N | --all]`：先 `SIGINT`（assembly 会先 finalize run）→ 10s 后 `SIGTERM` → 最后才 `SIGKILL`
+    并如实标注非优雅；**只停已知 probex 入口**（`runtime.assembly` / `local_paper_demo.py` / `cli.main live-paper`），
+    端口被别的程序占用时**拒绝**（退出码 3，打印对方真实命令）；幂等（没在跑 → 明确文案 + rc=0）。
+  - `status`（默认 8899，不变）、`list`（PID/端口/时长/入口命令）、`data`（不变）。
+  - 兼容旧名：`up` = `start`；`demo` = `start --mode paper --port 8897`（UI 验收脚本用的端口）。
+- 修掉的两个脚本级坑：`set -e -o pipefail` 下空 `lsof | head` 让脚本静默退出（改为 `|| true`）；
+  macOS `lsof -p X -i` 是 OR 关系需加 `-a`（否则 list 会把打开的文件当端口）。
+- 守卫测试新增 3 条（生命周期子命令、优雅优先且禁止 pkill 盲杀、stop 不做网络请求）；
+  RUNBOOK 增加 §10「关闭与停止」。
+- 实测：`start -d` → READY + 停止提示；`list`/`status` 正常；`stop` 1s 内优雅停（日志 `runtime_stop`→`shutdown`→`STOPPED`）；
+  幂等 stop rc=0；对占用 8901 的**非 probex** 服务拒绝停止且该服务仍 200；全量 2577 passed / 0 failed / 24 skipped。
+

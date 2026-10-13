@@ -5,7 +5,7 @@
  * 执行实际 Action Gateway 调用，并断言**真实反馈**（含失败/空/未知状态）。
  *
  * 用法：
- *   1) 先启动产品，例如： scripts/probex.sh demo        # http://127.0.0.1:8897
+ *   1) 先启动产品，例如： scripts/probex.sh start --port 8897   # 或 scripts/probex.sh demo
  *   2) node tests/ui/ui_entry_acceptance.mjs http://127.0.0.1:8897 /tmp/ui_entry_acceptance.json
  *
  * 退出码：0 = 全部检查通过；1 = 有失败（明细写入 JSON）。

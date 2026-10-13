@@ -9,7 +9,7 @@
  *   7) 不支持的交易对有明确错误反馈   8) （回归由 unittest 负责）
  *
  * 用法：node tests/ui/market_symbol_selector.mjs <base> <out.json>
- *   先启动产品：scripts/probex.sh demo     # http://127.0.0.1:8897
+ *   先启动产品：scripts/probex.sh start --port 8897   # 或 scripts/probex.sh demo（同名端口）
  * 退出码：0 = 全部通过；1 = 有失败（明细在 JSON 里）。
  */
 import { spawn } from "node:child_process";
