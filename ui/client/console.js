@@ -1,6 +1,6 @@
 /** Console 外壳：5 个 Surface 导航 + 全局 Header + 全局 Blocker Strip（P0001.12.1）。 */
 import { ENDPOINTS, fetchJson, fetchSnapshot } from "/ui/client/api.js";
-import { escapeHtml, fact } from "/ui/client/render.js";
+import { escapeHtml } from "/ui/client/render.js";
 import { SURFACES, surfaceForHash } from "/ui/app/surfaces.js";
 import { resolveRoute } from "/ui/app/navigation.js";
 import { mountAssistant } from "/ui/assistant/drawer.js";
@@ -49,35 +49,50 @@ function renderNav(surface) {
   ).join("");
 }
 
+/** P0018 review fix：banner 节点首次由 index.html 建立，这里只 patch 数据节点。 */
+function patchBannerNode(id, value, { cls, prefix = "", title } = {}) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const text = `${prefix}${value ?? "UNKNOWN"}`;
+  if (el.textContent !== text) el.textContent = text;
+  if (cls !== undefined) el.className = cls;
+  if (title !== undefined) el.title = title;
+}
+
+function bannerFact(factValue) {
+  // Fact → 纯文本（不注入 HTML）；UNKNOWN 显式 + unknown 类，reason 进 title。
+  if (factValue && typeof factValue === "object" && "known" in factValue) {
+    return {
+      text: factValue.known ? String(factValue.value ?? "null") : "UNKNOWN",
+      cls: factValue.known ? "bfield known" : "bfield unknown",
+      title: factValue.known ? String(factValue.value ?? "") : String(factValue.reason || "unknown"),
+    };
+  }
+  return { text: String(factValue ?? "UNKNOWN"), cls: "bfield" };
+}
+
 async function renderHeaderAndBlockers() {
-  const banner = document.getElementById("banner");
   const strip = document.getElementById("global-status");
   try {
     const snapshot = await fetchSnapshot();
     const id = snapshot.runtime;
     const blockers = snapshot.blockers || [];
     const blocking = blockers.filter((b) => b.severity === "BLOCKING");
-    const modeClass = `mode-${String(id.mode || "").toLowerCase()}`;
     const health = snapshot.market.healthy.known
       ? (snapshot.market.healthy.value ? "HEALTHY" : "UNHEALTHY") : "UNKNOWN";
     // P0001.12.1 不变式 1：Mode 必须永远明显（PAPER/TESTNET/LIVE 视觉区分）。
-    banner.innerHTML = [
-      `<span class="tag ${modeClass}">${escapeHtml(id.mode)}</span>`,
-      escapeHtml(id.environment), escapeHtml(id.venue),
-      `${escapeHtml(id.symbol)} <span class="muted" title="traded symbol 由启动参数 --symbol 决定，运行中不可切换">(fixed @startup)</span>`,
-      `runtime=${escapeHtml(id.runtime_id)}`,
-      `health=${health}`,
-      `data_ts=${fact(id.data_timestamp)}`,
-      // 不可切换项必须**显示原因**，不得伪装成可操作控件。
-      `<details class="why"><summary title="为什么这些字段不能直接切换">why read-only?</summary>` +
-      `<div class="why-body">` +
-      `mode / environment / venue / symbol 由**启动参数**决定（\`--mode\`、\`--symbol\`），` +
-      `运行中更改会改变会计与风控 Owner 的归属，故不提供运行中切换；` +
-      `要换标的：重新启动进程（单标的运行），多标的集合见 ` +
-      `<a href="#/market/universe">Market → universe</a>（只读：集合由启动配置 \`market.universe.symbols\` 决定）。` +
-      `可执行的运行中动作以 Action Manifest 的 availability 为准（见 ` +
-      `<a href="#/system/capabilities">System → capabilities</a>）。</div></details>`,
-    ].join(" · ");
+    // P0018 review fix：只 patch 既有节点（identity 保持；why <details> 不在轮询中触碰）。
+    patchBannerNode("banner-mode", id.mode, { cls: `tag mode-${String(id.mode || "").toLowerCase()}` });
+    patchBannerNode("banner-env", id.environment);
+    patchBannerNode("banner-venue", id.venue);
+    patchBannerNode("banner-symbol", id.symbol);
+    patchBannerNode("banner-runtime", id.runtime_id, { prefix: "runtime=" });
+    patchBannerNode("banner-health", health, {
+      cls: `bfield ${health === "HEALTHY" ? "known" : health === "UNKNOWN" ? "unknown" : "bad"}`,
+      prefix: "health=",
+    });
+    const ts = bannerFact(id.data_timestamp);
+    patchBannerNode("banner-data-ts", ts.text, { cls: ts.cls, title: ts.title, prefix: "data_ts=" });
     // P0018：全局条带只显示聚合摘要；原始 blocker/event 行属于 Activity/Evidence。
     const summary = summarizeBlockers(blockers);
     strip.textContent = summary.text;
@@ -87,10 +102,10 @@ async function renderHeaderAndBlockers() {
       : Object.entries(summary.groups)
           .map(([owner, count]) => `${owner}: ${count}`).join("\n") +
         "\n\nopen Activity → Evidence for reasons and next steps";
-    document.getElementById("strip").dataset.blocking =
-      String(blockers.filter((b) => b.severity === "BLOCKING").length);
+    document.getElementById("strip").dataset.blocking = String(blocking.length);
   } catch (error) {
-    banner.innerHTML = `<span class="bad">snapshot unavailable: ${escapeHtml(String(error))}</span>`;
+    // snapshot 不可用：只 patch health 状态节点，不替换 banner（why details / 其余节点保持）。
+    patchBannerNode("banner-health", "UNAVAILABLE", { cls: "bfield bad", prefix: "health=" });
     strip.textContent = "● UNKNOWN · blockers unavailable";
     strip.dataset.state = "UNKNOWN";
   }

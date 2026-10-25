@@ -2896,3 +2896,11 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - 验收：15/15 CDP；全量 2698 passed / 0 failed / 24 skipped；4 张 1728×960 截图 + p0018_result.json。
 - 边界遵守：未重构 Market/Activity/Performance/System；未改任何交易/风险/会计/数据集/execution；无框架/无前后端分离/无设计系统；UNKNOWN 语义保留。
 - 复测：python3 tests/ui/local_paper_demo.py 8892 /tmp/p0018demo/demo.json 1；node tests/ui/p0018_shell_stability.mjs http://127.0.0.1:8892 artifacts/p0018
+
+## 2026-10-25 P0018 review fix 1：Global Header targeted patch（review 分支，未合 master）
+
+- 审核要求：banner 稳定 DOM + 节点 patch。index.html 内建 #banner-mode/env/venue/symbol/runtime/health/data-ts 与 #banner-why；
+  console.js 用 patchBannerNode() 只改 textContent/class/title，删除全部 banner.innerHTML；错误只 patch banner-health=UNAVAILABLE；
+  why details 移出轮询（open 态保持）；renderNav 未动。
+- CDP 23/23（新增 8 条：展开 why 等 5s（≥2 个 2s polling 周期），details 仍 open，banner/why identity 不变，health/mode/data_ts 已 patch，无整体替换）；
+  静态守卫 12 条。acceptance 报告与截图/result.json 已更新。分支 review/p0018-ui-shell-phase1。

@@ -124,3 +124,8 @@ section.wide { grid-column: 1 / -1; }
 .diag-links { padding-top: 6px; }
 .diag-links a { color: #7aa2f7; }
 .focus-flash { outline: 2px solid #d8a657; outline-offset: 2px; border-radius: 6px; }
+
+/* P0018 review fix：banner 数据节点稳定，节点间分隔符由 CSS 提供（不随 patch 重建） */
+#banner { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0; }
+#banner .bfield::before { content: " · "; color: #4b5563; }
+#banner-why summary { cursor: help; }

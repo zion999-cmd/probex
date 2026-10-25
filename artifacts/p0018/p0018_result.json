@@ -9,7 +9,7 @@
     {
       "name": "SC1 zero whole-workspace replacement",
       "pass": true,
-      "detail": "replaced=0 removed=[\"SPAN\",\"surface-link\",\"action-link\",\"action-link\",\"monitor-reconcile\",\"action-link\",\"action-link\",\"monitor-reconcile\"]"
+      "detail": "replaced=0 removed=[\"SPAN\",\"surface-link\",\"action-link\",\"action-link\",\"monitor-reconcile\",\"action-link\",\"action-link\",\"monitor-reconcile\",\"action-link\",\"action-link\",\"monitor-reconcile\"]"
     },
     {
       "name": "SC2 workspace root identity stable",
@@ -42,9 +42,49 @@
       "detail": "\"为什么现在没有下单？(draft)\""
     },
     {
+      "name": "Header banner root identity stable across 2+ polling cycles",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Header why-details node identity stable",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Header why-details still open after 2+ polling cycles",
+      "pass": true,
+      "detail": "open=true"
+    },
+    {
+      "name": "Header banner root keeps its child details",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Header poll patched health with a status value (not replaced shell)",
+      "pass": true,
+      "detail": "health=HEALTHY"
+    },
+    {
+      "name": "Header poll patched mode node",
+      "pass": true,
+      "detail": "PAPER"
+    },
+    {
+      "name": "Header data_ts node is populated",
+      "pass": true,
+      "detail": "data_ts=1700003595000"
+    },
+    {
+      "name": "Header error never overwrites whole banner",
+      "pass": true,
+      "detail": ""
+    },
+    {
       "name": "SC5 strip is aggregated summary (no raw rows)",
       "pass": true,
-      "detail": "{\"text\":\"● BLOCKING · 2 blockers · RISK 1 · VENUE 1\",\"state\":\"BLOCKING\",\"rawRows\":0,\"href\":\"#/activity/evidence?focus=blockers\"}"
+      "detail": "{\"text\":\"● BLOCKING · 1 blocker · VENUE 1\",\"state\":\"BLOCKING\",\"rawRows\":0,\"href\":\"#/activity/evidence?focus=blockers\"}"
     },
     {
       "name": "SC6 blocker summary navigates to evidence",
@@ -64,7 +104,7 @@
     {
       "name": "SC8 UNKNOWN semantics preserved (no empty placeholder values)",
       "pass": true,
-      "detail": "[\"PAPER\",\"BTCUSDT\",\"RUNNING · binance · local\",\"BLOCKING\",\"10000.052\",\"0.01428\",\"0.04998\",\"-0.0002\",\"12.06852\",\"HEALTHY · tradeable\",\"both\",\"DEGRADED\",\"unavailable\",\"● BLOCKING · 2 blockers · RISK 1 · VENUE 1\"]"
+      "detail": "[\"PAPER\",\"BTCUSDT\",\"RUNNING · binance · local\",\"BLOCKING\",\"10000.037\",\"0.00038\",\"0.04912\",\"-0.0002\",\"24.11376\",\"HEALTHY · tradeable\",\"both\",\"DEGRADED\",\"unavailable\",\"● BLOCKING · 1 blocker · VENUE 1\"]"
     },
     {
       "name": "Monitor actions reduced (<=1 runtime button)",

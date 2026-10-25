@@ -19,7 +19,28 @@
 <header>
   <h1>Probex</h1>
   <nav id="nav"></nav>
-  <span id="banner">connecting…</span>
+  <!-- P0018 review fix：banner 为稳定 DOM，polling 只 patch 数据节点，绝不整体替换 -->
+  <span id="banner">
+    <span id="banner-mode" class="tag">connecting…</span>
+    <span id="banner-env" class="bfield">…</span>
+    <span id="banner-venue" class="bfield">…</span>
+    <span id="banner-symbol" class="bfield">…</span>
+    <span class="muted" title="traded symbol 由启动参数 --symbol 决定，运行中不可切换">(fixed @startup)</span>
+    <span id="banner-runtime" class="bfield">runtime=…</span>
+    <span id="banner-health" class="bfield">health=…</span>
+    <span id="banner-data-ts" class="bfield">data_ts=…</span>
+    <details class="why bfield" id="banner-why">
+      <summary title="为什么这些字段不能切换">why read-only?</summary>
+      <div class="why-body">
+        mode / environment / venue / symbol 由<strong>启动参数</strong>决定（<code>--mode</code>、<code>--symbol</code>），
+        运行中更改会改变会计与风控 Owner 的归属，故不提供运行中切换；
+        要换标的：重新启动进程（单标的运行），多标的集合见
+        <a href="#/market/universe">Market → universe</a>（只读：集合由启动配置 <code>market.universe.symbols</code> 决定）。
+        可执行的运行中动作以 Action Manifest 的 availability 为准（见
+        <a href="#/system/capabilities">System → capabilities</a>）。
+      </div>
+    </details>
+  </span>
 </header>
 <div id="strip"><a id="global-status" href="#/activity/evidence?focus=blockers">connecting…</a></div>
 <main id="view"></main>

@@ -136,6 +136,31 @@ try {
     return { collapsed: drawer.classList.contains("collapsed"), value: input.value };
   })()`);
 
+  // ---- review fix：展开 why read-only?，记录 banner/details/各数据节点 identity
+  await ev(`(() => {
+    window.__p0018.bannerIdentity = document.getElementById("banner");
+    window.__p0018.whyIdentity = document.getElementById("banner-why");
+    const details = document.getElementById("banner-why");
+    details.open = true;
+    return details.open;
+  })()`);
+  const bannerBaseline = { opened: true };
+  // 等待 ≥2 个 header polling 周期（POLL_INTERVAL_MS=2000，不含初始那次）
+  await sleep(5000);
+  const bannerAfter = await ev(`(() => {
+    return {
+      sameBanner: document.getElementById("banner") === window.__p0018.bannerIdentity,
+      sameWhy: document.getElementById("banner-why") === window.__p0018.whyIdentity,
+      whyOpen: document.getElementById("banner-why").open,
+      bannerHasDetails: !!document.querySelector("#banner #banner-why"),
+      healthText: document.getElementById("banner-health").textContent,
+      modeText: document.getElementById("banner-mode").textContent,
+      dataTsText: document.getElementById("banner-data-ts").textContent,
+      // polling 后不应出现把错误文本整体塞进 banner 的痕迹
+      bannerText: document.getElementById("banner").textContent,
+    };
+  })()`);
+
   // ---- SC1：10s 动态窗口（surface refresh = 5s，覆盖 ≥1 个完整周期）
   await sleep(10_000);
 
@@ -169,6 +194,20 @@ try {
   record("SC4 assistant stays open across refresh", after.drawerOpen === true);
   record("SC4 unsent assistant input retained", after.draftKept.includes("(draft)"),
     JSON.stringify(after.draftKept));
+
+  // ---- review fix：banner targeted patch（why details 跨 ≥2 个 polling 周期保持 open）
+  record("Header banner root identity stable across 2+ polling cycles", bannerAfter.sameBanner === true);
+  record("Header why-details node identity stable", bannerAfter.sameWhy === true);
+  record("Header why-details still open after 2+ polling cycles", bannerAfter.whyOpen === true,
+    `open=${bannerAfter.whyOpen}`);
+  record("Header banner root keeps its child details", bannerAfter.bannerHasDetails === true);
+  record("Header poll patched health with a status value (not replaced shell)",
+    /HEALTHY|UNHEALTHY|UNKNOWN|UNAVAILABLE/.test(bannerAfter.healthText), bannerAfter.healthText);
+  record("Header poll patched mode node", /PAPER|TESTNET|LIVE/.test(bannerAfter.modeText),
+    bannerAfter.modeText);
+  record("Header data_ts node is populated", /data_ts=/.test(bannerAfter.dataTsText),
+    bannerAfter.dataTsText);
+  record("Header error never overwrites whole banner", !/snapshot unavailable/i.test(bannerAfter.bannerText));
 
   // ---- SC5：全局条带聚合，无原始 blocker 行
   const strip = await ev(`(() => {

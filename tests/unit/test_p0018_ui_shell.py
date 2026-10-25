@@ -48,6 +48,31 @@ class GlobalShellContractTest(unittest.TestCase):
         self.assertIn("severity === \"BLOCKING\"", console)
 
 
+class HeaderTargetedPatchContractTest(unittest.TestCase):
+    def test_banner_dom_is_built_once_in_shell(self) -> None:
+        index = read("app/index.html")
+        for node_id in ("banner", "banner-mode", "banner-env", "banner-venue",
+                         "banner-symbol", "banner-runtime", "banner-health",
+                         "banner-data-ts", "banner-why"):
+            self.assertIn(f'id="{node_id}"', index, f"stable banner node missing: {node_id}")
+        # why read-only 说明保留在 shell（静态 DOM，不由轮询重建）
+        self.assertIn("why read-only?", index)
+
+    def test_polling_patches_nodes_never_replaces_banner(self) -> None:
+        console = read("client/console.js")
+        self.assertNotIn("banner.innerHTML", console)
+        self.assertIn("patchBannerNode", console)
+        for node_id in ("banner-mode", "banner-env", "banner-venue", "banner-symbol",
+                         "banner-runtime", "banner-health", "banner-data-ts"):
+            self.assertIn(f'"{node_id}"', console)
+        # 错误也只能 patch 状态节点
+        self.assertIn('patchBannerNode("banner-health", "UNAVAILABLE"', console)
+
+    def test_render_nav_not_refactored_into_banner(self) -> None:
+        console = read("client/console.js")
+        self.assertIn("function renderNav", console)
+
+
 class AssistantDrawerContractTest(unittest.TestCase):
     def test_drawer_defaults_collapsed_and_persists_open_state(self) -> None:
         drawer = read("assistant/drawer.js")

@@ -47,3 +47,21 @@ python3 -m unittest tests.unit.test_p0018_ui_shell   # 随 discover 常驻
 ## 未包含（Phase 1 边界）
 
 Market/Activity/Performance/System 重构；因果链可视化；Performance 研究比较闭环；均留待后续 Proposal。
+
+---
+
+## Review fix 1 — Global Header targeted patch（2026-10-25）
+
+审核要求：`#banner` 首次建立稳定 DOM，2s polling 只 patch 数据节点，禁止 `banner.innerHTML`，
+why read-only `<details>` identity 保持；snapshot 不可用不得整体替换 banner。
+
+变更：
+- `ui/app/index.html`：banner 静态结构（mode/env/venue/symbol/runtime/health/data_ts 七个数据节点 +
+  固定 `(fixed @startup)` 注释 + `#banner-why` details 移入 shell）；分隔符由 CSS `::before` 提供。
+- `ui/client/console.js`：`patchBannerNode()` 只改 textContent/className/title；错误只 patch `banner-health`；
+  轮询不再触碰 `#banner-why`（open 状态天然保留）；`renderNav()` 未改。
+- 静态守卫新增 3 条（`tests/unit/test_p0018_ui_shell.py`，共 12）；
+  CDP 新增 8 条 header 断言（共 **23/23**）：展开 why → 等待 5s（≥2 个 polling 周期）→
+  details 仍 open、`#banner`/`#banner-why` identity 不变、health/mode/data_ts 已被 patch、
+  无 "snapshot unavailable" 整体替换痕迹。
+- 证据已更新：`p0018_result.json` 与 4 张截图重新生成。
