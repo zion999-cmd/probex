@@ -2802,3 +2802,87 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
 - 实测：`start -d` → READY + 停止提示；`list`/`status` 正常；`stop` 1s 内优雅停（日志 `runtime_stop`→`shutdown`→`STOPPED`）；
   幂等 stop rc=0；对占用 8901 的**非 probex** 服务拒绝停止且该服务仍 200；全量 2577 passed / 0 failed / 24 skipped。
 
+
+## 2026-10-24：人类审查三项收口（dataset 完整性证明 / collector 公开契约 / projected gross 语义；人类会话授权，无新 Proposal）
+
+- 人类指令：审查 P0017 后要求修 2 个 P1、补 1 个 P2 语义证据（D-055）；`currentProposal` 保持 `null`。
+
+**本次新增**
+- `tests/unit/test_market_dataset_integrity.py`（20 条）：篡改已定稿分片内容/追加行/manifest 五字段（sha256/bytes/rows/first_ts/last_ts）、
+  外 venue/symbol/kind、外 schema、非单调行、malformed manifest 全部 fail-closed；续写时同样核验并禁止校验失败后追加任何字节。
+- `tests/unit/test_collector_batch_contract.py`（8 条）：契约级 fake collector 验证 sink 安装/不重复 connect/取批次/错误隔离/
+  旧 sink 链式调用/close；静态守卫钉死 `live_collector_source.py` 不再出现 `_on_batch`/`_connected`，且 collector 必须有公开契约。
+- `tests/unit/test_portfolio_gross_semantics.py`（3 条）：catalog 中英文案必须标注 projected/upper bound/非当前真实敞口；
+  静态扫描 product/api/reports/ui 全部 gross 文案必须带限定词（gross_profit 会计术语排除），禁止"current real gross"类误述。
+
+**本次修改**
+- `storage/market_dataset.py`：新增 `_scan_partition`（逐行校验 UTF-8/JSON/记录形状/路径键/schema 受信/exchange_ts 非递减，
+  同时得出 rows/bytes/sha256/首尾 ts）、`_load_manifest`（manifest 严格结构校验）、`_verify_attestation`（逐字段比对）；
+  `Reader.read()` 对已定稿分片强制重新核验（无 manifest 的未定稿分片仍磁盘扫描、不伪造 hash）；
+  `Writer` 续写前逐行校验 + 对照已有 manifest 条目（stale attestation/未证明尾部 fail-closed）。
+- `connectors/binance/market_data/multi_collector.py`：公开 `connected` 属性与 `set_batch_sink(sink) -> old_sink`。
+- `runtime/live_collector_source.py`：删除 monkey-patch，只用公开契约；collector 类型经 TYPE_CHECKING 引入（保持隔离测试要求的 import root）。
+- `tests/integration/test_multi_collector.py`：测试内 sink 安装改用 `set_batch_sink`。
+- `product/reason_catalog.py`：PORTFOLIO_NOTIONAL_LIMIT 中英文案改为「projected gross 名义上界 / worst-case pending / 非当前真实组合敞口」。
+
+**本次删除**：无。
+
+**Acceptance**：三项新测试文件 31 条全 PASS；相关回归（dataset/collector/platform/live-paper/隔离）38 PASS；
+全量 **2607 passed / 0 failed / 24 skipped**（+33 含本轮；detached 未跑）。
+
+**风险 / 已知问题**
+- 严格化 manifest 校验只影响"已定稿"分片；正在追加的当日分片按磁盘扫描读取（既有行为，hash 留空）。
+- 旧数据兼容：历史数据集均由同一 Writer 以新行格式写出（schema_version 字段一直在），无迁移问题。
+- 更大范围的"设计中功能"审计已由只读审计完成（prediction outcome/evaluation、durable prediction archive、
+  backtest funding/slippage/taker、bar 引擎、equity 序列持久化、dataset→backtest 适配器、3+ 标的/全套 per-symbol 参数等），
+  其中多项含**未定义业务语义**（bucket 数值分档、funding 建模口径、taker 是否允许、bar 成交假设、开平配对规则），
+  已在完成报告中提交人类裁决，未自行实施。
+
+**阻塞**：无（本批三项无阻塞）。
+
+**下一步**：等待人类对后续批次的选择与业务语义裁决；未授权前不实施。
+
+## 2026-10-24：研究闭环四批次（人类多选授权，无新 Proposal，D-056）
+
+**批次1 持久化与回测数据源**
+- 新增 `storage/prediction_archive.py`（JsonlPredictionArchive，内容寻址 sha256 envelope，严格加载；11 单测 + 跨进程 RECORDED 集成测试）；
+  assembly 配置 `prediction.archive_path` 注入（local_trial/systemone 两条构造路径）。
+- run facts：registry 新增 `account` kind；assembly 按 bucket 持久化 equity 采样；`_note_execution_overlay` 持久化 canonical Fill（kind=fill）；
+  `/api/v1/portfolio/timeline?run=<id>` 历史 run 读 durable（live/durable 双源）；UI Performance 选 run 时带 `?run=`。
+- `backtest/dataset_source.py`：文件 event-store 或 P0017.1 数据集目录统一入口（discover/校验/确定性合并排序）；
+  MarketRecord 增可选 `ordinal`（跨 kind 采集序号）；identity 支持目录（分片内容 hash）；生产 universe sink 落 book/trade/mark canonical 事件。
+  测试：6 单测 + 4 集成（单/多标的文件↔目录等价、execute_backtest 端到端、run_id 双跑一致）。
+
+**批次2 funding（sim/backtest/PAPER 公开行情）**
+- 新增 `portfolio/funding_model.py::FundingSettlementTracker`（10 单测）；MarkPricePayload/Observation + codec + parse(r/T) 携带资金费率/结算时间；
+  单/多 driver 与 multi_symbol_core 接线（`funding_trackers`）；assembly PAPER `_on_mark` 接线（无 r/T 零行为变化）；
+  配置 `backtest.funding_enabled`；报告 FUNDING UNSUPPORTED→MODELED 动态声明、per_symbol funding。集成测试 4 条。
+
+**批次3 预测复盘**
+- 新增 `prediction/evaluation.py::PredictionEvaluator`（方向 hit/符号 Brier；AS 二进制复用阈值；五分类需显式 bps 边界；10 单测）；
+  driver/multi 收集 mid 观测与预测样本，BacktestResult.prediction_evaluation 进 summary/manifest；
+  StepCounters 增 prediction_samples/mid_observations（实时 PAPER 路径同样采集，留待 UI/CLI 消费）。配置：
+  `prediction.adverse_selection_threshold_bps` / `evaluation.bucket_edge_bps` / `evaluation.bucket_strong_bps`（均可选）。
+
+**批次4 固定 bps 滑点/taker**
+- 新增 `execution/simulation/slippage.py::FixedBpsSlippage`；FeeSchedule 可选 taker_fee_rate；
+  SimulatedVenue `_submit_taker`（立即 IOC 吃单、TAKER_CROSS、默认拒绝、盘口未知拒绝；post-only 不变）；
+  Liquidity.TAKER / FillReason.TAKER_CROSS / 两个新拒绝码；SimulatedFill.aggregate_trade_id 改 `int|None`；
+  回测配置 `simulation.taker_slippage_bps`/`backtest.taker_fee_rate`（None=UNSUPPORTED 声明）；10 单测 + 报告标签测试。
+
+**测试**：本轮新增约 60 条；全量结果见完成时报告（基线 2574，审查三项后 2607）。
+**边界**：无新依赖、无真实交易/网络、maker-only 策略核心不变（无策略产生 taker 单）、bucket 数值边界未代人类裁决。
+**Git**：Not committed。
+
+## 2026-10-25：bar OHLCV 双模式回测引擎（人类裁决：双模式，无新 Proposal，归入 D-056）
+
+- `market/events/payloads.py::BarPayload`（open_ts/close_ts/interval/open/high/low/close/volume + 严格不变量）；
+  EventType.BAR 注册载荷映射；event store codec 编解码；market-dataset 增 `bar` kind；dataset_source 支持。
+- `execution/simulation/bar_adapter.py::BarExecutionAdapter`（实现 ExecutionAdapter）：
+  - limit_conservative：下一根 bar 评估，low≤买价/high≥卖价，成交于挂单价/maker 费；taker 拒绝；当根提交不回填（无前视）；
+  - close_market：下一根 open 经 FixedBpsSlippage 成交/taker 费；post-only 拒绝；缺滑点/taker 费率 fail-closed。
+- `backtest/bar_driver.py`：BarBacktestConfig（bar_mode 进 canonical/run identity）+ run_bar_backtest；
+  仅接受 BAR 事件（混合 ⇒ INVALID_INPUT），收盘 mark=close，复用 ExecutionEngine/RiskGate/AccountingCore；
+  runner `backtest.bar_mode` 路由；报告 execution_granularity 标注 bar(<mode>)。
+- 测试：11 单测（bar_adapter）+ 6 集成（两种模式/混合拒绝/runner 路由）。
+- 全量结果见完成时报告（上一稳定基线 2672）。

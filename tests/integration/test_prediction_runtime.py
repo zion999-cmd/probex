@@ -241,5 +241,31 @@ class PredictionRuntimeAcceptanceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(recorded_result.record.mode, PredictionMode.LIVE_REQUERY)
 
 
+    async def test_recorded_mode_reads_durable_archive_written_by_other_runtime(self) -> None:
+        import pathlib
+        import tempfile
+
+        from storage.prediction_archive import JsonlPredictionArchive
+
+        path = pathlib.Path(tempfile.mkdtemp(prefix="pred-arch-e2e-")) / "predictions.jsonl"
+        state = warm_market_states(1)[0]
+
+        live, _, provider = self._runtime(archive=JsonlPredictionArchive(path))
+        result = await live.submit(state)
+        self.assertTrue(result.accepted)
+        self.assertEqual(len(provider.requests), 1)
+
+        # 模拟新进程：只给同一文件路径；RECORDED 命中历史证据且不触达 provider。
+        fresh_provider = FakeProvider()
+        recorded, _, _ = self._runtime(
+            provider=fresh_provider, mode=PredictionMode.RECORDED,
+            archive=JsonlPredictionArchive(path))
+        replayed = await recorded.submit(state)
+        self.assertIs(replayed.outcome, PredictionOutcome.ACCEPTED)
+        self.assertEqual(len(fresh_provider.requests), 0)
+        assert result.record is not None and replayed.record is not None
+        self.assertEqual(replayed.record.request_id, result.record.request_id)
+
+
 if __name__ == "__main__":
     unittest.main()

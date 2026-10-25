@@ -62,7 +62,9 @@ export async function render(rest = []) {
           ((comparison.comparison || {}).metrics || []).map((m) => [escapeHtml(m.name), fact(m.left),
             fact(m.right), fact(m.delta)]));
   }
-  const timeline = await fetchOrUnavailable(ENDPOINTS.portfolioTimeline);
+  const timeline = selected
+    ? await fetchOrUnavailable(`${ENDPOINTS.portfolioTimeline}?run=${encodeURIComponent(selected)}`)
+    : await fetchOrUnavailable(ENDPOINTS.portfolioTimeline);
   const timelineBlock = timeline.unavailable
     ? rows([["equity timeline", `<span class="unknown">UNKNOWN (${escapeHtml(timeline.unavailable)})</span>`]])
     : table(["ts", "equity", "balance", "position", "exposure (total)"],

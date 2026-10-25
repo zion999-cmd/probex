@@ -115,6 +115,24 @@ class EventCodecRoundTripTest(unittest.TestCase):
         self.assertEqual([level.price for level in decoded.payload.bids], [0.0024, 0.00239])
         self.assertEqual(repr(decoded.payload.bids[0].size), repr(10.0))
 
+    def test_mark_payload_funding_fields_round_trip(self) -> None:
+        from tests.support import mark_price_event
+
+        event = mark_price_event(price=60_000.0, funding_rate=0.0001,
+                                    next_funding_time=1_700_028_800_000)
+        decoded = decode_event(encode_event(event))
+        self.assertEqual(decoded.payload, event.payload)
+        self.assertAlmostEqual(decoded.payload.funding_rate, 0.0001)
+        self.assertEqual(decoded.payload.next_funding_time, 1_700_028_800_000)
+
+    def test_mark_payload_without_funding_fields_round_trips_as_none(self) -> None:
+        from tests.support import mark_price_event
+
+        event = mark_price_event(price=60_000.0)
+        decoded = decode_event(encode_event(event))
+        self.assertIsNone(decoded.payload.funding_rate)
+        self.assertIsNone(decoded.payload.next_funding_time)
+
     def test_encoding_is_canonical_and_stable(self) -> None:
         record = _record(_snapshot_event(), ordinal=3, source="x")
         self.assertEqual(dumps_record(record), dumps_record(record))

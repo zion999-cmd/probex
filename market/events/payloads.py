@@ -9,8 +9,12 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from market.events.errors import InvalidPayloadError
+
+if TYPE_CHECKING:
+    from market.events.types import Milliseconds
 
 
 def _require_finite_number(value: object, *, field: str) -> float:
@@ -177,13 +181,75 @@ class MarkPricePayload:
 
     `MARK` 是**独立的价格语义**：它由 venue 正式发布（Binance `markPriceUpdate`），
     **不是** last trade。本阶段不提供 `INDEX` 来源（只有 vocabulaory 允许表达）。
+
+    可选资金费字段（venue 随 mark price 发布）：
+    - `funding_rate`：当前周期资金费率（有符号；正 ⇒ 多付空）；
+    - `next_funding_time`：下一次结算的交易所毫秒时间戳。
+    两者同时存在才构成一次可结算的资金费事实；缺失 ⇒ None（不猜、不补）。
     """
 
     price: float
+    funding_rate: float | None = None
+    next_funding_time: int | None = None
 
     def __post_init__(self) -> None:
         price = _require_finite_number(self.price, field="MarkPricePayload.price")
         if price <= 0.0:
             raise InvalidPayloadError(f"MarkPricePayload.price must be positive, got {price!r}")
         object.__setattr__(self, "price", price)
+        if self.funding_rate is not None:
+            rate = _require_finite_number(self.funding_rate,
+                                             field="MarkPricePayload.funding_rate")
+            if not -1.0 < rate < 1.0:
+                raise InvalidPayloadError(
+                    f"MarkPricePayload.funding_rate must be within (-1, 1), got {rate!r}")
+            object.__setattr__(self, "funding_rate", rate)
+        if self.next_funding_time is not None:
+            if isinstance(self.next_funding_time, bool) or \
+                    not isinstance(self.next_funding_time, int) or self.next_funding_time <= 0:
+                raise InvalidPayloadError(
+                    "MarkPricePayload.next_funding_time must be a positive int epoch-ms")
 
+
+
+@dataclass(frozen=True, slots=True)
+class BarPayload:
+    """OHLCV bar（K 线回测引擎的输入；与 LOB event-driven 引擎并存）。
+
+    时间：`open_ts`（开盘，含）与 `close_ts`（收盘，含）；同 bar 内 high/low 的先后不可知，
+    因此限价成交采用**保守**假设（见 `execution.simulation.bar_adapter`）。
+    """
+
+    open_ts: Milliseconds
+    close_ts: Milliseconds
+    interval_ms: Milliseconds
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+    def __post_init__(self) -> None:
+        for field_name in ("open_ts", "close_ts", "interval_ms"):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise InvalidPayloadError(f"BarPayload.{field_name} must be a non-negative int")
+        if self.close_ts < self.open_ts:
+            raise InvalidPayloadError("BarPayload.close_ts must be >= open_ts")
+        if self.interval_ms <= 0:
+            raise InvalidPayloadError("BarPayload.interval_ms must be positive")
+        prices = ("open", "high", "low", "close")
+        for field_name in prices:
+            value = _require_finite_number(getattr(self, field_name), field=f"BarPayload.{field_name}")
+            if value <= 0.0:
+                raise InvalidPayloadError(f"BarPayload.{field_name} must be positive, got {value!r}")
+            object.__setattr__(self, field_name, float(value))
+        low, high = self.low, self.high
+        if low > high:
+            raise InvalidPayloadError(f"BarPayload low {low} > high {high}")
+        if not (low <= self.open <= high and low <= self.close <= high):
+            raise InvalidPayloadError("BarPayload open/close must lie within [low, high]")
+        volume = self.volume
+        if isinstance(volume, bool) or not isinstance(volume, (int, float)) or not float(volume) >= 0.0:
+            raise InvalidPayloadError("BarPayload.volume must be a non-negative number")
+        object.__setattr__(self, "volume", float(volume))

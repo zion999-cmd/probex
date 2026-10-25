@@ -427,10 +427,13 @@ _ENTRIES: tuple[tuple[str, ReasonExplanation], ...] = (
            explanation_en="unquantifiable order exposure exists, so new exposure is rejected",
            next_step_en="converge LOST / unresolved orders"),
     _entry("PORTFOLIO_NOTIONAL_LIMIT", title="组合名义限额", severity="BLOCKING", domain="risk",
-           explanation="候选单会使组合 projected gross notional（持仓 + 在途）超过 max_portfolio_gross_notional。",
+           explanation=("候选单会使组合 projected gross 名义上界（持仓名义 + 在途订单最坏情况名义；"
+                        "保守上界，非当前真实组合敞口）超过 max_portfolio_gross_notional。"),
            next_step="降低数量、先平减现有敞口，或调整组合限额（数值由人类配置）。",
            title_en="Portfolio gross-notional limit",
-           explanation_en="the order would push projected portfolio gross notional over max_portfolio_gross_notional",
+           explanation_en=("the order would push the projected portfolio gross upper bound "
+                            "(positions + worst-case pending orders; a conservative upper bound, "
+                            "not the current real portfolio exposure) over max_portfolio_gross_notional"),
            next_step_en="reduce size, reduce existing exposure, or adjust the portfolio limit (human-configured)"),
     _entry("PORTFOLIO_EXPOSURE_UNKNOWN", title="组合敞口不可量化", severity="BLOCKING", domain="risk",
            explanation="组合中存在不可量化订单或缺有效标记价格，无法建立 gross 安全上界 ⇒ fail-closed。",

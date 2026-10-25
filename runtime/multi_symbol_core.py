@@ -45,6 +45,9 @@ class StepCounters:
     events: int = 0
     decisions_log: list[dict] = field(default_factory=list)
     rejects_log: list[dict] = field(default_factory=list)
+    #: 预测复盘采样（D-055 批次3）：(PredictionRecord, 决策时 mid) 与 (ts, mid) 观测序列
+    prediction_samples: list = field(default_factory=list)
+    mid_observations: list = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,15 +130,29 @@ def decide_and_submit(*, fn, engine: ExecutionEngine, tracker: OrderTracker, sym
                  "reason": code.value if code is not None else None})
 
 
+def _settle_funding(engine: ExecutionEngine, trackers, symbol: str, now: int) -> None:
+    tracker = None if trackers is None else trackers.get(symbol)
+    if tracker is None:
+        return
+    qty = float(engine.accounting.position(symbol).qty)
+    payment = tracker.settle_due(
+        now_ms=now, position_qty=qty,
+        mark_price=engine.accounting.mark_price(symbol))
+    if payment is not None:
+        engine.accounting.record_funding(payment)
+
+
 def process_market_event(*, event: MarketEvent, now: int, engine: ExecutionEngine,
                           features: dict[str, FeatureEngine],
                           decision_fn_for: Callable[[str], object],
                           config: StepConfig, counters: StepCounters,
-                          prediction_runtime=None) -> MarketState | None:
+                          prediction_runtime=None,
+                          funding_trackers: dict | None = None) -> MarketState | None:
     """处理**一个**市场事件的完整步进；返回该事件更新出的 MarketState（mark 事件为 None）。
 
     离线/实时共用。事件必须属于 `features` 中已配置的 symbol，否则 KeyError（调用方负责
     在边界把未知 symbol 转成明确失败，绝不静默丢弃）。
+    `funding_trackers` 给出时（回测显式 opt-in），在 mark 分支登记费率并在越过结算点时结算。
     """
     symbol = event.symbol
     feature = features[symbol]  # 未知 symbol：显式抛出，由边界处理
@@ -153,14 +170,26 @@ def process_market_event(*, event: MarketEvent, now: int, engine: ExecutionEngin
                 timestamp=int(getattr(event.payload, "receive_ts", now)))
         except (AttributeError, TypeError, ValueError):
             pass
+        tracker = None if funding_trackers is None else funding_trackers.get(symbol)
+        if tracker is not None:
+            tracker.update(
+                funding_rate=getattr(event.payload, "funding_rate", None),
+                next_funding_time=getattr(event.payload, "next_funding_time", None))
+            _settle_funding(engine, funding_trackers, symbol, now)
     else:
+        _settle_funding(engine, funding_trackers, symbol, now)
         state = feature.on_market_event(event)
+        mid = getattr(getattr(state, "price", None), "mid", None)
+        if mid is not None:
+            counters.mid_observations.append((now, float(mid)))
         # 路由到该 symbol 独占的模拟 venue（经 adapter）；其他 venue 不可见
         engine.manager.adapter.on_market_event(event)
         if etype.value in config.decide_on and state is not None and state.quality.tradeable:
             fn = decision_fn_for(symbol)
             if fn is not None:
                 prediction = invoke_provider_record(prediction_runtime, state, now)
+                if prediction is not None and mid is not None:
+                    counters.prediction_samples.append((prediction, float(mid)))
                 decide_and_submit(fn=fn, engine=engine, tracker=engine.manager.tracker,
                                     symbol=symbol, state=state, now=now,
                                     counters=counters, prediction=prediction)

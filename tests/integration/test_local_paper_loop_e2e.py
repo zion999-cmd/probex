@@ -178,5 +178,83 @@ class LocalPaperLoopE2ETest(TempDirTestCase):
             runtime.stop()
 
 
+    def test_equity_and_fills_are_persisted_as_run_facts_and_replayable_history(self) -> None:
+        runtime = self._runtime()
+        runtime.start()
+        server = runtime.create_server()
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            deadline = __import__("time").time() + 60
+            while __import__("time").time() < deadline:
+                if runtime._execution.accounting.fills.fills:  # noqa: SLF001
+                    break
+                __import__("time").sleep(0.25)
+            ledger_fills = runtime._execution.accounting.fills.fills  # noqa: SLF001
+            self.assertTrue(ledger_fills)
+            run_id = runtime._current_run_id()  # noqa: SLF001
+            self.assertTrue(run_id)
+            registry = runtime._registry  # noqa: SLF001
+
+            # 1) equity 采样点持久化（真实值，非 0 伪装）
+            account_points, unavailable = registry.load_run_facts(run_id, "account")
+            self.assertIsNone(unavailable)
+            self.assertTrue(account_points, "equity samples must be persisted for the run")
+            self.assertTrue(any(p.get("equity") is not None for p in account_points))
+            self.assertTrue(all(p.get("ts") is not None for p in account_points))
+
+            # 2) 每笔成交作为 fill 事实持久化（去重后条数 == 账本成交数）
+            facts, facts_unavailable = registry.load_run_facts(run_id, "facts")
+            self.assertIsNone(facts_unavailable)
+            fill_facts = [f for f in facts if f.get("kind") == "fill"]
+            self.assertEqual(len(fill_facts), len(ledger_fills))
+            for fact, canonical in zip(fill_facts, ledger_fills):
+                self.assertEqual(fact["trade_id"], canonical.trade_id)
+                self.assertAlmostEqual(float(fact["price"]), canonical.price)
+                self.assertAlmostEqual(float(fact["quantity"]), canonical.quantity)
+                self.assertEqual(fact["side"], canonical.side.value)
+                self.assertEqual(fact["symbol"], "BTCUSDT")
+
+            # 3) 当前 run 走 live 缓冲（source=live）
+            with OPENER.open(
+                    f"{runtime.server_url()}/api/v1/portfolio/timeline?run={run_id}",
+                    timeout=10) as response:
+                current = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(current["source"], "live")
+            first_run_id = run_id
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+            runtime.stop()
+        # stop 后再数：最终落盘条数（运行中还会继续追加）
+        final_points, final_unavailable = registry.load_run_facts(first_run_id, "account")
+        self.assertIsNone(final_unavailable)
+        first_points = len(final_points)
+
+        # 4) 第二个 runtime（新 run 身份、同一 registry）读取已结束 run ⇒ durable 重建，
+        #    不依赖第一个进程的内存缓冲
+        second = self._runtime()
+        second.start()
+        server2 = second.create_server()
+        thread2 = threading.Thread(target=server2.serve_forever, daemon=True)
+        thread2.start()
+        try:
+            with OPENER.open(
+                    f"{second.server_url()}/api/v1/portfolio/timeline?run={first_run_id}",
+                    timeout=10) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(payload["source"], "durable")
+            self.assertEqual(payload["run_id"], first_run_id)
+            self.assertTrue(payload["timeline"]["points"])
+            self.assertGreaterEqual(len(payload["timeline"]["points"]), 1)
+            self.assertEqual(payload["counts"]["samples"], first_points)
+        finally:
+            server2.shutdown()
+            server2.server_close()
+            thread2.join(timeout=5)
+            second.stop()
+
+
 if __name__ == "__main__":
     unittest.main()

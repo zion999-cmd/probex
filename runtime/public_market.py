@@ -37,7 +37,7 @@ class PublicMarketPump:
         connector: object | None = None,
         pump_timeout_s: float = 0.5,
         max_states: int = 256,
-        on_mark: Callable[[float, int], None] | None = None,
+        on_mark: Callable[[object], None] | None = None,
         on_state: Callable[[object], None] | None = None,
     ) -> None:
         self._adapter = adapter
@@ -115,8 +115,7 @@ class PublicMarketPump:
                 mark = self._adapter.latest_mark()
                 if mark is not None:
                     try:
-                        self._on_mark(float(mark.price), int(getattr(mark, "receive_ts",
-                                                                     getattr(mark, "exchange_ts"))))
+                        self._on_mark(mark)
                     except Exception:  # noqa: BLE001
                         pass
 

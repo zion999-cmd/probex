@@ -107,6 +107,22 @@ class MultiSymbolMarketCollector:
     def symbols(self) -> tuple[str, ...]:
         return self._config.symbols
 
+    @property
+    def connected(self) -> bool:
+        """公开契约：runtime 是否已建立（connect 成功后置 True，stop 后回 False）。"""
+        return self._connected
+
+    def set_batch_sink(
+        self, sink: Callable[[str, object], None] | None
+    ) -> Callable[[str, object], None] | None:
+        """公开契约：安装/替换每轮批次回调（`pump_once` 每标的后调用）。
+
+        返回此前的 sink（可为 None），允许外层链式包装而不触碰私有字段。
+        """
+        previous = self._on_batch
+        self._on_batch = sink
+        return previous
+
     def connect(self) -> None:
         """构造每个标的的 runtime、读取交易规则并建立 WS（失败如实抛出）。"""
         reconnect = ReconnectPolicy(max_attempts=5, base_backoff_ms=500, max_backoff_ms=5_000)

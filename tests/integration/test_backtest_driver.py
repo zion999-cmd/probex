@@ -201,6 +201,38 @@ class BacktestDriverTest(unittest.TestCase):
             hit = imported & set(forbidden)
             self.assertFalse(hit, f"{py.name} imports live/write path: {hit}")
 
+    def test_prediction_evaluation_is_attached_when_predictions_observed(self) -> None:
+        result = self._run()
+        evaluation = result.prediction_evaluation
+        self.assertIsNotNone(evaluation, "local-trial predictions over a 1h fixture must be evaluable")
+        assert evaluation is not None
+        self.assertGreater(evaluation["predictions_seen"], 0)
+        horizons = {h["horizon_ms"]: h for h in evaluation["horizons"]}
+        # fixture 步进 5s、长度 1h ⇒ 5/15/30/60s 全部可对齐
+        self.assertTrue(horizons)
+        for horizon in (5_000, 15_000, 30_000, 60_000):
+            self.assertIn(horizon, horizons)
+            self.assertGreater(horizons[horizon]["samples"], 0)
+            self.assertIsNotNone(horizons[horizon]["direction_hit_rate"])
+
+    def test_no_prediction_means_no_evaluation(self) -> None:
+        result = self._run(prediction=False)
+        self.assertIsNone(result.prediction_evaluation)
+
+    def test_taker_cost_model_labels_reflect_config(self) -> None:
+        from backtest.report import build_manifest, FUNDING_MODEL
+        cfg = _config(taker_slippage_bps=10.0, taker_fee_rate=0.0005)
+        ident = dataset_identity([self.store])
+        result = run_backtest(
+            self.store, cfg, run_id="bt-taker", dataset_sha256=ident["sha256"],
+            decision_fn=(lambda **kw: None), prediction_runtime=None)
+        manifest = build_manifest(result, dataset_files=["x"], input_files=[])
+        costs = manifest["cost_models"]
+        self.assertTrue(costs["slippage"].startswith("MODELED"))
+        self.assertIn("0.0005", costs["taker_fee"])
+        # funding 未启用仍如实声明
+        self.assertEqual(costs["funding"], FUNDING_MODEL)
+
 
 def backtest_pkg() -> str:
     import backtest

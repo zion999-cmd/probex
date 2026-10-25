@@ -24,6 +24,24 @@ class MarkPriceTest(unittest.TestCase):
         self.assertEqual(observation.exchange_ts, 1_700_000_000_123)
         self.assertEqual((observation.receive_ts, observation.process_ts), (10, 11))
 
+    def test_funding_rate_and_next_time_parsed(self) -> None:
+        observation = parse_mark_price(
+            _raw(r="0.00010000", T=1_700_028_800_000), receive_ts=10, process_ts=11)
+        self.assertAlmostEqual(observation.funding_rate, 0.0001)
+        self.assertEqual(observation.next_funding_time, 1_700_028_800_000)
+
+    def test_missing_funding_fields_are_none_not_zero(self) -> None:
+        observation = parse_mark_price(_raw(), receive_ts=10, process_ts=11)
+        self.assertIsNone(observation.funding_rate)
+        self.assertIsNone(observation.next_funding_time)
+
+    def test_invalid_funding_rate_does_not_kill_mark_fact(self) -> None:
+        observation = parse_mark_price(_raw(r="nope", T="bad"),
+                                          receive_ts=10, process_ts=11)
+        self.assertEqual(observation.price, 100.75)
+        self.assertIsNone(observation.funding_rate)
+        self.assertIsNone(observation.next_funding_time)
+
     def test_missing_or_invalid_price_is_rejected(self) -> None:
         for overrides in ({"p": None}, {"p": "abc"}, {"p": "0"}, {"p": "-1"}, {}):
             raw = _raw(**overrides)

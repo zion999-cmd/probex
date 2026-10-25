@@ -36,6 +36,7 @@ from execution.events import (
 from execution.simulation.fees import FeeSchedule
 from execution.simulation.latency import LatencyModel
 from execution.simulation.queue import UNKNOWN_QUEUE, QueueEstimate, clear_queue, consume_queue, queue_from_visible
+from execution.simulation.slippage import FixedBpsSlippage
 from execution.simulation.types import (
     FillInferenceState,
     FillReason,
@@ -106,6 +107,7 @@ class SimulatedVenue:
         venue: Venue = Venue.BINANCE,
         book: MarketBook | None = None,
         exchange_id_prefix: str = DEFAULT_EXCHANGE_ID_PREFIX,
+        slippage: FixedBpsSlippage | None = None,
     ) -> None:
         if not isinstance(symbol, str) or not symbol:
             raise SimulationError("symbol must be a non-empty string")
@@ -117,12 +119,15 @@ class SimulatedVenue:
             raise SimulationError("venue must be a Venue")
         if not isinstance(exchange_id_prefix, str) or not exchange_id_prefix:
             raise SimulationError("exchange_id_prefix must be a non-empty string")
+        if slippage is not None and not isinstance(slippage, FixedBpsSlippage):
+            raise SimulationError("slippage must be a FixedBpsSlippage or None")
         self._symbol = symbol
         self._venue = venue
         self._latency = latency
         self._fee_schedule = fee_schedule
         self._book = book if book is not None else MarketBook(venue, symbol)
         self._exchange_id_prefix = exchange_id_prefix
+        self._slippage = slippage
         self._orders: dict[str, _RestingOrder] = {}
         self._outbox: list[ExecutionEvent] = []
         self._fills: list[ExternalFill] = []
@@ -182,7 +187,9 @@ class SimulatedVenue:
                     order.created_at,
                 ),
             )
-        if order.post_only and self._crosses_book(order):
+        if not order.post_only:
+            return self._submit_taker(order)
+        if self._crosses_book(order):
             return (
                 OrderRejected(
                     order.client_order_id, SimulatedRejectReason.REJECT_POST_ONLY.value, order.created_at
@@ -204,6 +211,87 @@ class SimulatedVenue:
         if self._clock is not None:
             # 若当前模拟时钟已达生效时刻，立刻建立队列估计（只用**已发生**的盘口，不看未来）
             self._advance_clock(self._clock)
+        return (OrderAccepted(order.client_order_id, exchange_order_id, order.created_at),)
+
+    def _submit_taker(self, order: Order) -> tuple[ExecutionEvent, ...]:
+        """非 post-only 订单：立即吃单（IOC 语义）。
+
+        价格 = 盘口对手价经显式固定 bps 滑点调整；taker 费率。
+        venue 默认 maker-only（未配置滑点/taker 费率 ⇒ 拒绝）；盘口未知 ⇒ 拒绝。
+        成交事件入 outbox（下一次 poll 投递，OrderManager 先注册订单再收成交）。
+        """
+        if self._slippage is None or self._fee_schedule.taker_fee_rate is None:
+            return (OrderRejected(
+                order.client_order_id,
+                SimulatedRejectReason.TAKER_NOT_SUPPORTED.value, order.created_at),)
+        reference_level = self._book.best_ask() if order.side is Side.BUY else self._book.best_bid()
+        if reference_level is None:
+            return (OrderRejected(
+                order.client_order_id,
+                SimulatedRejectReason.TAKER_NO_LIQUIDITY.value, order.created_at),)
+        fill_price = self._slippage.exec_price(
+            side=order.side, reference_price=reference_level.price)
+        self._next_exchange_id += 1
+        exchange_order_id = f"{self._exchange_id_prefix}-{self._next_exchange_id:06d}"
+        now = self._clock if self._clock is not None else order.created_at
+        resting = _RestingOrder(
+            client_order_id=order.client_order_id,
+            exchange_order_id=exchange_order_id,
+            symbol=order.symbol,
+            side=order.side,
+            price=fill_price,
+            quantity=order.quantity,
+            status=OrderStatus.FILLED,
+            submitted_at=order.created_at,
+            entry_ts=now)
+        resting.entered = True
+        resting.filled_quantity = order.quantity
+        resting.avg_fill_price = fill_price
+        self._orders[order.client_order_id] = resting
+        fee = self._fee_schedule.taker_fee(price=fill_price, quantity=order.quantity)
+        self._next_exchange_id += 1
+        execution_id = f"{self._exchange_id_prefix}-taker-exec-{self._next_exchange_id:06d}"
+        trade_id = f"{self._exchange_id_prefix}-taker-trade-{self._next_exchange_id:06d}"
+        record = SimulatedFill(
+            client_order_id=order.client_order_id,
+            exchange_order_id=exchange_order_id,
+            symbol=order.symbol,
+            side=order.side,
+            price=fill_price,
+            quantity=order.quantity,
+            fee=fee,
+            fee_asset=self._fee_schedule.fee_asset,
+            liquidity=Liquidity.TAKER,
+            fill_reason=FillReason.TAKER_CROSS,
+            queue_state=QueueState.KNOWN,
+            event_ordinal=self._event_ordinal,
+            exchange_ts=now,
+            execution_id=execution_id,
+            trade_id=trade_id,
+            aggregate_trade_id=None)
+        resting.fills.append(record)
+        self._fills.append(
+            ExternalFill(
+                client_order_id=order.client_order_id,
+                execution_id=execution_id,
+                trade_id=trade_id,
+                price=fill_price,
+                quantity=order.quantity,
+                timestamp=now,
+                fee=fee,
+                fee_asset=self._fee_schedule.fee_asset,
+            )
+        )
+        self._outbox.append(FillReceived(
+            client_order_id=order.client_order_id,
+            execution_id=execution_id,
+            trade_id=trade_id,
+            price=fill_price,
+            quantity=order.quantity,
+            timestamp=now,
+            fee=fee,
+            fee_asset=self._fee_schedule.fee_asset,
+            is_maker=False))
         return (OrderAccepted(order.client_order_id, exchange_order_id, order.created_at),)
 
     def cancel(self, order: Order) -> tuple[ExecutionEvent, ...]:

@@ -173,7 +173,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     backtest = subparsers.add_parser(
         "backtest", help="offline deterministic backtest (local event store; no exchange access)")
-    backtest.add_argument("--dataset", required=True, help="path to event-store JSONL")
+    backtest.add_argument("--dataset", required=True,
+                           help="event-store JSONL file, or a P0017.1 market-dataset directory; "
+                                "set backtest.bar_mode=limit_conservative|close_market in config "
+                                "for the bar OHLCV engine")
     backtest.add_argument("--config", required=True, help="backtest config JSON")
     backtest.add_argument("--out", required=True, help="output directory for manifest/summary/report")
     backtest.add_argument("--no-prediction", action="store_true",

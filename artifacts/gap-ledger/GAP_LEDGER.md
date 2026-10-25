@@ -170,3 +170,14 @@
   公开视图能力边界显式化、run-review 标的去硬编码、重试等待收敛）。18 个页面/详情入口实测无错误页；
   真实浏览器验收 9/9 + 22/22 + 4/4；全量 2574 passed。
 
+- 2026-10-24 人类审查三项收口（D-055，无新 Proposal）：① MarketDataset manifest 从"元数据"升级为**完整性证明**
+  （Reader 重新核验 sha256/bytes/rows/首尾 ts + 逐行键/schema/单调性；Writer 续写前同样核验+对照 manifest，
+  stale attestation/未证明尾部 fail-closed 且不追加）；② `MultiSymbolMarketCollector` 公开
+  `set_batch_sink()`/`connected`，`CollectorBatchSource` 去除 `_on_batch`/`_connected` 私有耦合（静态守卫）；
+  ③ projected gross 产品语义固定为"保守上界、非当前真实敞口"（catalog 中英文案 + 产品层静态语义守卫）。
+  新增 31 条测试；全量 **2607 passed / 0 failed / 24 skipped**。
+- 2026-10-24 研究闭环四批次（D-056）：durable PredictionArchive + 跨进程 RECORDED；run facts account/fill + 历史 equity 曲线 API；
+  回测消费共享数据集目录；funding 模型（opt-in）；预测复盘 evaluation；固定 bps 滑点/taker（opt-in）。bar 引擎待成交假设裁决。
+- 2026-10-25 bar OHLCV 双模式回测引擎（人类裁决双模式，归 D-056）：BarPayload+codec+dataset `bar` kind；
+  BarExecutionAdapter（limit_conservative 下一根触碰挂单价/maker；close_market 下一根 open+固定 bps 滑点/taker，须显式配置）；
+  backtest/bar_driver（仅 BAR 事件，bar_mode 进 run identity）；runner/CLI 配置 `backtest.bar_mode`。

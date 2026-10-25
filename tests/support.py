@@ -144,6 +144,8 @@ def mark_price_event(
     exchange_ts: int = BASE_TS,
     receive_ts: int | None = None,
     process_ts: int | None = None,
+    funding_rate: float | None = None,
+    next_funding_time: int | None = None,
 ) -> MarketEvent:
     """构造一条正式 MARK_PRICE 事件（P0001.15 §11–§12：`MARK` 是独立价格语义，不是 last trade）。
 
@@ -157,7 +159,8 @@ def mark_price_event(
         receive_ts=exchange_ts if receive_ts is None else receive_ts,
         process_ts=exchange_ts if process_ts is None else process_ts,
         sequence=None,
-        payload=MarkPricePayload(price=price),
+        payload=MarkPricePayload(price=price, funding_rate=funding_rate,
+                                    next_funding_time=next_funding_time),
     )
 
 

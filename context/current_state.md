@@ -502,6 +502,23 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 - `stop` 安全边界：只停已知 probex 入口；端口被别的程序占用时拒绝执行（rc=3）；SIGINT→TERM→KILL 逐级降级并如实标注。
 - 无需再手动 `kill`；端口冲突时 `start` 会直接给出可执行的下一步命令。
 
+### 研究闭环四批次（2026-10-24，人类多选授权；无新 Proposal，D-056）
+
+- durable PredictionArchive（`prediction.archive_path`，跨进程 RECORDED）；run facts 增 account/fill（历史 Performance 曲线 durable）；
+  回测直接消费 P0017.1 数据集目录（canonical 事件 + ordinal；单/多 driver）。
+- funding 资金费模型（8h venue 语义，markPrice r/T 驱动，`backtest.funding_enabled`，sim/backtest/PAPER）。
+- 预测复盘 evaluation（方向命中率/符号 Brier/AS 二进制；五分类需显式 bps 边界，未代决）。
+- 固定 bps 滑点 + taker 立即吃单（显式 opt-in；默认 maker-only；无策略产生 taker 单）。
+- bar OHLCV 回测引擎（双模式：limit_conservative 下一根 high/low 触碰挂单价；close_market 下一根 open+固定 bps 滑点；`backtest.bar_mode`）。
+
+### 审查三项收口（2026-10-24，人类会话授权；无新 Proposal，D-055）
+
+- **MarketDataset 完整性证明**：Reader 对已定稿分片重新核验 sha256/bytes/rows/first_ts/last_ts +
+  逐行核验 venue/symbol/kind/schema/时间单调性；Writer 续写前同样核验并对照 manifest（stale attestation fail-closed）。
+- **collector 公开批次契约**：`set_batch_sink()`/`connected` 正式公开；`CollectorBatchSource` 不再 monkey-patch 私有字段（静态守卫）。
+- **projected gross 命名语义**：catalog 与产品层守卫固定「projected/committed upper bound，非当前真实组合敞口」。
+- 全量 **2607 passed / 0 failed / 24 skipped**；`currentProposal = null`。
+
 ## 下一步
 
 - **无授权中的步骤**：P0001.9.3 – P0001.9.6 均已收口，`currentProposal = null`。

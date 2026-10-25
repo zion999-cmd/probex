@@ -26,8 +26,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from market.events.errors import MarketEventError
-from market.events.payloads import (AggressorSide, BookDeltaPayload, BookSnapshotPayload,
-                                    MarkPricePayload, PriceLevel, TradePayload)
+from market.events.payloads import (AggressorSide, BarPayload, BookDeltaPayload,
+                                    BookSnapshotPayload, MarkPricePayload, PriceLevel,
+                                    TradePayload)
 from market.events.types import EventType, MarketEvent, Milliseconds, Venue
 
 from storage.events.errors import (
@@ -219,8 +220,21 @@ def _encode_payload(
             "quantity": payload.quantity,
             "aggressor": payload.aggressor.value,
         }
+    if isinstance(payload, BarPayload):
+        return {
+            "kind": "bar",
+            "open_ts": payload.open_ts, "close_ts": payload.close_ts,
+            "interval_ms": payload.interval_ms,
+            "open": payload.open, "high": payload.high, "low": payload.low,
+            "close": payload.close, "volume": payload.volume,
+        }
     if isinstance(payload, MarkPricePayload):
-        return {"kind": "mark_price", "price": payload.price}
+        encoded = {"kind": "mark_price", "price": payload.price}
+        if payload.funding_rate is not None:
+            encoded["funding_rate"] = payload.funding_rate
+        if payload.next_funding_time is not None:
+            encoded["next_funding_time"] = payload.next_funding_time
+        return encoded
     raise EventStoreFormatError(f"unsupported payload type: {type(payload).__name__}")
 
 
@@ -230,17 +244,35 @@ def _encode_levels(levels: Sequence[PriceLevel]) -> list[list[float]]:
 
 def _decode_payload(
     raw: object, *, path: str
-) -> BookSnapshotPayload | BookDeltaPayload | TradePayload | MarkPricePayload:
+) -> BookSnapshotPayload | BookDeltaPayload | TradePayload | MarkPricePayload | BarPayload:
     message = _require_object(raw, path=path)
     kind = _require_str(_require_field(message, "kind", path=path), path=f"{path}.kind")
     if kind == EventType.TRADE.value:
         return _decode_trade_payload(message, path=path)
     if kind == "mark_price":
-        return MarkPricePayload(_require_number(_require_field(message, "price", path=path), path=f"{path}.price"))
+        rate_raw = message.get("funding_rate")
+        next_raw = message.get("next_funding_time")
+        return MarkPricePayload(
+            _require_number(_require_field(message, "price", path=path), path=f"{path}.price"),
+            funding_rate=(None if rate_raw is None
+                            else _require_number(rate_raw, path=f"{path}.funding_rate")),
+            next_funding_time=(None if next_raw is None
+                                 else _require_int(next_raw, path=f"{path}.next_funding_time")))
     if kind == EventType.BOOK_SNAPSHOT.value:
         return _decode_snapshot_payload(message, path=path)
     if kind == EventType.BOOK_DELTA.value:
         return _decode_delta_payload(message, path=path)
+    if kind == "bar":
+        return BarPayload(
+            open_ts=_require_int(_require_field(message, "open_ts", path=path), path=f"{path}.open_ts"),
+            close_ts=_require_int(_require_field(message, "close_ts", path=path), path=f"{path}.close_ts"),
+            interval_ms=_require_int(_require_field(message, "interval_ms", path=path),
+                                        path=f"{path}.interval_ms"),
+            open=_require_number(_require_field(message, "open", path=path), path=f"{path}.open"),
+            high=_require_number(_require_field(message, "high", path=path), path=f"{path}.high"),
+            low=_require_number(_require_field(message, "low", path=path), path=f"{path}.low"),
+            close=_require_number(_require_field(message, "close", path=path), path=f"{path}.close"),
+            volume=_require_number(_require_field(message, "volume", path=path), path=f"{path}.volume"))
     raise EventStoreFormatError(f"{path}.kind: unsupported payload kind {kind!r}")
 
 

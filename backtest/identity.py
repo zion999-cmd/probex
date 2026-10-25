@@ -49,6 +49,44 @@ def dataset_identity(files: list[Path]) -> dict[str, object]:
     return {"files": normalized, "sha256": digest}
 
 
+def directory_dataset_identity(root: Path, *, symbols: tuple[str, ...] | None = None
+                                ) -> dict[str, object]:
+    """共享市场数据集目录的内容身份（P0017.1 布局）。
+
+    规范化所有 `data.jsonl` 分片的**相对路径 + 字节数 + 内容 sha256**（排序后组合 hash）；
+    不依赖根路径 / mtime。`symbols` 给出时只计入这些标的（与实际回测输入一致）。
+    """
+    files: list[Path] = []
+    for data_file in sorted(root.rglob("data.jsonl")):
+        if symbols is not None:
+            parts = data_file.relative_to(root).parts
+            # 布局：<venue>/<symbol>/<kind>/<day>/data.jsonl
+            if len(parts) < 5 or parts[1] not in symbols:
+                continue
+        files.append(data_file)
+    if not files:
+        raise BacktestError(BacktestStatus.INVALID_INPUT,
+                              f"no dataset partitions found under {root}",
+                              location=str(root))
+    normalized = sorted(
+        ({"path": str(p.relative_to(root)), "bytes": len(p.read_bytes()),
+          "sha256": sha256_bytes(p.read_bytes())} for p in files),
+        key=lambda item: str(item["path"]))
+    digest = sha256_text(canonical_json({"files": normalized}))
+    return {"files": normalized, "sha256": digest}
+
+
+def identity_for_input(path: Path, *, symbols: tuple[str, ...] | None = None
+                        ) -> dict[str, object]:
+    """回测输入身份：文件 ⇒ 文件身份；目录 ⇒ 数据集分片身份。"""
+    if path.is_file():
+        return dataset_identity([path])
+    if path.is_dir():
+        return directory_dataset_identity(path, symbols=symbols)
+    raise BacktestError(BacktestStatus.INVALID_INPUT, f"dataset not found: {path}",
+                          location=str(path))
+
+
 def run_identity(*, code_version: str, dataset_sha256: str, config: dict[str, object],
                  seed: int | None, schema: str = BACKTEST_SCHEMA,
                  execution_model: str = EXECUTION_MODEL) -> tuple[str, str]:
@@ -70,7 +108,9 @@ __all__ = [
     "EXECUTION_MODEL",
     "canonical_json",
     "dataset_identity",
+    "directory_dataset_identity",
     "file_identity",
+    "identity_for_input",
     "run_identity",
     "sha256_bytes",
     "sha256_text",

@@ -20,6 +20,7 @@ PREDICTION_DIR = PROJECT_ROOT / "prediction"
 STDLIB_ROOTS = {
     "__future__",
     "asyncio",
+    "bisect",
     "collections",
     "dataclasses",
     "enum",

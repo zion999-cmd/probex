@@ -331,6 +331,7 @@ class ProductRuntime:
         self._market_source = self.profile.market_source
         # P0001.17：run 级事实持久化（market 时间线 + decision/order/fill）；按 bucket 节流
         self._persisted_market_ts: int | None = None
+        self._persisted_account_ts: int | None = None
         if self.profile.feed is not None:
             # P0001.17 §3：本地 Replay/PAPER 的时间必须与**市场数据时间**一致（确定性、可复现），
             # 否则引擎订单时间（wall clock）与市场/模拟成交时间（event time）不在同一时间轴，
@@ -1207,10 +1208,31 @@ class ProductRuntime:
                 history_capacity=history_capacity, values=values)
         history = BoundedMarketHistory(capacity=history_capacity, run_id=self._session.run_id)
 
-        def _on_mark(price: float, received_at: int) -> None:
+        if self._accounting is not None and getattr(self, "_paper_funding_tracker", None) is None:
+            from portfolio.funding_model import FundingSettlementTracker
+            asset = getattr(self._accounting, "settlement_asset", "USDT") or "USDT"
+            self._paper_funding_tracker = FundingSettlementTracker(
+                asset=str(asset), symbol=self.profile.symbol)
+        funding_tracker = getattr(self, "_paper_funding_tracker", None)
+
+        def _on_mark(mark: object) -> None:
             accounting = self._accounting
-            if accounting is not None:
-                accounting.update_mark_price(self.profile.symbol, price, timestamp=received_at)
+            if accounting is None:
+                return
+            price = float(mark.price)
+            received_at = int(getattr(mark, "receive_ts", getattr(mark, "exchange_ts")))
+            accounting.update_mark_price(self.profile.symbol, price, timestamp=received_at)
+            # funding：venue 公布费率/结算点时按真实发布结算（无 r/T ⇒ 零行为变化）
+            if funding_tracker is not None:
+                funding_tracker.update(
+                    funding_rate=getattr(mark, "funding_rate", None),
+                    next_funding_time=getattr(mark, "next_funding_time", None))
+                payment = funding_tracker.settle_due(
+                    now_ms=received_at,
+                    position_qty=float(accounting.position(self.profile.symbol).qty),
+                    mark_price=price)
+                if payment is not None:
+                    accounting.record_funding(payment)
 
         def _on_state(state: object) -> None:
             # 统一推进 data timestamp（取自 MarketState 的 exchange 时间；真实事实驱动）
@@ -1314,14 +1336,13 @@ class ProductRuntime:
             if len(selected) > max_symbols:
                 raise AssemblyError(
                     f"subscription {len(selected)} exceeds market.subscription.max_symbols {max_symbols}")
-        # 每标的独立写器（book/trade；mark 后续批次）
+        # 每标的独立写器（book/trade/mark；payload = canonical 事件字典，数据集可直接回测）
         writers: dict[tuple[str, str], object] = {}
         if selected:
             for symbol in selected:
-                writers[(symbol, "trade")] = MarketDatasetWriter(
-                    dataset_root, venue="binance", symbol=symbol, kind="trade")
-                writers[(symbol, "book")] = MarketDatasetWriter(
-                    dataset_root, venue="binance", symbol=symbol, kind="book")
+                for kind in ("trade", "book", "mark"):
+                    writers[(symbol, kind)] = MarketDatasetWriter(
+                        dataset_root, venue="binance", symbol=symbol, kind=kind)
         collector = None
         if selected:
             collector = MultiSymbolMarketCollector(
@@ -1351,18 +1372,51 @@ class ProductRuntime:
                   subscribed=len(selected), dataset_root=dataset_root)
 
     def _make_universe_sink(self, writers):
-        from market.events.payloads import TradePayload
+        """批次事件 → 共享数据集（payload 为 canonical 事件字典；目录本身即可作为回测输入）。"""
+        from market.events.types import EventType, MarketEvent
+        from market.events.payloads import MarkPricePayload
+        from storage.events.codec import encode_event
+
+        kind_for_event = {
+            EventType.BOOK_SNAPSHOT: "book",
+            EventType.BOOK_DELTA: "book",
+            EventType.TRADE: "trade",
+            EventType.MARK_PRICE: "mark",
+        }
+        counters: dict[str, int] = {}
+
+        def _next_ordinal(symbol: str) -> int:
+            ordinal = counters.get(symbol, 0)
+            counters[symbol] = ordinal + 1
+            return ordinal
 
         def sink(symbol, batch):
             for event in getattr(batch, "market_events", ()):
-                payload = getattr(event, "payload", None)
-                if isinstance(payload, TradePayload):
-                    writer = writers.get((symbol, "trade"))
-                    if writer is not None:
-                        writer.append(exchange_ts=int(event.exchange_ts),
-                                       receive_ts=int(event.receive_ts),
-                                       payload={"price": float(payload.price),
-                                                 "qty": float(payload.quantity)})
+                kind = kind_for_event.get(event.event_type)
+                writer = writers.get((symbol, kind)) if kind is not None else None
+                if writer is not None:
+                    writer.append(exchange_ts=int(event.exchange_ts),
+                                    receive_ts=int(event.receive_ts),
+                                    payload=encode_event(event),
+                                    ordinal=_next_ordinal(symbol))
+            observation = getattr(batch, "mark", None)
+            if observation is not None:
+                writer = writers.get((symbol, "mark"))
+                if writer is not None:
+                    event = MarketEvent(
+                        venue=observation.venue, symbol=observation.symbol,
+                        event_type=EventType.MARK_PRICE,
+                        exchange_ts=int(observation.exchange_ts),
+                        receive_ts=int(observation.receive_ts),
+                        process_ts=int(observation.process_ts), sequence=None,
+                        payload=MarkPricePayload(
+                            price=float(observation.price),
+                            funding_rate=getattr(observation, "funding_rate", None),
+                            next_funding_time=getattr(observation, "next_funding_time", None)))
+                    writer.append(exchange_ts=int(event.exchange_ts),
+                                    receive_ts=int(event.receive_ts),
+                                    payload=encode_event(event),
+                                    ordinal=_next_ordinal(symbol))
         return sink
 
     def _build_binance_public_source(self, *, history_capacity: int,
@@ -1620,6 +1674,21 @@ class ProductRuntime:
             client_order_id=str(getattr(order, "client_order_id", "")),
             event=str(getattr(status, "value", status) or type(update).__name__),
             detail=str(getattr(update, "detail", "") or "")))
+        fill = getattr(update, "fill", None)
+        if fill is not None:
+            # canonical Fill 持久化（历史 run 的逐笔成交/绩效可重建；去重由 tracker/accounting 保证）
+            self._persist_fact("fill", {
+                "ts": int(getattr(fill, "exchange_ts", 0) or getattr(order, "updated_at", 0)),
+                "fill_id": str(getattr(fill, "fill_id", "")),
+                "client_order_id": str(getattr(order, "client_order_id", "")
+                                          or getattr(fill, "order_id", "")),
+                "symbol": getattr(fill, "symbol", None),
+                "side": str(getattr(getattr(fill, "side", None), "value", "") or ""),
+                "price": float(getattr(fill, "price", 0.0)),
+                "quantity": float(getattr(fill, "quantity", 0.0)),
+                "fee": float(getattr(fill, "fee", 0.0)),
+                "fee_asset": getattr(fill, "fee_asset", None),
+                "trade_id": str(getattr(fill, "trade_id", ""))})
 
     def _portfolio_commitment_provider(self, accounting: object, manager: object):
         """P0017.2：构造组合 gross 一致视图（未配置组合限额时返回 None ⇒ 组合闸不生效）。"""
@@ -1677,6 +1746,16 @@ class ProductRuntime:
         except Exception:  # noqa: BLE001 - 算不出就是未知（fail closed）
             return None
 
+    def _prediction_archive(self, values: dict[str, object]):
+        """配置 `prediction.archive_path` ⇒ durable JSONL archive（跨进程 RECORDED 复现）；
+        未配置 ⇒ None（PredictionRuntime 回退内存 archive，既有行为不变）。"""
+        archive_path = values.get("prediction.archive_path")
+        if archive_path is None:
+            return None
+        from storage.prediction_archive import JsonlPredictionArchive
+
+        return JsonlPredictionArchive(str(archive_path))
+
     def _build_prediction_runtime(self, values: dict[str, object]) -> object | None:
         """按显式配置构造 `PredictionRuntime`；未配置/不可用 ⇒ None（诚实 UNAVAILABLE）。
 
@@ -1698,7 +1777,8 @@ class ProductRuntime:
             from prediction.runtime import PredictionRuntime
 
             return PredictionRuntime(provider=LocalTrialProvider(), clock=_CallableClock(self.profile.clock),
-                                     timeout_ms=int(timeout_ms), ttl_ms=int(ttl_ms))
+                                     timeout_ms=int(timeout_ms), ttl_ms=int(ttl_ms),
+                                     archive=self._prediction_archive(values))
         if provider_name != "systemone":
             return None
         threshold = values.get("prediction.adverse_selection_threshold_bps")
@@ -1715,7 +1795,8 @@ class ProductRuntime:
             provider = SystemOneProvider(transport=SystemOneTransport(),
                                          adverse_selection_threshold_bps=float(threshold))
             return PredictionRuntime(provider=provider, clock=_CallableClock(self.profile.clock),
-                                     timeout_ms=int(timeout_ms), ttl_ms=int(ttl_ms))
+                                     timeout_ms=int(timeout_ms), ttl_ms=int(ttl_ms),
+                                     archive=self._prediction_archive(values))
         except Exception:  # noqa: BLE001 - credential/阈值不可用 ⇒ 不构造
             return None
 
@@ -1841,6 +1922,7 @@ class ProductRuntime:
         """
         self._local_data_clock["ms"] = int(ts_ms) if hasattr(self, "_local_data_clock") else None
         self._persist_market_point()
+        self._persist_account_point(int(ts_ms))
         self._identity = dataclasses_replace(self._identity, data_timestamp=Fact.of(int(ts_ms)))
         service = getattr(self, "_service", None)
         if service is not None:
@@ -1885,6 +1967,41 @@ class ProductRuntime:
             log_event("runtime", "run_fact_persist_failed", level=30,
                       runtime_id=self._identity.runtime_id, run_id=self._session.run_id,
                       kind="market", error=type(exc).__name__)
+
+    def _persist_account_point(self, ts: int) -> None:
+        """把当前 equity/exposure 采样按 bucket 节流持久化（历史 run 的 Performance 曲线可重建）。"""
+        provider = getattr(self, "_accounting_provider", None)
+        if provider is None:
+            return
+        reason = self._durable_absence_reason()
+        if reason is not None or not hasattr(self, "_registry"):
+            return
+        bucket = int(self._projection_config.bucket_ms) if self._projection_config is not None else 1_000
+        if self._persisted_account_ts is not None and ts - self._persisted_account_ts < bucket:
+            return
+        try:
+            sample = provider.sample(ts)
+        except Exception:  # noqa: BLE001 - 采样失败不打断运行
+            return
+        if sample is None:
+            return
+        point = {
+            "ts": int(sample.ts),
+            "equity": sample.equity,
+            "balance": sample.balance,
+            "position_qty": sample.position_qty,
+            "exposure_total": sample.exposure_total,
+            "exposure_confirmed": sample.exposure_confirmed,
+            "realized_pnl": sample.realized_pnl,
+            "unrealized_pnl": sample.unrealized_pnl,
+        }
+        try:
+            self._registry.append_run_facts(self._session.run_id, "account", [point])
+            self._persisted_account_ts = ts
+        except Exception as exc:  # noqa: BLE001 - 持久化失败不得影响交易/回放
+            log_event("runtime", "run_fact_persist_failed", level=30,
+                      runtime_id=self._identity.runtime_id, run_id=self._session.run_id,
+                      kind="account", error=type(exc).__name__)
 
     def _persist_trade(self, event: object) -> None:
         """把一条真实成交写入该 run 的持久化事实（历史 run 的 K 线因此有成交量与成交均价）。"""

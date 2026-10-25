@@ -176,7 +176,7 @@ class MultiCollectorIsolationTest(unittest.TestCase):
                                  "qty": float(event.payload.quantity)})
                     trades_seen[symbol] += 1
 
-        collector._on_batch = sink  # noqa: SLF001
+        collector.set_batch_sink(sink)
         from tests.live_support import agg_trade_message
         transports["BTCUSDT"].connection("market").push(
             agg_trade_message(aggregate_trade_id=1, price=60000.0, quantity=0.5,

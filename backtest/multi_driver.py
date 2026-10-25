@@ -19,18 +19,21 @@ from backtest.driver import (
     BacktestConfig,
     BacktestTrace,
     BacktestResult,
+    build_prediction_evaluation,
     run_integrity_checks,
+    simulation_fee_schedule,
+    simulation_slippage,
 )
 from backtest.multi_adapter import MultiSymbolSimulatedAdapter
 from execution.engine import ExecutionEngine
 from execution.manager import OrderManager
-from execution.simulation.fees import FeeSchedule
 from execution.simulation.latency import LatencyModel
 from execution.simulation.venue import SimulatedVenue
 from execution.tracker import OrderTracker
 from market.events.types import EventType, MarketEvent, Venue
 from market.features.engine import FeatureEngine
 from portfolio.accounting import AccountingCore
+from portfolio.funding_model import FundingSettlementTracker
 from risk.gate import RiskGate
 from runtime.multi_symbol_core import (
     StepConfig,
@@ -38,9 +41,6 @@ from runtime.multi_symbol_core import (
     build_commitment_provider,
     process_market_event,
 )
-from storage.events.reader import JsonlEventReader
-
-
 @dataclass
 class MultiBacktestConfig(BacktestConfig):
     """多标的回测配置。`symbol` 为兼容字段；以 `symbols` 为准（必须显式、有序）。"""
@@ -91,8 +91,6 @@ def run_multi_backtest(dataset_path: str | Path, config: MultiBacktestConfig, *,
                         decision_fn=None, prediction_runtime=None) -> BacktestResult:
     """执行一次多标的确定性回测。decision_fn 是 symbol→决策函数的映射（或单一函数用于全部 symbol）。"""
     path = Path(dataset_path)
-    if not path.is_file():
-        raise BacktestError(BacktestStatus.INVALID_INPUT, f"dataset not found: {path}")
 
     symbols = tuple(config.symbols)
     if not symbols or len(symbols) < 2:
@@ -102,9 +100,11 @@ def run_multi_backtest(dataset_path: str | Path, config: MultiBacktestConfig, *,
     if len(declared) != len(symbols):
         raise BacktestError(BacktestStatus.INVALID_INPUT, "duplicate symbols in config")
 
-    records = tuple(JsonlEventReader(path))
+    from backtest.dataset_source import load_records
+
+    records = load_records(path, symbols=symbols)
     if not records:
-        raise BacktestError(BacktestStatus.INVALID_INPUT, "event store is empty")
+        raise BacktestError(BacktestStatus.INVALID_INPUT, "dataset is empty")
     ordered = _ordered_events(records, declared_symbols=declared)
 
     # 校验合并后时间线（exchange_ts 已由排序保证非递减；显式拒绝严格回退）
@@ -125,8 +125,8 @@ def run_multi_backtest(dataset_path: str | Path, config: MultiBacktestConfig, *,
             symbol=symbol,
             latency=LatencyModel(submit_latency_ms=int(config.submit_latency_ms),
                                    cancel_latency_ms=int(config.cancel_latency_ms)),
-            fee_schedule=FeeSchedule(maker_fee_rate=float(config.maker_fee_rate),
-                                       fee_asset=config.fee_asset),
+            fee_schedule=simulation_fee_schedule(config),
+            slippage=simulation_slippage(config),
             venue=Venue.BINANCE)
         engines_feature[symbol] = FeatureEngine(venue=Venue.BINANCE, symbol=symbol,
                                                    max_book_age_ms=config.max_book_age_ms)
@@ -140,6 +140,10 @@ def run_multi_backtest(dataset_path: str | Path, config: MultiBacktestConfig, *,
 
     step_config = StepConfig(decide_on=tuple(config.decide_on))
     counters = StepCounters()
+    funding_trackers = (
+        {symbol: FundingSettlementTracker(asset=config.fee_asset, symbol=symbol)
+         for symbol in symbols}
+        if getattr(config, "funding_enabled", False) else None)
 
     def fn_for_symbol(symbol: str):
         if decision_fn is None:
@@ -155,7 +159,16 @@ def run_multi_backtest(dataset_path: str | Path, config: MultiBacktestConfig, *,
             process_market_event(
                 event=event, now=now, engine=engine, features=engines_feature,
                 decision_fn_for=fn_for_symbol, config=step_config, counters=counters,
-                prediction_runtime=prediction_runtime)
+                prediction_runtime=prediction_runtime,
+                funding_trackers=funding_trackers)
+        if funding_trackers is not None:
+            for symbol, tracker in funding_trackers.items():
+                payment = tracker.settle_due(
+                    now_ms=int(ordered[-1][0]),
+                    position_qty=float(accounting.position(symbol).qty),
+                    mark_price=accounting.mark_price(symbol))
+                if payment is not None:
+                    accounting.record_funding(payment)
         tail = engine.poll(now_ms=int(ordered[-1][0]))
         counters.fills += len(tail.fills)
     except BacktestError:
@@ -171,10 +184,14 @@ def run_multi_backtest(dataset_path: str | Path, config: MultiBacktestConfig, *,
         events=counters.events, decisions_log=counters.decisions_log,
         rejects_log=counters.rejects_log)
 
+    evaluation = (
+        build_prediction_evaluation(
+            config, counters.prediction_samples, counters.mid_observations)
+        if counters.prediction_samples else None)
     result = BacktestResult(
         status=BacktestStatus.SUCCESS, run_id=run_id, config=config, trace=trace,
         accounting=accounting, tracker=tracker, engine=engine,
-        dataset_sha256=dataset_sha256)
+        dataset_sha256=dataset_sha256, prediction_evaluation=evaluation)
     checks = run_integrity_checks(result)
     # 额外：多标的守恒与覆盖检查
     checks.extend(_multi_integrity_checks(result, symbols, seen_symbols=_seen(ordered)))

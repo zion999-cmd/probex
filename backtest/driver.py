@@ -33,12 +33,12 @@ from market.events.types import MarketEvent, EventType, Venue
 from market.features.engine import FeatureEngine
 from market.replay.source import ReplayClock, ReplayMode, ReplaySource
 from portfolio.accounting import AccountingCore
+from portfolio.funding_model import FundingSettlementTracker
 from portfolio.types import Side
 from risk.budget import remaining_exposure_budget
 from risk.gate import RiskGate
 from risk.limits import RiskLimits
 from risk.portfolio_budget import PortfolioCommitment
-from storage.events.reader import JsonlEventReader
 from strategy.maker.types import QuoteAction
 
 from backtest import BacktestError, BacktestStatus
@@ -68,6 +68,15 @@ class BacktestConfig:
     seed: int | None = None
     #: 决策触发的事件类型集合（默认：盘口快照与逐笔成交后都评估）
     decide_on: tuple[str, ...] = ("book_snapshot", "book_delta", "trade")
+    #: 资金费结算（显式 opt-in；False ⇒ funding 成本不建模，报告如实声明 UNSUPPORTED）
+    funding_enabled: bool = False
+    #: 预测复盘参数（None ⇒ 对应度量不计算并在报告中说明，不猜数值）
+    adverse_selection_threshold_bps: float | None = None
+    bucket_edge_bps: float | None = None
+    bucket_strong_bps: float | None = None
+    #: taker 模拟（显式 opt-in；None = venue maker-only，滑点/taker 能力声明 UNSUPPORTED）
+    taker_slippage_bps: float | None = None
+    taker_fee_rate: float | None = None
 
     def to_limits(self) -> RiskLimits:
         return RiskLimits(
@@ -94,7 +103,30 @@ class BacktestConfig:
             "max_book_age_ms": self.max_book_age_ms,
             "seed": self.seed,
             "decide_on": list(self.decide_on),
+            "funding_enabled": self.funding_enabled,
+            "adverse_selection_threshold_bps": self.adverse_selection_threshold_bps,
+            "bucket_edge_bps": self.bucket_edge_bps,
+            "bucket_strong_bps": self.bucket_strong_bps,
+            "taker_slippage_bps": self.taker_slippage_bps,
+            "taker_fee_rate": self.taker_fee_rate,
         }
+
+
+def simulation_fee_schedule(config) -> FeeSchedule:
+    """回测 venue 费率表；taker 费率仅在显式配置时启用（否则 venue maker-only）。"""
+    return FeeSchedule(
+        maker_fee_rate=float(config.maker_fee_rate),
+        fee_asset=config.fee_asset,
+        taker_fee_rate=(None if config.taker_fee_rate is None
+                          else float(config.taker_fee_rate)))
+
+
+def simulation_slippage(config):
+    """固定 bps 滑点模型；未配置 ⇒ None（非 post-only 订单被拒，保持 maker-only）。"""
+    if config.taker_slippage_bps is None:
+        return None
+    from execution.simulation.slippage import FixedBpsSlippage
+    return FixedBpsSlippage(float(config.taker_slippage_bps))
 
 
 @dataclass
@@ -122,6 +154,8 @@ class BacktestResult:
     reason: str = ""
     location: str | None = None
     integrity_checks: list[dict] = field(default_factory=list)
+    #: 预测复盘结果（无预测/窗口不足 ⇒ None，绝不伪造）
+    prediction_evaluation: dict | None = None
 
     @property
     def ok(self) -> bool:
@@ -158,10 +192,11 @@ def run_backtest(dataset_path: str | Path, config: BacktestConfig, *,
                   prediction_runtime: object | None = None) -> BacktestResult:
     """执行一次确定性回测。所有时间锚定 exchange_ts；无 wall-clock。"""
     path = Path(dataset_path)
-    if not path.is_file():
-        raise BacktestError(BacktestStatus.INVALID_INPUT, f"dataset not found: {path}")
+    from backtest.dataset_source import load_records
 
-    records = tuple(JsonlEventReader(path))
+    records = load_records(path, symbols=(config.symbol,))
+    if not records:
+        raise BacktestError(BacktestStatus.INVALID_INPUT, "dataset is empty")
     events = [r.event for r in records]
     _validate_dataset(events, symbol=config.symbol)
 
@@ -171,8 +206,8 @@ def run_backtest(dataset_path: str | Path, config: BacktestConfig, *,
         symbol=config.symbol,
         latency=LatencyModel(submit_latency_ms=int(config.submit_latency_ms),
                               cancel_latency_ms=int(config.cancel_latency_ms)),
-        fee_schedule=FeeSchedule(maker_fee_rate=float(config.maker_fee_rate),
-                                   fee_asset=config.fee_asset),
+        fee_schedule=simulation_fee_schedule(config),
+        slippage=simulation_slippage(config),
         venue=Venue.BINANCE)
     manager = OrderManager(tracker=tracker, adapter=venue)
     limits = config.to_limits()
@@ -207,10 +242,27 @@ def run_backtest(dataset_path: str | Path, config: BacktestConfig, *,
 
     decide_set = set(config.decide_on)
     state = None
+    eval_mids: list[tuple[int, float]] = []
+    eval_samples: list[tuple] = []
+    funding_tracker = (
+        FundingSettlementTracker(asset=config.fee_asset, symbol=config.symbol)
+        if config.funding_enabled else None)
+
+    def _settle_funding(now_ms: int) -> None:
+        if funding_tracker is None:
+            return
+        qty = float(accounting.position(config.symbol).qty)
+        payment = funding_tracker.settle_due(
+            now_ms=now_ms, position_qty=qty,
+            mark_price=accounting.mark_price(config.symbol))
+        if payment is not None:
+            accounting.record_funding(payment)
+
     try:
         for index, event in enumerate(events):
             now = int(event.exchange_ts)
             etype = event.event_type
+            state_mid = None
             # MARK_PRICE 不进 FeatureEngine 的盘口（book 不接受）；它是风险/会计的正式 mark
             if etype is EventType.MARK_PRICE:
                 payload = event.payload
@@ -219,9 +271,19 @@ def run_backtest(dataset_path: str | Path, config: BacktestConfig, *,
                                                    timestamp=int(getattr(payload, "receive_ts", now)))
                 except (AttributeError, TypeError, ValueError):
                     pass
+                if funding_tracker is not None:
+                    funding_tracker.update(
+                        funding_rate=getattr(payload, "funding_rate", None),
+                        next_funding_time=getattr(payload, "next_funding_time", None))
+                _settle_funding(now)
             else:
+                # 非 mark 事件也可能越过已公布的结算点（结算本身发生在 8h 边界）
+                _settle_funding(now)
                 # 1) 推进可见市场状态（策略只能见 ≤now）
                 state = feature_engine.on_market_event(event)
+                state_mid = getattr(getattr(state, "price", None), "mid", None)
+                if state_mid is not None:
+                    eval_mids.append((now, float(state_mid)))
             # 2) 把市场事件喂给模拟器（仅 book/trade；mark 不是成交驱动事件，venue 不接受）
             if etype is not EventType.MARK_PRICE:
                 venue.on_market_event(event)
@@ -233,10 +295,13 @@ def run_backtest(dataset_path: str | Path, config: BacktestConfig, *,
             if decision_fn is not None and etype is not EventType.MARK_PRICE \
                     and etype.value in decide_set and state.quality.tradeable:
                 prediction = _predict(prediction_runtime, state, now)
+                if prediction is not None and state_mid is not None:
+                    eval_samples.append((prediction, float(state_mid)))
                 _decide_once(decision_fn, engine, tracker, venue, state, config, now, trace,
                               prediction=prediction)
         # 结束：用最后事件时间再 poll 一次，处理尾部到期成交
         final_ts = int(events[-1].exchange_ts)
+        _settle_funding(final_ts)
         tail = engine.poll(now_ms=final_ts)
         trace.fills += len(tail.fills)
     except BacktestError:
@@ -245,10 +310,12 @@ def run_backtest(dataset_path: str | Path, config: BacktestConfig, *,
         raise BacktestError(BacktestStatus.REPLAY_FAILURE,
                               f"{type(exc).__name__}: {exc}") from exc
 
+    evaluation = build_prediction_evaluation(
+        config, eval_samples, eval_mids) if eval_samples else None
     result = BacktestResult(
         status=BacktestStatus.SUCCESS, run_id=run_id, config=config, trace=trace,
         accounting=accounting, tracker=tracker, engine=engine,
-        dataset_sha256=dataset_sha256)
+        dataset_sha256=dataset_sha256, prediction_evaluation=evaluation)
     checks = run_integrity_checks(result)
     result.integrity_checks = checks
     failed = [c for c in checks if not c["passed"]]
@@ -256,6 +323,23 @@ def run_backtest(dataset_path: str | Path, config: BacktestConfig, *,
         result.status = BacktestStatus.INTEGRITY_FAILURE
         result.reason = "; ".join(c["name"] for c in failed)
     return result
+
+
+def build_prediction_evaluation(config, samples, mids) -> dict | None:
+    """从 (PredictionRecord, mid) 样本与 (ts, mid) 观测构造复盘结果（纯计算）。"""
+    from prediction.evaluation import PredictionEvaluator
+
+    thresholds = None
+    if config.bucket_edge_bps is not None and config.bucket_strong_bps is not None:
+        thresholds = (float(config.bucket_edge_bps), float(config.bucket_strong_bps))
+    evaluator = PredictionEvaluator(
+        adverse_selection_threshold_bps=config.adverse_selection_threshold_bps,
+        bucket_thresholds_bps=thresholds)
+    for ts, mid in mids:
+        evaluator.observe_mid(int(ts), float(mid))
+    for record, mid in samples:
+        evaluator.add_prediction(record, float(mid))
+    return evaluator.evaluate().to_payload()
 
 
 def _predict(runtime: object | None, state, now: int):

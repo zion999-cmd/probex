@@ -46,12 +46,15 @@ class FillReason(Enum):
     QUEUE_CONSUMED = "queue_consumed"
     #: aggressor 成交价格穿过我们的限价：该档位已被清空。
     TRADE_THROUGH = "trade_through"
+    #: taker（非 post-only）订单立即吃单，价格 = 盘口 ± 显式固定 bps 滑点。
+    TAKER_CROSS = "taker_cross"
 
 
 class Liquidity(Enum):
-    """流动性角色。第一版只实现 maker。"""
+    """流动性角色。maker = 挂单成交；taker = 主动吃单（P0017 扩展）。"""
 
     MAKER = "maker"
+    TAKER = "taker"
 
 
 class SimulatedRejectReason(Enum):
@@ -60,6 +63,10 @@ class SimulatedRejectReason(Enum):
     DUPLICATE_CLIENT_ORDER_ID = "DUPLICATE_CLIENT_ORDER_ID"
     REJECT_POST_ONLY = "REJECT_POST_ONLY"
     CANCEL_UNKNOWN_ORDER = "CANCEL_UNKNOWN_ORDER"
+    #: venue 未配置 taker（默认 maker-only）
+    TAKER_NOT_SUPPORTED = "TAKER_NOT_SUPPORTED"
+    #: taker 吃单时盘口未知（fail-closed：不猜测成交价）
+    TAKER_NO_LIQUIDITY = "TAKER_NO_LIQUIDITY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +90,8 @@ class SimulatedFill:
     exchange_ts: Milliseconds
     execution_id: str
     trade_id: str
-    aggregate_trade_id: int
+    #: maker 成交 = 触发逐笔 id；taker 立即吃单无对应逐笔 ⇒ None
+    aggregate_trade_id: int | None
 
 
 @dataclass(frozen=True, slots=True)

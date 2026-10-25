@@ -22,6 +22,8 @@ class FeeSchedule:
     maker_fee_rate: float
     #: 手续费资产（必须与账户结算资产一致，不做换算）。
     fee_asset: str
+    #: taker 费率（仅当显式启用 taker 成交时需要；None = venue 保持 maker-only）。
+    taker_fee_rate: float | None = None
 
     def __post_init__(self) -> None:
         rate = self.maker_fee_rate
@@ -43,6 +45,12 @@ class FeeSchedule:
             if not math.isfinite(value) or value <= 0.0:
                 raise SimulationError(f"maker_fee({field}) must be a positive finite number, got {number!r}")
         return float(price) * float(quantity) * self.maker_fee_rate
+
+    def taker_fee(self, *, price: float, quantity: float) -> float:
+        """taker 成交手续费；未配置 taker 费率 ⇒ SimulationError（maker-only venue）。"""
+        if self.taker_fee_rate is None:
+            raise SimulationError("taker fills are not configured (taker_fee_rate is None)")
+        return float(price) * float(quantity) * float(self.taker_fee_rate)
 
 
 __all__ = ["FeeSchedule"]

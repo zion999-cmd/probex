@@ -22,8 +22,27 @@ from backtest.identity import (
 #: 第一版未建模/未支持的成本与执行能力（诚实声明，非零值）
 SLIPPAGE_MODEL = "UNSUPPORTED"
 FUNDING_MODEL = "UNSUPPORTED"
+#: 显式 opt-in（backtest.funding_enabled=true）：venue 公布费率在 8h 结算点结算
+FUNDING_MODELED = ("MODELED: venue-published rate settled at the 8h funding boundary "
+                     "(open position notional × mark × signed rate)")
 MARKET_IMPACT = "UNSUPPORTED"
 QUEUE_POSITION = "MODELLED_BY_SIMULATED_VENUE (event-driven queue approximation, not validated against real order book)"
+
+
+def _funding_model(result) -> str:
+    return FUNDING_MODELED if getattr(result.config, "funding_enabled", False) else FUNDING_MODEL
+
+
+def _slippage_model(result) -> str:
+    bps = getattr(result.config, "taker_slippage_bps", None)
+    if bps is None:
+        return SLIPPAGE_MODEL
+    return f"MODELED: fixed {bps} bps applied to taker crosses (no depth impact)"
+
+
+def _taker_fee_model(result) -> str:
+    rate = getattr(result.config, "taker_fee_rate", None)
+    return "UNSUPPORTED" if rate is None else f"enabled (taker_fee_rate={rate})"
 
 
 def _git_commit() -> str | None:
@@ -49,18 +68,21 @@ def build_manifest(result: BacktestResult, *, dataset_files: list[str],
         },
         "config": result.config.canonical(),
         "seed": result.config.seed,
-        "execution_granularity": "event-driven",
+        "execution_granularity": getattr(result.config, "bar_mode", None)
+            and f"bar ({result.config.bar_mode})" or "event-driven",
         "cost_models": {
             "maker_fee": {"enabled": True, "maker_fee_rate": result.config.maker_fee_rate,
                             "fee_asset": result.config.fee_asset},
-            "slippage": SLIPPAGE_MODEL,
-            "funding": FUNDING_MODEL,
+            "taker_fee": _taker_fee_model(result),
+            "slippage": _slippage_model(result),
+            "funding": _funding_model(result),
             "market_impact": MARKET_IMPACT,
             "queue_position": QUEUE_POSITION,
         },
         "portfolio_budget_enabled": result.config.max_portfolio_gross_notional is not None,
         "final_status": result.status.value,
         "integrity_checks": result.integrity_checks,
+        "prediction_evaluation": getattr(result, "prediction_evaluation", None),
         "failure": ({"reason": result.reason, "location": result.location}
                      if not result.ok else None),
     }
@@ -93,6 +115,7 @@ def build_summary(result: BacktestResult) -> dict:
             "orders": len(sym_orders),
             "fills": len(sym_fills),
             "filled_quantity": round(sum(f.quantity for f in sym_fills), 10),
+            "funding": round(sum(p.amount for p in accounting.funding.for_symbol(sym)), 10),
             "end_position": (None if pos is None else
                                 {"qty": pos.qty, "notional": pos.notional,
                                  "unrealized_pnl": pos.unrealized_pnl}),
@@ -122,11 +145,16 @@ def build_summary(result: BacktestResult) -> dict:
         "orders_by_status": statuses,
         "per_symbol": per_symbol,
         "integrity_checks": result.integrity_checks,
+        "prediction_evaluation": getattr(result, "prediction_evaluation", None),
         "capability_declarations": {
-            "slippage_model": SLIPPAGE_MODEL,
-            "funding_model": FUNDING_MODEL,
+            "slippage_model": _slippage_model(result),
+            "taker_fee": _taker_fee_model(result),
+            "funding_model": _funding_model(result),
             "market_impact": MARKET_IMPACT,
-            "execution_granularity": "event-driven (trades/order-book); bar-only = UNSUPPORTED",
+            "execution_granularity": (
+                f"bar ({result.config.bar_mode})"
+                if getattr(result.config, "bar_mode", None) else
+                "event-driven (trades/order-book); bar engine = BarExecutionAdapter (limit_conservative/close_market)"),
             "limitations": ("Results are a simulation under the stated historical events, policy, "
                             "execution and cost assumptions; not evidence of live fills or future profit."),
         },
@@ -161,7 +189,8 @@ def build_report_markdown(manifest: dict, summary: dict) -> str:
         f"- final equity: {p['final_equity']}",
         f"- realized trade PnL: {p['realized_trade_pnl']}",
         f"- trading fees: {p['trading_fees']}",
-        f"- funding: {p['funding']} ({FUNDING_MODEL})",
+        f"- funding: {p['funding']} "
+        f"({summary['capability_declarations']['funding_model']})",
         f"- net realized: {p['net_realized']}",
         f"- unrealized PnL: {p['unrealized_pnl']}",
         f"- gross/net exposure: {p['gross_exposure']} / {p['net_exposure']}",

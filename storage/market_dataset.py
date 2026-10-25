@@ -13,6 +13,10 @@
 - 损坏分片 fail-closed（不静默跳过、不插值）。
 - manifest 记录每个分片的行数 / 首尾 ts / 字节数 / 内容 hash / schema；
   **已定稿分片不改写**（迟到数据不回改历史，保证回测可复现）。
+- **manifest 是完整性证明，不只是元数据**：Reader 读取已定稿分片时重新核验
+  sha256 / bytes / rows / first_ts / last_ts，且逐行核验 venue/symbol/kind 与
+  schema_version、时间单调性；Writer 续写已有分片前同样核验并对照已有 manifest
+  条目（stale attestation fail-closed）。
 
 数据集**不拥有运行状态**：采集进程可独立写入；run 只引用数据集区间/版本（引用留待 P0017.2/.3）。
 """
@@ -29,7 +33,7 @@ from types import TracebackType
 from typing import TextIO
 
 MARKET_DATASET_SCHEMA = "market-dataset/v1"
-VALID_KINDS = ("book", "trade", "mark")
+VALID_KINDS = ("book", "trade", "mark", "bar")
 
 
 class MarketDatasetError(Exception):
@@ -69,6 +73,9 @@ class MarketRecord:
     payload: object
     schema_version: str = MARKET_DATASET_SCHEMA
     quality: dict[str, object] | None = None
+    #: 采集顺序（同一 symbol 跨 kind 的全局到达序号；用于回测在同毫秒跨 kind 时复现真实顺序）。
+    #: None = 旧记录/未跟踪，回测退回显式类型优先级。
+    ordinal: int | None = None
 
     def to_line(self) -> str:
         row = {
@@ -83,6 +90,8 @@ class MarketRecord:
         }
         if self.quality is not None:
             row["quality"] = self.quality
+        if self.ordinal is not None:
+            row["ordinal"] = self.ordinal
         return _canonical(row)
 
     @staticmethod
@@ -90,12 +99,15 @@ class MarketRecord:
         if not isinstance(row, dict):
             raise MarketDatasetFormatError(f"{path}: record must be a JSON object")
         try:
+            raw_ordinal = row.get("ordinal")
+            ordinal = None if raw_ordinal is None else int(raw_ordinal)
             return MarketRecord(
                 venue=row["venue"], symbol=row["symbol"], kind=row["kind"],
                 exchange_ts=int(row["exchange_ts"]), receive_ts=int(row["receive_ts"]),
                 source=str(row["source"]), payload=row.get("payload"),
                 schema_version=str(row.get("schema_version", "")),
-                quality=row.get("quality") if isinstance(row.get("quality"), dict) else None)
+                quality=row.get("quality") if isinstance(row.get("quality"), dict) else None,
+                ordinal=ordinal)
         except (KeyError, TypeError, ValueError) as exc:
             raise MarketDatasetFormatError(f"{path}: invalid record: {exc}") from None
 
@@ -118,15 +130,19 @@ class MarketDatasetWriter:
         self._byte_in_partition = 0
         self._first_ts: int | None = None
         self._last_ts: int | None = None
+        self._last_ordinal: int | None = None
 
     @property
     def current_partition(self) -> str | None:
         return self._current_day
 
     def append(self, *, exchange_ts: int, receive_ts: int | None = None,
-               payload: object = None, quality: dict[str, object] | None = None) -> MarketRecord:
+               payload: object = None, quality: dict[str, object] | None = None,
+               ordinal: int | None = None) -> MarketRecord:
         if not isinstance(exchange_ts, int) or exchange_ts <= 0:
             raise MarketDatasetError("exchange_ts must be a positive int (ms)")
+        if ordinal is not None and (not isinstance(ordinal, int) or ordinal < 0):
+            raise MarketDatasetError("ordinal must be a non-negative int")
         day = utc_day(exchange_ts)
         if self._handle is not None and day != self._current_day:
             self._finalize_partition()
@@ -136,10 +152,17 @@ class MarketDatasetWriter:
         if self._last_ts is not None and exchange_ts < self._last_ts:
             raise MarketDatasetError(
                 f"out-of-order record for {self._symbol}/{self._kind}: {exchange_ts} < {self._last_ts}")
+        if ordinal is not None and self._last_ordinal is not None \
+                and ordinal <= self._last_ordinal:
+            raise MarketDatasetError(
+                f"out-of-order ordinal for {self._symbol}/{self._kind}: "
+                f"{ordinal} <= {self._last_ordinal}")
         record = MarketRecord(
             venue=self._venue, symbol=self._symbol, kind=self._kind,
             exchange_ts=exchange_ts, receive_ts=receive_ts or exchange_ts,
-            source=self._source, payload=payload, quality=quality)
+            source=self._source, payload=payload, quality=quality, ordinal=ordinal)
+        if ordinal is not None:
+            self._last_ordinal = ordinal
         line = record.to_line() + "\n"
         self._handle.write(line)
         self._handle.flush()
@@ -156,22 +179,20 @@ class MarketDatasetWriter:
         day_dir.mkdir(parents=True, exist_ok=True)
         path = day_dir / "data.jsonl"
         if path.exists():
-            # 续写：验证已有分片可读，恢复计数（fail closed on corruption）
-            count = first = last = 0
-            first_ts_seen: int | None = None
-            for _line in path.read_text(encoding="utf-8").splitlines():
-                if not _line.strip():
-                    continue
-                json.loads(_line)  # 损坏即抛
-                count += 1
-                obj = json.loads(_line)
-                ts = int(obj["exchange_ts"])
-                first_ts_seen = ts if first_ts_seen is None else first_ts_seen
-                last = ts
-            self._count_in_partition = count
-            self._byte_in_partition = path.stat().st_size
-            self._first_ts = first_ts_seen
-            self._last_ts = last
+            # 续写：逐行校验已有分片（键 / schema / 单调性），并核对已有 manifest 证明，
+            # 然后恢复计数（任何损坏或 stale attestation 都 fail-closed）。
+            scan = _scan_partition(
+                path, key=(self._venue, self._symbol, self._kind), collect=False)
+            manifest = _load_manifest(self._dir)
+            if manifest is not None:
+                entry = (manifest.get("partitions") or {}).get(day)
+                if entry is not None:
+                    _verify_attestation(entry, scan, path=path, day=day)
+            self._count_in_partition = scan.rows
+            self._byte_in_partition = scan.bytes_
+            self._first_ts = scan.first_ts
+            self._last_ts = scan.last_ts
+            self._last_ordinal = scan.last_ordinal
         else:
             self._count_in_partition = 0
             self._byte_in_partition = 0
@@ -196,6 +217,7 @@ class MarketDatasetWriter:
         self._count_in_partition = 0
         self._byte_in_partition = 0
         self._first_ts = self._last_ts = None
+        self._last_ordinal = None
 
     def close(self) -> None:
         self._finalize_partition()
@@ -217,6 +239,139 @@ class PartitionInfo:
     sha256: str
 
 
+@dataclass(frozen=True, slots=True)
+class _PartitionScan:
+    """逐行扫描分片后的事实（完整性校验的唯一计算来源）。"""
+
+    rows: int
+    first_ts: int | None
+    last_ts: int | None
+    bytes_: int
+    sha256: str
+    records: tuple[MarketRecord, ...]
+    last_ordinal: int | None = None
+
+
+def _scan_partition(path: Path, *, key: tuple[str, str, str],
+                    collect: bool) -> _PartitionScan:
+    """读取并逐行校验一个分片文件（fail-closed）。
+
+    校验：UTF-8 可读、每行合法 JSON 对象、记录形状（MarketRecord.from_row）、
+    venue/symbol/kind 与路径键一致、schema_version 受信、exchange_ts 非递减。
+    """
+    venue, symbol, kind = key
+    try:
+        raw = path.read_bytes()
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise MarketDatasetFormatError(f"{path}: partition is not valid UTF-8: {exc}") from None
+    except OSError as exc:
+        raise MarketDatasetFormatError(f"{path}: cannot read partition: {exc}") from None
+    rows = 0
+    first_ts: int | None = None
+    last_ts: int | None = None
+    last_ordinal: int | None = None
+    records: list[MarketRecord] = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise MarketDatasetFormatError(f"{path}:{number}: corrupt JSON: {exc}") from None
+        record = MarketRecord.from_row(row, path=f"{path}:{number}")
+        if (record.venue, record.symbol, record.kind) != (venue, symbol, kind):
+            raise MarketDatasetFormatError(
+                f"{path}:{number}: record key {(record.venue, record.symbol, record.kind)!r} "
+                f"does not match partition key {(venue, symbol, kind)!r}")
+        if record.schema_version != MARKET_DATASET_SCHEMA:
+            raise MarketDatasetFormatError(
+                f"{path}:{number}: unsupported schema_version {record.schema_version!r} "
+                f"(expected {MARKET_DATASET_SCHEMA!r})")
+        if last_ts is not None and record.exchange_ts < last_ts:
+            raise MarketDatasetFormatError(
+                f"{path}:{number}: non-monotonic exchange_ts "
+                f"{record.exchange_ts} < {last_ts}")
+        if record.ordinal is not None:
+            if last_ordinal is not None and record.ordinal <= last_ordinal:
+                raise MarketDatasetFormatError(
+                    f"{path}:{number}: non-monotonic ordinal "
+                    f"{record.ordinal} <= {last_ordinal}")
+            last_ordinal = record.ordinal
+        rows += 1
+        last_ts = record.exchange_ts
+        if first_ts is None:
+            first_ts = record.exchange_ts
+        if collect:
+            records.append(record)
+    return _PartitionScan(
+        rows=rows, first_ts=first_ts, last_ts=last_ts, bytes_=len(raw),
+        sha256=hashlib.sha256(raw).hexdigest(), records=tuple(records),
+        last_ordinal=last_ordinal)
+
+
+def _load_manifest(kind_dir: Path) -> dict[str, object] | None:
+    """读取并严格校验 manifest；不存在返回 None（未定稿数据集）。"""
+    mpath = _manifest_path(kind_dir)
+    if not mpath.exists():
+        return None
+    try:
+        manifest = json.loads(mpath.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise MarketDatasetFormatError(f"{mpath}: corrupt manifest JSON: {exc}") from None
+    if not isinstance(manifest, dict):
+        raise MarketDatasetFormatError(f"{mpath}: manifest must be a JSON object")
+    schema = manifest.get("schema")
+    if schema != MARKET_DATASET_SCHEMA:
+        raise MarketDatasetFormatError(
+            f"{mpath}: unsupported manifest schema {schema!r} "
+            f"(expected {MARKET_DATASET_SCHEMA!r})")
+    partitions = manifest.get("partitions")
+    if not isinstance(partitions, dict):
+        raise MarketDatasetFormatError(f"{mpath}: manifest.partitions must be an object")
+    for day, entry in partitions.items():
+        try:
+            _dt.date.fromisoformat(day)
+        except ValueError:
+            raise MarketDatasetFormatError(f"{mpath}: invalid partition day {day!r}") from None
+        if not isinstance(entry, dict):
+            raise MarketDatasetFormatError(f"{mpath}: partitions[{day!r}] must be an object")
+        if entry.get("file") != f"{day}/data.jsonl":
+            raise MarketDatasetFormatError(
+                f"{mpath}: partitions[{day!r}].file must equal {day}/data.jsonl")
+        if not isinstance(entry.get("rows"), int) or entry["rows"] < 0:
+            raise MarketDatasetFormatError(f"{mpath}: partitions[{day!r}].rows invalid")
+        if not isinstance(entry.get("bytes"), int) or entry["bytes"] < 0:
+            raise MarketDatasetFormatError(f"{mpath}: partitions[{day!r}].bytes invalid")
+        if not isinstance(entry.get("sha256"), str) or not entry["sha256"]:
+            raise MarketDatasetFormatError(f"{mpath}: partitions[{day!r}].sha256 invalid")
+        for ts_field in ("first_ts", "last_ts"):
+            value = entry.get(ts_field)
+            if value is not None and not isinstance(value, int):
+                raise MarketDatasetFormatError(
+                    f"{mpath}: partitions[{day!r}].{ts_field} must be int or null")
+    return manifest
+
+
+def _verify_attestation(entry: object, scan: _PartitionScan, *, path: Path, day: str) -> None:
+    """manifest 条目必须与磁盘分片逐字段一致（完整性证明）。"""
+    assert isinstance(entry, dict)
+    mismatches: list[str] = []
+    if int(entry["rows"]) != scan.rows:
+        mismatches.append(f"rows manifest={entry['rows']} actual={scan.rows}")
+    if int(entry["bytes"]) != scan.bytes_:
+        mismatches.append(f"bytes manifest={entry['bytes']} actual={scan.bytes_}")
+    if str(entry["sha256"]) != scan.sha256:
+        mismatches.append("sha256 mismatch")
+    if entry.get("first_ts") != scan.first_ts:
+        mismatches.append(f"first_ts manifest={entry.get('first_ts')} actual={scan.first_ts}")
+    if entry.get("last_ts") != scan.last_ts:
+        mismatches.append(f"last_ts manifest={entry.get('last_ts')} actual={scan.last_ts}")
+    if mismatches:
+        raise MarketDatasetFormatError(
+            f"manifest attestation mismatch for {day} ({path}): " + "; ".join(mismatches))
+
+
 def _manifest_path(kind_dir: Path) -> Path:
     return kind_dir / "manifest.json"
 
@@ -226,9 +381,7 @@ def _write_manifest_entry(*, kind_dir: Path, day: str, path: Path, count: int,
     """原子更新 manifest（temp → fsync → replace → fsync(dir)）。"""
     kind_dir.mkdir(parents=True, exist_ok=True)
     mpath = _manifest_path(kind_dir)
-    manifest = {}
-    if mpath.exists():
-        manifest = json.loads(mpath.read_text(encoding="utf-8"))
+    manifest = _load_manifest(kind_dir) or {}
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     manifest.setdefault("schema", MARKET_DATASET_SCHEMA)
     manifest.setdefault("partitions", {})
@@ -255,61 +408,61 @@ class MarketDatasetReader:
 
     def __init__(self, root: str | Path, *, venue: str, symbol: str, kind: str) -> None:
         _validate_key(venue, symbol, kind)
+        self._venue, self._symbol, self._kind = venue, symbol, kind
         self._kind_dir = Path(root) / venue / symbol / kind
 
     @property
     def exists(self) -> bool:
         return self._kind_dir.exists()
 
-    def partitions(self) -> tuple[PartitionInfo, ...]:
-        mpath = _manifest_path(self._kind_dir)
-        if mpath.exists():
-            manifest = json.loads(mpath.read_text(encoding="utf-8"))
+    def _partition_plan(self) -> tuple[dict[str, object] | None, tuple[PartitionInfo, ...]]:
+        """返回 (manifest, 分区清单)。有 manifest 时以 manifest 为准并严格校验其结构。"""
+        manifest = _load_manifest(self._kind_dir)
+        if manifest is not None:
             out = []
             for day, entry in sorted((manifest.get("partitions") or {}).items()):
+                assert isinstance(entry, dict)
                 out.append(PartitionInfo(
                     day=day, rows=int(entry["rows"]), first_ts=entry.get("first_ts"),
                     last_ts=entry.get("last_ts"), bytes_=int(entry.get("bytes", 0)),
                     sha256=str(entry.get("sha256", ""))))
-            return tuple(out)
-        # 未定稿（写器仍在追加）：直接扫磁盘分区，保证数据写完即可查（不伪造内容）
+            return manifest, tuple(out)
+        # 未定稿（写器仍在追加）：直接扫磁盘分区，保证数据写完即可查（不伪造内容、不伪造 hash）
         if not self._kind_dir.exists():
-            return ()
+            return None, ()
         out = []
         for day_dir in sorted(p for p in self._kind_dir.iterdir() if p.is_dir()):
             data = day_dir / "data.jsonl"
             if not data.exists():
                 continue
-            first_ts: int | None = None
-            last_ts: int | None = None
-            rows = 0
-            for line in data.read_text(encoding="utf-8").splitlines():
-                if not line.strip():
-                    continue
-                rows += 1
-                ts = int(json.loads(line)["exchange_ts"])
-                first_ts = ts if first_ts is None else first_ts
-                last_ts = ts
-            out.append(PartitionInfo(day=day_dir.name, rows=rows, first_ts=first_ts,
-                                       last_ts=last_ts, bytes_=data.stat().st_size, sha256=""))
-        return tuple(out)
+            scan = _scan_partition(
+                data, key=(self._venue, self._symbol, self._kind), collect=False)
+            out.append(PartitionInfo(day=day_dir.name, rows=scan.rows, first_ts=scan.first_ts,
+                                       last_ts=scan.last_ts, bytes_=scan.bytes_, sha256=""))
+        return None, tuple(out)
+
+    def partitions(self) -> tuple[PartitionInfo, ...]:
+        return self._partition_plan()[1]
 
     def read(self, *, start_ts: int | None = None, end_ts: int | None = None,
              limit: int | None = None) -> tuple[MarketRecord, ...]:
-        """读取区间记录（含端点）；limit 有界。无分片 ⇒ 空元组（不伪造）。"""
+        """读取区间记录（含端点）；limit 有界。无分片 ⇒ 空元组（不伪造）。
+
+        已定稿分片按 manifest 重新核验 sha256 / bytes / rows / first_ts / last_ts；
+        逐行再验键、schema 与时间单调性。任何不一致 fail-closed。
+        """
+        key = (self._venue, self._symbol, self._kind)
+        manifest, infos = self._partition_plan()
+        entries = (manifest or {}).get("partitions") if manifest is not None else None
         result: list[MarketRecord] = []
-        for info in self.partitions():
+        for info in infos:
             path = self._kind_dir / info.day / "data.jsonl"
             if not path.exists():
                 raise MarketDatasetFormatError(f"manifest lists missing partition: {path}")
-            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-                if not line.strip():
-                    continue
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    raise MarketDatasetFormatError(f"{path}:{number}: corrupt JSON: {exc}") from None
-                record = MarketRecord.from_row(row, path=str(path))
+            scan = _scan_partition(path, key=key, collect=True)
+            if entries is not None and info.sha256:
+                _verify_attestation(entries[info.day], scan, path=path, day=info.day)
+            for record in scan.records:
                 if start_ts is not None and record.exchange_ts < start_ts:
                     continue
                 if end_ts is not None and record.exchange_ts > end_ts:

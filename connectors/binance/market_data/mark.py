@@ -35,6 +35,10 @@ class MarkPriceObservation:
     exchange_ts: Milliseconds
     receive_ts: Milliseconds
     process_ts: Milliseconds
+    #: 当前周期资金费率（有符号；正 ⇒ 多付空）；报文缺失 ⇒ None。
+    funding_rate: float | None = None
+    #: 下一次资金费结算时间（毫秒）；报文缺失 ⇒ None。
+    next_funding_time: Milliseconds | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.venue, Venue):
@@ -47,6 +51,17 @@ class MarkPriceObservation:
         if not math.isfinite(price) or price <= 0.0:
             raise MarketDataFormatError(f"MarkPriceObservation.price must be positive and finite, got {self.price!r}")
         object.__setattr__(self, "price", price)
+        if self.funding_rate is not None:
+            rate = float(self.funding_rate)
+            if not math.isfinite(rate) or not -1.0 < rate < 1.0:
+                raise MarketDataFormatError(
+                    f"MarkPriceObservation.funding_rate must be within (-1, 1), got {self.funding_rate!r}")
+            object.__setattr__(self, "funding_rate", rate)
+        for field in ("next_funding_time",):
+            value = getattr(self, field)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+                raise MarketDataFormatError(
+                    f"MarkPriceObservation.{field} must be a non-negative int epoch-ms")
         for field in ("exchange_ts", "receive_ts", "process_ts"):
             value = getattr(self, field)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -73,6 +88,21 @@ def parse_mark_price(
         raise MarketDataFormatError(f"{path}.s: expected {symbol!r}, got {message_symbol!r}")
     price = require_decimal(require_field(message, "p", path=path), path=f"{path}.p")
     exchange_ts = require_int(require_field(message, "E", path=path), path=f"{path}.E")
+    # 资金费字段（`r` = 当前周期费率，`T` = 下次结算时间）；缺失/非法按可选处理，不影响 mark 事实
+    funding_rate = None
+    next_funding_time = None
+    raw_rate = message.get("r")
+    raw_next = message.get("T")
+    if raw_rate is not None:
+        try:
+            funding_rate = float(require_decimal(raw_rate, path=f"{path}.r"))
+        except (TypeError, ValueError, MarketDataFormatError):
+            funding_rate = None
+    if raw_next is not None:
+        try:
+            next_funding_time = require_int(raw_next, path=f"{path}.T")
+        except (TypeError, ValueError, MarketDataFormatError):
+            next_funding_time = None
 
     return MarkPriceObservation(
         venue=Venue.BINANCE,
@@ -81,6 +111,8 @@ def parse_mark_price(
         exchange_ts=exchange_ts,
         receive_ts=receive_ts,
         process_ts=process_ts,
+        funding_rate=funding_rate,
+        next_funding_time=next_funding_time,
     )
 
 

@@ -846,10 +846,19 @@ class ProductApiHandler(BaseHTTPRequestHandler):
 
         self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE, "fact": to_jsonable(view)})
 
-    def _serve_account_timeline(self) -> None:
-        """G3：equity / exposure 时间线（未接线 ⇒ 503；有界由 projection config 决定）。"""
-        buffer = self.service.account_timeline_view()
+    def _serve_account_timeline(self, query: str = "") -> None:
+        """G3：equity / exposure 时间线（未接线 ⇒ 503；有界由 projection config 决定）。
+
+        `?run=<id>` 指向历史 run ⇒ 读该 run 的持久化 account 事实（durable）；
+        缺失 ⇒ 404 明确原因，不返回伪造空曲线。
+        """
+        params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
+        run_id = params.get("run") or None
         config = self.service.projection_config_view()
+        buffer = self.service.account_timeline_view()
+        if run_id is not None and (buffer is None or buffer.run_id != run_id):
+            self._serve_historical_account_timeline(run_id, config)
+            return
         if buffer is None:
             self._error(503, "account_timeline_unavailable",
                         "no bounded account timeline is wired (UNKNOWN, not empty)")
@@ -863,8 +872,56 @@ class ProductApiHandler(BaseHTTPRequestHandler):
 
         timeline = project_account_timeline(buffer.samples(), config=config)
         self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE,
+                              "source": "live",
                               "timeline": to_jsonable(timeline), "counts": buffer.counts,
                               "bounds": self._bounds(config), "run_id": buffer.run_id})
+
+    def _serve_historical_account_timeline(self, run_id: str, config: object) -> None:
+        registry = self.service.run_registry_view()
+        if registry is None:
+            self._error(503, "account_timeline_unavailable",
+                        "no run registry wired for historical account timeline")
+            return
+        if registry.load(run_id) is None:
+            self._error(NOT_FOUND, "unknown_run", run_id)
+            return
+        try:
+            points, unavailable = registry.load_run_facts(run_id, "account", limit=20_000)
+        except Exception as exc:  # noqa: BLE001 - 损坏 ⇒ 明确报错
+            self._error(BAD_REQUEST, "run_facts_unreadable", f"{type(exc).__name__}: {exc}")
+            return
+        if unavailable is not None:
+            self._error(NOT_FOUND, "no_recorded_account_for_run", unavailable)
+            return
+        if config is None:
+            self._error(503, "projection_config_required",
+                        "display bounds are required for the account timeline")
+            return
+        from product.account_timeline import AccountSample, project_account_timeline
+        from product.serialization import to_jsonable
+
+        samples = tuple(
+            AccountSample(
+                ts=int(p["ts"]),
+                equity=p.get("equity") if isinstance(p.get("equity"), (int, float)) else None,
+                balance=p.get("balance") if isinstance(p.get("balance"), (int, float)) else None,
+                position_qty=(p.get("position_qty")
+                                if isinstance(p.get("position_qty"), (int, float)) else None),
+                exposure_total=(p.get("exposure_total")
+                                  if isinstance(p.get("exposure_total"), (int, float)) else None),
+                exposure_confirmed=(p.get("exposure_confirmed")
+                                      if isinstance(p.get("exposure_confirmed"), (int, float)) else None),
+                unrealized_pnl=(p.get("unrealized_pnl")
+                                  if isinstance(p.get("unrealized_pnl"), (int, float)) else None),
+                realized_pnl=(p.get("realized_pnl")
+                                if isinstance(p.get("realized_pnl"), (int, float)) else None))
+            for p in points if isinstance(p, dict) and isinstance(p.get("ts"), int))
+        timeline = project_account_timeline(samples, config=config)
+        self._send_json(200, {"schema_version": SCHEMA_VERSION_VALUE,
+                              "source": "durable", "run_id": run_id,
+                              "timeline": to_jsonable(timeline),
+                              "counts": {"samples": len(samples)},
+                              "bounds": self._bounds(config)})
 
     def _serve_report(self, query: str) -> None:
         """只读 Run Summary（json 默认 / markdown）；F4：`?run=<id>` 读 durable run。"""
@@ -954,7 +1011,7 @@ class ProductApiHandler(BaseHTTPRequestHandler):
             self._serve_execution_safety(path)
             return
         if path == PORTFOLIO_TIMELINE_PATH:
-            self._serve_account_timeline()
+            self._serve_account_timeline(query)
             return
         if path.startswith(f"{FACTS_PATH}/"):
             self._serve_facts(path)

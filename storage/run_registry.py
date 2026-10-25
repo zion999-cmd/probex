@@ -192,8 +192,12 @@ class JsonRunRegistry:
     # ------------------------------------------------------------------ P0001.17：run 级事实持久化
 
     def run_facts_path(self, run_id: str, kind: str) -> Path:
-        """一个 run 的持久化事实文件（`market` = 市场时间线；`facts` = decision/order/fill 事实）。"""
-        if kind not in ("market", "facts", "trades"):
+        """一个 run 的持久化事实文件。
+
+        - `market`：市场时间线点；`account`：equity/exposure 采样点；
+        - `facts`：decision/order/fill 事实；`trades`：逐笔市场成交。
+        """
+        if kind not in ("market", "facts", "trades", "account"):
             raise RunRegistryError(f"unknown run fact kind {kind!r}")
         return self.root / RUNS_DIR / f"{run_id}.{kind}.jsonl"
 

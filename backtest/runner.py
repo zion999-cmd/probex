@@ -12,7 +12,7 @@ from pathlib import Path
 from backtest import BacktestError, BacktestStatus
 from backtest.driver import BacktestConfig, run_backtest
 from backtest.multi_driver import MultiBacktestConfig, run_multi_backtest
-from backtest.identity import dataset_identity, run_identity
+from backtest.identity import identity_for_input, run_identity
 from backtest.report import write_artifacts
 from backtest.prediction import local_trial_runtime
 from runtime.maker_config import build_maker_policy
@@ -48,6 +48,12 @@ def _base_config_kwargs(values: dict[str, object]) -> dict:
         max_book_age_ms=(int(values["risk.max_book_age_ms"])
                            if "risk.max_book_age_ms" in values else None),
         seed=(int(values["backtest.seed"]) if "backtest.seed" in values else None),
+        funding_enabled=bool(values.get("backtest.funding_enabled", False)),
+        adverse_selection_threshold_bps=num("prediction.adverse_selection_threshold_bps"),
+        bucket_edge_bps=num("evaluation.bucket_edge_bps"),
+        bucket_strong_bps=num("evaluation.bucket_strong_bps"),
+        taker_slippage_bps=num("simulation.taker_slippage_bps"),
+        taker_fee_rate=num("backtest.taker_fee_rate"),
     )
 
 
@@ -87,6 +93,21 @@ def load_multi_config(values: dict[str, object]) -> "MultiBacktestConfig":
         quantity_step_by_symbol=_table("backtest.quantity_step_by_symbol"))
 
 
+def load_bar_config(values: dict[str, object], mode: str) -> "BarBacktestConfig":
+    """bar 回测配置（成交模式必填且受信；其余与普通回测一致）。"""
+    from backtest.bar_driver import BAR_EXECUTION_MODES, BarBacktestConfig
+
+    if mode not in BAR_EXECUTION_MODES:
+        raise BacktestError(BacktestStatus.INVALID_INPUT,
+                              f"invalid backtest.bar_mode {mode!r}, expected {BAR_EXECUTION_MODES}")
+    missing = [k for k in REQUIRED_CONFIG_KEYS if k not in values]
+    if missing:
+        raise BacktestError(BacktestStatus.INVALID_INPUT,
+                              f"missing required backtest config keys: {missing}")
+    base = _base_config_kwargs(values)
+    return BarBacktestConfig(**base, bar_mode=mode)
+
+
 def execute_backtest(*, dataset: str | Path, config_path: str | Path, out_dir: str | Path,
                       prediction: bool = True) -> dict[str, object]:
     """运行一次回测并写产物，返回 summary dict（含 status/paths/result_hash）。"""
@@ -102,8 +123,15 @@ def execute_backtest(*, dataset: str | Path, config_path: str | Path, out_dir: s
         raise BacktestError(BacktestStatus.INVALID_INPUT,
                               f"config is not valid JSON: {exc}") from exc
 
-    identity = dataset_identity([dataset])
-    is_multi = bool(values.get("backtest.symbols"))
+    raw_symbols = values.get("backtest.symbols")
+    if isinstance(raw_symbols, str):
+        declared_symbols = tuple(s.strip() for s in raw_symbols.split(",") if s.strip())
+    elif isinstance(raw_symbols, (list, tuple)):
+        declared_symbols = tuple(str(s) for s in raw_symbols)
+    else:
+        declared_symbols = ()
+    identity = identity_for_input(dataset, symbols=(declared_symbols or None))
+    is_multi = bool(raw_symbols)
     cfg = load_multi_config(values) if is_multi else load_config(values)
     run_id, input_hash = run_identity(
         code_version=_git_commit() or "unknown",
@@ -132,6 +160,36 @@ def execute_backtest(*, dataset: str | Path, config_path: str | Path, out_dir: s
         policy = build_maker_policy(values)
         decision_map = (None if policy is None else (lambda **kw: policy.decide(**kw)))
 
+    bar_mode = values.get("backtest.bar_mode")
+    bar_dataset_files = None
+    if bar_mode is not None:
+        from backtest.bar_driver import run_bar_backtest
+
+        bar_cfg = load_bar_config(values, str(bar_mode))
+        # run identity 必须包含 bar_mode/粒度（同事件数据跑 event-driven 与 bar 是不同实验）
+        run_id, _input_hash = run_identity(
+            code_version=_git_commit() or "unknown",
+            dataset_sha256=identity["sha256"], config=bar_cfg.canonical(),
+            seed=bar_cfg.seed)
+        result = run_bar_backtest(
+            dataset, bar_cfg, run_id=run_id, dataset_sha256=identity["sha256"],
+            decision_fn=None)
+        if dataset.is_dir():
+            bar_dataset_files = sorted(str(p.relative_to(dataset))
+                                          for p in dataset.rglob("data.jsonl"))
+        else:
+            bar_dataset_files = [dataset.name]
+        paths = write_artifacts(result, out_dir=out_dir, dataset_files=bar_dataset_files)
+        return {
+            "status": result.status.value, "run_id": result.run_id,
+            "reason": result.reason,
+            "paths": {k: str(v) for k, v in paths.items() if k != "result_hash"},
+            "result_hash": paths.get("result_hash"),
+            "submits": result.trace.submits, "fills": result.trace.fills,
+            "decisions": result.trace.decisions,
+            "risk_rejects": result.trace.risk_rejects,
+        }
+
     pred = local_trial_runtime() if prediction else None
 
     if is_multi:
@@ -142,8 +200,13 @@ def execute_backtest(*, dataset: str | Path, config_path: str | Path, out_dir: s
         result = run_backtest(dataset, cfg, run_id=run_id,
                                dataset_sha256=identity["sha256"],
                                decision_fn=decision_map, prediction_runtime=pred)
+    if dataset.is_dir():
+        dataset_files = sorted(str(p.relative_to(dataset))
+                                for p in dataset.rglob("data.jsonl"))
+    else:
+        dataset_files = [dataset.name]
     paths = write_artifacts(result, out_dir=out_dir,
-                              dataset_files=[dataset.name])
+                              dataset_files=dataset_files)
     summary = {
         "status": result.status.value,
         "run_id": result.run_id,
