@@ -2,8 +2,32 @@
 import { ENDPOINTS, fetchJson, fetchSnapshot } from "/ui/client/api.js";
 import { escapeHtml, fact } from "/ui/client/render.js";
 import { SURFACES, surfaceForHash } from "/ui/app/surfaces.js";
-import { BLOCKER_SECTION, resolveRoute, surfaceHash } from "/ui/app/navigation.js";
+import { resolveRoute } from "/ui/app/navigation.js";
 import { mountAssistant } from "/ui/assistant/drawer.js";
+
+/**
+ * P0018：raw blocker 日志条 → 单行聚合摘要。
+ * 返回 {state, text, groups}：state ∈ OK/DEGRADED/BLOCKING/UNKNOWN；
+ * groups 为 owner → 数量（用于 title/可访问名，不在条带上铺原始事件）。
+ */
+export function summarizeBlockers(blockers) {
+  const list = Array.isArray(blockers) ? blockers : [];
+  const groups = new Map();
+  let blocking = 0;
+  for (const item of list) {
+    const owner = String((item && item.owner) || "UNKNOWN");
+    groups.set(owner, (groups.get(owner) || 0) + 1);
+    if (item && item.severity === "BLOCKING") blocking += 1;
+  }
+  let state = "OK";
+  if (blocking > 0) state = "BLOCKING";
+  else if (list.length > 0) state = "DEGRADED";
+  const breakdown = [...groups.entries()].map(([owner, count]) => `${owner} ${count}`).join(" · ");
+  const text = state === "OK"
+    ? "● ALL CLEAR · 0 blockers"
+    : `● ${state} · ${list.length} blocker${list.length === 1 ? "" : "s"}${breakdown ? ` · ${breakdown}` : ""}`;
+  return { state, text, groups: Object.fromEntries(groups) };
+}
 
 export const POLL_INTERVAL_MS = 2000;
 // P0001.10.2 §6：正文“可以轮询 snapshot”。轮询（非 WS 推送，WS 按提案延期）。
@@ -27,7 +51,7 @@ function renderNav(surface) {
 
 async function renderHeaderAndBlockers() {
   const banner = document.getElementById("banner");
-  const strip = document.getElementById("blockers");
+  const strip = document.getElementById("global-status");
   try {
     const snapshot = await fetchSnapshot();
     const id = snapshot.runtime;
@@ -54,25 +78,21 @@ async function renderHeaderAndBlockers() {
       `可执行的运行中动作以 Action Manifest 的 availability 为准（见 ` +
       `<a href="#/system/capabilities">System → capabilities</a>）。</div></details>`,
     ].join(" · ");
-    strip.innerHTML = blockers.length === 0
-      ? '<span class="known">no blockers</span>'
-      : blockers.map((b) => {
-          const cls = b.severity === "BLOCKING" ? "bad" : "unknown";
-          // F-16：Blocker → System 对应 section（canonical owner 映射）
-          const href = surfaceHash("system", BLOCKER_SECTION[b.owner] || "execution");
-          const explanation = b.explanation || {};
-          const title = explanation.explanation || b.message;
-          // 要求：原因 / 影响范围（owner）/ 下一步 必须在条带上直接可见，不能只藏在 title。
-          const next = explanation.suggested_next_step
-            ? ` <span class="blocker-next">→ ${escapeHtml(explanation.suggested_next_step)}</span>` : "";
-          return `<span class="blocker-item"><a class="${cls}" href="${href}" ` +
-            `title="${escapeHtml(title)}">${escapeHtml(b.owner)}:${escapeHtml(b.reason_code)}</a>` +
-            ` <span class="muted">[${escapeHtml(b.severity)}] ${escapeHtml(b.message)}</span>${next}</span>`;
-        }).join("");
-    document.getElementById("strip").dataset.blocking = String(blocking.length);
+    // P0018：全局条带只显示聚合摘要；原始 blocker/event 行属于 Activity/Evidence。
+    const summary = summarizeBlockers(blockers);
+    strip.textContent = summary.text;
+    strip.dataset.state = summary.state;
+    strip.title = summary.state === "OK"
+      ? "no blockers"
+      : Object.entries(summary.groups)
+          .map(([owner, count]) => `${owner}: ${count}`).join("\n") +
+        "\n\nopen Activity → Evidence for reasons and next steps";
+    document.getElementById("strip").dataset.blocking =
+      String(blockers.filter((b) => b.severity === "BLOCKING").length);
   } catch (error) {
     banner.innerHTML = `<span class="bad">snapshot unavailable: ${escapeHtml(String(error))}</span>`;
-    strip.innerHTML = '<span class="bad">blockers UNKNOWN</span>';
+    strip.textContent = "● UNKNOWN · blockers unavailable";
+    strip.dataset.state = "UNKNOWN";
   }
 }
 

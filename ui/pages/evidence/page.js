@@ -42,8 +42,22 @@ export async function render(rest = []) {
   }
   return section("Decision trace", trace) +
     section(`Raw facts (G2)${hasFactTarget ? ` · ${escapeHtml(kind)}:${escapeHtml(identity)}` : ""}`, factsBlock) +
-    section("Blockers", rows([
+    `<section id="evidence-blockers">` +
+      `<h2>Blockers</h2>` + rows([
       ["readiness blockers", escapeHtml((evidence.readiness_blockers || []).join(", ") || "none")],
       ["risk rejects", escapeHtml((evidence.risk_rejects || []).join(", ") || "none")],
-    ]));
+    ]) + `</section>`;
+}
+
+/** P0018：全局 blocker 摘要点击后落到本页 Blockers 段（不重构 Activity，仅锚定）。 */
+export async function mount() {
+  try {
+    const { hashQuery } = await import("/ui/app/navigation.js");
+    if (hashQuery().get("focus") !== "blockers") return;
+    const target = document.getElementById("evidence-blockers");
+    if (target) {
+      target.scrollIntoView({ block: "center" });
+      target.classList.add("focus-flash");
+    }
+  } catch { /* 锚定失败不阻塞页面 */ }
 }

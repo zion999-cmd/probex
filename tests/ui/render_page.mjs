@@ -24,7 +24,8 @@ const EXTRA_DEPS = {
                               // Market View 交易对选择器（P0001.12.1 Market 工作区）
                               "ui/pages/market/symbol_selector.js"],
   "ui/pages/performance/page.js": ["ui/client/charts.js", "ui/pages/performance/charts.js"],
-  "ui/pages/monitor/page.js": ["ui/client/charts.js", "ui/monitor/sparklines.js"],
+  "ui/pages/monitor/page.js": ["ui/client/charts.js", "ui/monitor/sparklines.js",
+                              "ui/client/console.js", "ui/assistant/actions.js"],
   "ui/pages/system/page.js": ["ui/client/charts.js", "ui/system/ops_charts.js"],
   "ui/pages/activity/page.js": ["ui/client/charts.js", "ui/client/selection.js",
                                 "ui/pages/market/prediction_panel.js"],

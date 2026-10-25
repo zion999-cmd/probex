@@ -1048,3 +1048,11 @@ D 非阻塞快照抓取（仅缓解新鲜度，可与 A/B/C 组合）。
    - 仅接受 BAR 事件（混入 LOB/trade ⇒ INVALID_INPUT）；配置 `backtest.bar_mode`，run identity 含粒度/模式；报告标注 `bar (<mode>)`。
 8. 未做（待授权/裁决）：durable trading checkpoint（设计性 NOT Included 保留）；
    历史 peak/equity 反推（D-044/D-046 禁止）；taker emergency 策略语义；真实网络/真实交易项。
+
+## P0018 Phase 1（2026-10-25，人类定稿 Proposal，实现侧无业务语义裁决）
+
+- UI IA 正式分层：Monitor=操作员四问（正常吗/在做什么/资金风险/需处理吗），Market=研究，Activity=因果审计，Performance=研究评价，System=工程诊断。
+- 全局 raw blocker 日志条取消（`#blockers` 删除），替换为聚合摘要 `#global-status`（OK/DEGRADED/BLOCKING + 按 owner 计数），点击导航 `#/activity/evidence?focus=blockers`（Evidence 新增 focus 锚定）。
+- Assistant drawer 默认 collapsed，展开态仅存 sessionStorage；数据刷新不重建 drawer。
+- Monitor 重构为 primary/secondary/diagnostic 三层；render 首帧填值（Node harness 兼容），refresh 只 patch `data-bind`/列表节点（DOM identity 由 CDP 15 断言证明）；动作降噪为 Inspect issues/View activity/Reconcile(仅 AVAILABLE)。
+- 被取代的旧契约：surface_architecture 的 Monitor 必需字段与 strip 断言按 P0018 语义更新（事实未删除，诊断移入折叠 details + System/Evidence 链接）。

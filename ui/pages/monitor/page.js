@@ -1,207 +1,324 @@
-/** Monitor：30 秒理解当前系统状态（P0001.12.1 §1）。 */
-import { ENDPOINTS, fetchJson, fetchOrUnavailable, fetchSnapshot, reasonCatalog } from "/ui/client/api.js";
-import { escapeHtml, fact, positionFact, reasonCell, rows, section } from "/ui/client/render.js";
-import { BLOCKER_SECTION, surfaceHash } from "/ui/app/navigation.js";
-import { SURFACES } from "/ui/app/surfaces.js";
-import { mountSparklines, sparklinesSection } from "/ui/monitor/sparklines.js";
+/**
+ * Monitor（P0018 IA 重构）——只回答四件事：
+ *   1. 系统现在是否正常？  2. 当前运行什么？
+ *   3. 资金/仓位/风险怎样？  4. 是否需要人工处理？
+ *
+ * 渲染契约（P0018 §8）：
+ * - render() 只在 route 进入时构建一次稳定 DOM（card/container 带固定 id/data-bind），
+ *   首帧即填入真实值（SSR/Node 渲染同样成立，不靠 microtask）；
+ * - refresh() 只 patch 数据节点的 textContent/className 与列表容器内容，
+ *   绝不整体替换 workspace DOM（scroll/展开/输入态因此天然保留）。
+ *
+ * 原始 blocker/event 行不在本页铺出（全局条带只给聚合摘要）：
+ * 原因/下一步/证据一律去 Activity → Evidence；工程细节收进折叠的 diagnostics。
+ */
+import { ENDPOINTS, fetchOrUnavailable, fetchJson, fetchSnapshot } from "/ui/client/api.js";
+import { escapeHtml, fact } from "/ui/client/render.js";
+import { summarizeBlockers } from "/ui/client/console.js";
+import { sparklinesSection } from "/ui/monitor/sparklines.js";
 import { invoke } from "/ui/assistant/actions.js";
-
-let lastTimeline = null;
 
 export const title = "Monitor";
 export const slug = "monitor";
 
-export async function render() {
+let lastTimeline = null;
+
+// ------------------------------------------------------------------ 模型计算
+
+function healthClass(status) {
+  const value = String(status || "").toUpperCase();
+  if (value === "HEALTHY" || value === "NORMAL" || value === "RUNNING" || value === "ACTIVE" || value === "both") return "known";
+  if (value === "UNKNOWN" || value.includes("UNAVAILABLE")) return "unknown";
+  return "bad";
+}
+
+async function gatherModel() {
   const snapshot = await fetchSnapshot();
-  const manifest = await fetchOrUnavailable(ENDPOINTS.actions);
-  const overlays = await fetchJson(ENDPOINTS.marketOverlays);
-  const decisions = (overlays.overlays || {}).decisions || [];
-  const orders = snapshot.execution.active_orders || [];
-  const metrics = rows([
-    ["equity", fact(snapshot.portfolio.equity)],
-    ["realized pnl", fact(snapshot.portfolio.realized_pnl)],
-    ["unrealized pnl", fact(snapshot.portfolio.unrealized_pnl)],
-    ["position", positionFact(snapshot.portfolio.position_qty)],
-    ["open order exposure", fact(snapshot.execution.open_order_exposure)],
-    ["uncertain exposure", fact(snapshot.execution.uncertain_exposure)],
-    ["active orders", String(orders.length)],
-    ["readiness", fact(snapshot.readiness.status)],
-  ]);
-  const catalog = await reasonCatalog();
-  const blockers = (snapshot.blockers || []).length
-    ? (snapshot.blockers || []).map((b) => [b.severity + " · " + b.owner,
-        // F-16：Blocker → System 对应 section；F-09：原始 code + 人类解释
-        `<a href="${surfaceHash("system", BLOCKER_SECTION[b.owner] || "execution")}">${reasonCell(b.reason_code, catalog)}</a>`])
-    : [["blockers", "none"]];
-  // P0001.15 §22：instrument / venue / reference price / connector health（两个 connector 分开）
-  const instrument = snapshot.instrument || {};
-  const venue = snapshot.venue || {};
-  const reference = snapshot.reference_price || {};
-  const identityRow = rows([
-    ["mode / environment", `${fact(snapshot.runtime.mode)} · ${fact(venue.environment)}`],
-    ["instrument", `${fact(instrument.instrument_id)} · ${fact(instrument.symbol)}`],
-    ["asset class", fact(instrument.asset_class)],
-    ["product type", fact(instrument.product_type)],
-    ["venue", `${fact(venue.venue_id)} (${fact(venue.environment)})`],
-    ["reference price", `${fact(reference.price_type)} ${fact(reference.price)}`],
-    ["reference source", fact(reference.source)],
-    ["reference freshness (ms)", fact(reference.freshness_ms)],
-    ["reference reason", fact(reference.reason)],
-  ]);
-  const connectorRow = rows([
-    ["market connector", `${fact(snapshot.market_connector_health.connector_id)} · ${fact(snapshot.market_connector_health.connection_state)}`],
-    ["market event age (ms)", fact(snapshot.market_connector_health.event_age_ms)],
-    ["private connector", `${fact(snapshot.private_connector_health.connector_id)} · ${fact(snapshot.private_connector_health.connection_state)}`],
-    ["private event age (ms)", fact(snapshot.private_connector_health.event_age_ms)],
-  ]);
-  const market = rows([
-    ["market health", fact(snapshot.market.healthy)],
-    ["tradeable", fact(snapshot.market.tradeable)],
-    ["best bid / ask", `${fact(snapshot.market.best_bid)} / ${fact(snapshot.market.best_ask)}`],
-    ["spread (bps)", fact(snapshot.market.spread_bps)],
-    ["prediction fresh", fact(snapshot.prediction.freshest)],
-    ["prediction source", predictionSourceLabel(snapshot.prediction)],
-    ["strategy mode", fact(snapshot.strategy.mode)],
-    ["blocked by", fact(snapshot.strategy.blocked_by)],
-    ["kill switch", fact(snapshot.risk.kill_switch_mode)],
-  ]);
-  const quotes = decisions.length
-    ? decisions.slice(-5).map((d) => `<div class="row"><span class="k">${escapeHtml(d.side)}</span>` +
-        `<span class="v">${escapeHtml(d.action)} @ ${fact(d.price)}</span></div>`).join("")
-    : '<div class="row"><span class="k">quotes</span><span class="v unknown">UNKNOWN (no decisions recorded)</span></div>';
-  const orderRows = orders.length
-    ? orders.map((o) => `<div class="row"><span class="k">${escapeHtml(o.client_order_id)}</span>` +
-        `<span class="v">${escapeHtml(o.side)} ${escapeHtml(o.status)} @ ${fact(o.price)}</span></div>`).join("")
-    : '<div class="row"><span class="k">orders</span><span class="v known">0</span></div>';
-  const [execHealth, execRate, execReconciliation, timeline] = await Promise.all([
-    fetchOrUnavailable(ENDPOINTS.executionHealth), fetchOrUnavailable(ENDPOINTS.executionRateLimits),
-    fetchOrUnavailable(ENDPOINTS.executionReconciliation), fetchOrUnavailable(ENDPOINTS.portfolioTimeline),
-  ]);
-  lastTimeline = timeline;
-  const runtimeRow = rows([
-    ["runtime state", fact(snapshot.health.runtime_state)],
-    ["runtime detail", fact(snapshot.health.runtime_detail)],
-    ["quoting", fact(snapshot.health.runtime_quoting)],
-    ["run", fact(snapshot.health.runtime_run_id)],
-  ]);
-  const execSummary = rows([
-    ["execution health", execHealth.unavailable
-      ? `<span class="unknown">UNKNOWN (${escapeHtml(execHealth.unavailable)})</span>`
-      : `<span class="${execHealth.health.status === "HEALTHY" ? "known" : "bad"}">${escapeHtml(execHealth.health.status)}</span>`],
-    ["request budget", execRate.unavailable ? '<span class="unknown">UNKNOWN</span>'
-      : fact(execRate.governor.request.remaining)],
-    ["order budget", execRate.unavailable ? '<span class="unknown">UNKNOWN</span>'
-      : fact(execRate.governor.order.remaining)],
-    ["uncertain exposure", fact(snapshot.execution.uncertain_exposure)],
-    ["reconciliation", execReconciliation.unavailable ? '<span class="unknown">UNKNOWN</span>'
-      : fact(execReconciliation.reconciliation.state)],
-  ]);
-  const recent = decisions.slice(-5).reverse().map((d) =>
-    `<div class="row"><span class="k">${d.ts}</span><span class="v">${escapeHtml(d.action)} ${escapeHtml(d.side)} ` +
-    `${fact(d.decision_id)}</span></div>`).join("") ||
-    '<div class="row"><span class="k">activity</span><span class="v unknown">UNKNOWN (nothing recorded)</span></div>';
-  const surfaceNav = SURFACES.map((s) => `<a href="#/${s.slug}">${escapeHtml(s.title)}</a>`).join(" · ");
-  // F-12/F-15：四层健康必须可区分（liveness 不暗示可交易）
-  const ops = snapshot.ops || {};
-  const opsRow = rows([
-    ["process live", fact(ops.process_live)],
-    ["runtime state", fact(ops.runtime_state)],
-    ["trade readiness", fact(ops.trade_readiness)],
-    ["execution health", fact(ops.execution_health)],
-    ["operational warning", fact(ops.operational_warning)],
-  ]);
-  return section("Instrument / venue", identityRow) + section("Connectors", connectorRow) +
-    section("Process / runtime / readiness / execution", opsRow) +
-    section("Runtime / loop", runtimeRow) + section("System now", metrics) +
-    actionsSection(manifest) +
-    `<section class="wide"><h2>Trends (equity / PnL / exposure)</h2>${sparklinesSection()}</section>` +
-    section("Execution safety", execSummary) +
-    section("Blockers / warnings", rows(blockers)) +
-    section("Market / current quotes", market + quotes) +
-    section("Position / active orders", orderRows) +
-    section("Recent activity", recent) +
-    section("Surfaces", surfaceNav);
+  let execHealth = { unavailable: null };
+  try { execHealth = await fetchOrUnavailable(ENDPOINTS.executionHealth); } catch { /* 保留 UNKNOWN */ }
+  const execStatus = execHealth.unavailable ? "UNKNOWN"
+    : String(execHealth.health?.status ?? "UNKNOWN");
+  let manifest = { unavailable: "fetch-failed" };
+  try { manifest = await fetchOrUnavailable(ENDPOINTS.actions); } catch { /* reconcile 不渲染 */ }
+  let decisions = [];
+  try {
+    const overlays = await fetchJson(ENDPOINTS.marketOverlays);
+    decisions = overlays.overlays?.decisions || [];
+  } catch { decisions = []; }
+  const blockers = Array.isArray(snapshot.blockers) ? snapshot.blockers : [];
+  return { snapshot, execStatus, manifest, decisions, summary: summarizeBlockers(blockers) };
 }
 
-/**
- * P0001.12.3：Monitor 必须能回答“我现在能执行哪些操作？”
- * 动作**只能**来自 Action Manifest；只有 AVAILABLE 的才可点击，其余显示原因（不伪装可操作）。
- * 执行仍走 Action Gateway（含 confirmation），结果原样回显（SUCCEEDED / REFUSED / FAILED / UNKNOWN）。
- */
-function actionsSection(manifest) {
-  const actions = (manifest && manifest.actions) || [];
-  if (!actions.length) {
-    return section("Available actions", rows([["actions", '<span class="unknown">UNKNOWN (manifest unavailable)</span>']]));
+/** 纯计算：snapshot + execStatus → 各 data-bind 节点的文本/类（render 与 refresh 共用）。 */
+function bindValues(model) {
+  const { snapshot, execStatus } = model;
+  const id = snapshot.runtime;
+  const pos = snapshot.portfolio?.position_qty;
+  const positionText = pos?.known ? (Number(pos.value) === 0 ? "flat (0)" : compact(pos.value)) : "UNKNOWN";
+  const marketHealthy = snapshot.market?.healthy;
+  const marketLabel = marketHealthy?.known
+    ? (marketHealthy.value ? "HEALTHY" : "UNHEALTHY") +
+      (snapshot.market?.tradeable?.known ? (snapshot.market.tradeable.value ? " · tradeable" : " · not tradeable") : "")
+    : "UNKNOWN";
+  const strategyMode = snapshot.strategy?.mode;
+  const readiness = snapshot.readiness?.status;
+  return {
+    mode: { text: String(id.mode ?? "UNKNOWN"), cls: "" },
+    instrument: { text: String(id.symbol ?? "UNKNOWN"), cls: "" },
+    runtime_state: { text: `${String(snapshot.health?.runtime_state?.value ?? "runtime UNKNOWN")} · ` +
+        `${String(id.venue ?? "")} · ${String(id.environment ?? "")}`, cls: "muted" },
+    overall_health: { text: model.summary.state, cls: "health-pill " + model.summary.state.toLowerCase() },
+    equity: factModel(snapshot.portfolio?.equity),
+    realized_pnl: factModel(snapshot.portfolio?.realized_pnl),
+    unrealized_pnl: factModel(snapshot.portfolio?.unrealized_pnl),
+    position: { text: positionText, cls: pos?.known ? "known" : "unknown",
+                 title: pos?.known ? String(pos.value ?? "") : String(pos?.reason || "unknown") },
+    exposure: factModel(snapshot.execution?.open_order_exposure),
+    market_health: { text: marketLabel, cls: "chip-value " + healthClass(marketLabel) },
+    strategy_state: { text: strategyMode?.known ? String(strategyMode.value) : "UNKNOWN",
+                       cls: "chip-value " + (strategyMode?.known ? "known" : "unknown") },
+    execution_health: { text: execStatus, cls: "chip-value " + healthClass(execStatus) },
+    readiness: { text: readiness?.known ? String(readiness.value) : "UNKNOWN",
+                  cls: "chip-value " + healthClass(readiness?.value) },
+    attention: { text: model.summary.text, cls: "", state: model.summary.state },
+  };
+}
+
+function factModel(factValue) {
+  if (factValue && typeof factValue === "object" && "known" in factValue) {
+    return {
+      text: factValue.known
+        ? (typeof factValue.value === "number" ? compact(factValue.value) : String(factValue.value ?? "null"))
+        : "UNKNOWN",
+      cls: factValue.known ? "known" : "unknown",
+      title: factValue.known ? String(factValue.value ?? "") : String(factValue.reason || "unknown"),
+    };
   }
-  const runnable = actions.filter((a) => availabilityOf(a) === "AVAILABLE");
-  const blocked = actions.filter((a) => availabilityOf(a) !== "AVAILABLE");
-  const buttons = runnable.length
-    ? runnable.map((a) => `<button data-action="${escapeHtml(a.action_id)}" ` +
-        `data-confirm="${a.confirmation_required ? "1" : ""}">${escapeHtml(a.action_id)}` +
-        `${a.confirmation_required ? " (confirm)" : ""}</button>`).join(" ")
-    : '<span class="unknown">none available now</span>';
-  const blockedRows = blocked.slice(0, 12).map((a) => [escapeHtml(a.action_id),
-    `<span class="unknown">${escapeHtml(availabilityOf(a))}</span> ` +
-    `<span class="muted">${escapeHtml(unavailableReason(a) || "")}</span>`]);
-  return section("Available actions",
-    rows([["runnable now", buttons],
-      ["note", '<span class="muted">动作来自 Action Manifest；经 Action Gateway 执行（L2 需确认）。' +
-        '资本类动作在设计中不可用。</span>']]) +
-    `<div id="monitor-action-status" class="row"><span class="k">last action</span><span class="v">—</span></div>` +
-    (blockedRows.length ? `<div class="muted">unavailable (${blocked.length})</div>` +
-      blockedRows.map(([id, why]) => `<div class="row"><span class="k">${id}</span><span class="v">${why}</span></div>`).join("")
-      : ""));
+  return { text: String(factValue ?? "UNKNOWN"), cls: "" };
 }
 
-function availabilityOf(action) {
-  const value = action && action.availability;
-  if (typeof value === "string") return value;
-  if (value && typeof value === "object") return value.state || value.value || "UNKNOWN";
-  return "UNKNOWN";
+/** 仪表盘数值紧凑化：消除浮点尾噪（保留 8 位有效数字）。 */
+function compact(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return String(value);
+  return String(Number(n.toPrecision(8)));
 }
 
-function unavailableReason(action) {
-  const value = action && action.availability;
-  if (value && typeof value === "object") return value.reason || value.unavailable_reason || "";
-  return action && (action.unavailable_reason || "");
+// ------------------------------------------------------------------ 稳定结构
+
+function kpi(label, bind, value, titleText) {
+  const v = value || {};
+  const cls = ["kpi-value", v.cls].filter(Boolean).join(" ");
+  return `<div class="kpi"${titleText ? ` title="${escapeHtml(titleText)}"` : ""}>` +
+    `<div class="kpi-label">${escapeHtml(label)}</div>` +
+    `<div class="${cls}" data-bind="${bind}"${v.title ? ` title="${escapeHtml(v.title)}"` : ""}>` +
+    `${escapeHtml(v.text ?? "…")}</div></div>`;
 }
 
-/** 动作按钮：真实调用 Gateway，两步确认；状态如实回显（无假成功）。 */
-async function mountActions() {
-  const host = document.getElementById("monitor-action-status");
-  if (!host) return;
-  const status = host.querySelector(".v");
-  document.querySelectorAll("button[data-action]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      button.disabled = true;
-      status.innerHTML = '<span class="unknown">pending…</span>';
-      let outcome = await invoke(button.dataset.action, { surface: "monitor" });
-      if (outcome.status === "CONFIRMATION_REQUIRED") {
-        status.innerHTML = '<span class="unknown">CONFIRMATION_REQUIRED — 确认执行…</span>';
-        outcome = await invoke(button.dataset.action,
-          { surface: "monitor", confirmation: outcome.confirmation_id });
-      }
-      const cls = outcome.status === "SUCCEEDED" ? "known" : "bad";
-      status.innerHTML = `<span class="${cls}">${escapeHtml(outcome.status)}</span> ` +
-        escapeHtml(outcome.reason_code || "");
-      button.disabled = false;
-    });
+function healthChip(label, bind, value) {
+  const v = value || {};
+  return `<div class="health-chip"><span class="kpi-label">${escapeHtml(label)}</span>` +
+    `<span class="${escapeHtml(v.cls || "chip-value")}" data-bind="${bind}"` +
+    `${v.title ? ` title="${escapeHtml(v.title)}"` : ""}>${escapeHtml(v.text ?? "…")}</span></div>`;
+}
+
+function statusLine(values, snapshot) {
+  const id = snapshot.runtime;
+  const modeTagClass = `tag mode-${String(id.mode || "").toLowerCase()}`;
+  const pill = values.overall_health;
+  return `
+    <div class="statusline">
+      <span class="${modeTagClass}" data-bind="mode">${escapeHtml(values.mode.text)}</span>
+      <span data-bind="instrument">${escapeHtml(values.instrument.text)}</span>
+      <span class="muted" data-bind="runtime_state">${escapeHtml(values.runtime_state.text)}</span>
+      <span class="spacer"></span>
+      <span class="${escapeHtml(pill.cls)}" data-bind="overall_health">${escapeHtml(pill.text)}</span>
+    </div>`;
+}
+
+function ordersHtml(snapshot) {
+  const orders = snapshot.execution?.active_orders || [];
+  if (!orders.length) {
+    return '<div class="row"><span class="k">active</span><span class="v known">0</span></div>';
+  }
+  return orders.slice(0, 8).map((o) => {
+    const raw = o.client_order_id;
+    const cid = raw && typeof raw === "object" ? (raw.known ? shortId(raw.value) : "UNKNOWN") : shortId(raw);
+    const title = raw && typeof raw === "object" ? String(raw.value ?? "") : String(raw ?? "");
+    return `<div class="row"><span class="k" title="${escapeHtml(title)}">${escapeHtml(cid)}</span>` +
+      `<span class="v">${escapeHtml(o.side || "")} ${escapeHtml(o.status || "")} @ ${fact(o.price)}</span></div>`;
+  }).join("");
+}
+
+function activityHtml(decisions) {
+  if (!decisions.length) {
+    return '<div class="row"><span class="k">activity</span>' +
+      '<span class="v unknown">UNKNOWN (nothing recorded)</span></div>';
+  }
+  return decisions.slice(-5).reverse().map((d) =>
+    `<div class="row"><span class="k">${escapeHtml(String(d.ts ?? ""))}</span>` +
+    `<span class="v">${escapeHtml(d.action || "")} ${escapeHtml(d.side || "")}</span></div>`).join("");
+}
+
+function diagnosticsHtml(snapshot, execStatus) {
+  const mc = snapshot.market_connector_health || {};
+  const pc = snapshot.private_connector_health || {};
+  const ref = snapshot.reference_price || {};
+  const row = (k, v) => `<div class="row"><span class="k">${escapeHtml(k)}</span><span class="v">${v}</span></div>`;
+  return {
+    connections:
+      row("market connection", `${fact(mc.connection_state)} <span class="muted">${fact(mc.event_age_ms)} ms</span>`) +
+      row("private connection", `${fact(pc.connection_state)} <span class="muted">${fact(pc.event_age_ms)} ms</span>`) +
+      row("reference", `${fact(ref.price_type)} ${fact(ref.price)} · ${fact(ref.source)}`) +
+      row("reference freshness (ms)", fact(ref.freshness_ms)),
+    execution:
+      row("execution health", `<span class="${healthClass(execStatus)}">${escapeHtml(execStatus)}</span>`) +
+      row("uncertain exposure", fact(snapshot.execution?.uncertain_exposure)) +
+      row("kill switch", fact(snapshot.risk?.kill_switch_mode)),
+  };
+}
+
+function attentionActionsHtml(manifest) {
+  const links =
+    '<a class="action-link" href="#/activity/evidence?focus=blockers">Inspect issues</a>' +
+    '<a class="action-link" href="#/activity">View activity</a>';
+  const action = !manifest.unavailable && Array.isArray(manifest.actions)
+    ? manifest.actions.find((a) => a.action_id === "runtime.request_reconciliation") : null;
+  const state = action && (action.availability?.state || action.availability?.value || action.availability);
+  return links + (state === "AVAILABLE"
+    ? '<button id="monitor-reconcile" data-confirm="1">Reconcile</button>' : "");
+}
+
+function primaryHtml(model, values) {
+  const attention = values.attention;
+  return `
+  <section class="wide monitor-primary" id="monitor-primary">
+    ${statusLine(values, model.snapshot)}
+    <div class="kpi-row">
+      ${kpi("equity", "equity", values.equity)}
+      ${kpi("realized PnL", "realized_pnl", values.realized_pnl)}
+      ${kpi("unrealized PnL", "unrealized_pnl", values.unrealized_pnl)}
+      ${kpi("position", "position", values.position)}
+      ${kpi("open order exposure", "exposure", values.exposure, "pending (active) open-order exposure")}
+    </div>
+    <div class="health-row">
+      ${healthChip("Market", "market_health", values.market_health)}
+      ${healthChip("Strategy", "strategy_state", values.strategy_state)}
+      ${healthChip("Execution", "execution_health", values.execution_health)}
+      ${healthChip("Readiness", "readiness", values.readiness)}
+    </div>
+    <div class="attention" id="monitor-attention">
+      <div class="attention-summary" data-bind="attention" data-state="${escapeHtml(attention.state)}">` +
+        `<span>${escapeHtml(attention.text)} </span>` +
+        '<a class="surface-link" href="#/activity/evidence?focus=blockers">evidence →</a></div>' +
+      `<div class="attention-actions" id="monitor-actions">${attentionActionsHtml(model.manifest)}</div>
+    </div>
+  </section>`;
+}
+
+function shortId(value) {
+  const text = String(value || "");
+  return text.length > 26 ? "…" + text.slice(-24) : text;
+}
+
+export async function render() {
+  const model = await gatherModel();
+  lastTimeline = await fetchOrUnavailable(ENDPOINTS.portfolioTimeline).catch(() => null);
+  const values = bindValues(model);
+  const diag = diagnosticsHtml(model.snapshot, model.execStatus);
+  const html = primaryHtml(model, values) +
+    `<section class="wide monitor-secondary" id="monitor-trends">
+      <h2>Trends</h2>${sparklinesSection()}</section>` +
+    `<section class="monitor-secondary" id="monitor-orders">
+      <h2>Active orders <a class="surface-link" href="#/activity/orders">all →</a></h2>
+      <div data-list="orders">${ordersHtml(model.snapshot)}</div>
+    </section>
+    <section class="monitor-secondary" id="monitor-activity">
+      <h2>Recent activity <a class="surface-link" href="#/activity">all →</a></h2>
+      <div data-list="activity">${activityHtml(model.decisions)}</div>
+    </section>` +
+    `<section class="wide monitor-diagnostic">
+      <details class="diagnostics"><summary>Connections / reference / execution internals</summary>
+        <div id="diag-connections">${diag.connections}</div>
+        <div id="diag-execution">${diag.execution}</div>
+        <div class="diag-links">
+          <a href="#/system">System（完整工程诊断）</a> ·
+          <a href="#/activity/evidence">Evidence（因果与原始事实）</a>
+        </div>
+      </details>
+    </section>`;
+  // 首帧图表/按钮挂载推迟到节点就位（由 console.mount 钩子调用）
+  queueMicrotask(() => { mountSparklinesOnce(); bindReconcile(); });
+  return html;
+}
+
+// ------------------------------------------------------------------ targeted patch
+
+const setText = (el, value) => { if (el && el.textContent !== value) el.textContent = value; };
+
+function patchBound(el, value) {
+  if (!el || !value) return;
+  setText(el, value.text ?? "");
+  if (value.cls !== undefined) el.className = value.cls;
+  if (value.title !== undefined) {
+    if (value.title) el.title = value.title; else el.removeAttribute("title");
+  }
+  if (value.state !== undefined) el.dataset.state = value.state;
+}
+
+export async function refresh() {
+  let model;
+  try {
+    model = await gatherModel();
+  } catch {
+    const pill = document.querySelector('[data-bind="overall_health"]');
+    if (pill) { setText(pill, "SNAPSHOT UNAVAILABLE"); pill.className = "health-pill bad"; }
+    return;
+  }
+  lastTimeline = await fetchOrUnavailable(ENDPOINTS.portfolioTimeline).catch(() => null);
+  const values = bindValues(model);
+  for (const [bind, value] of Object.entries(values)) {
+    patchBound(document.querySelector(`[data-bind="${bind}"]`), value);
+  }
+  // 列表节点（只替换列表内容，卡片容器身份不变）
+  replaceIfChanged('[data-list="orders"]', ordersHtml(model.snapshot));
+  replaceIfChanged('[data-list="activity"]', activityHtml(model.decisions));
+  const diag = diagnosticsHtml(model.snapshot, model.execStatus);
+  replaceIfChanged("#diag-connections", diag.connections);
+  replaceIfChanged("#diag-execution", diag.execution);
+  replaceIfChanged("#monitor-actions", attentionActionsHtml(model.manifest));
+  bindReconcile();
+  mountSparklinesOnce();
+}
+
+function replaceIfChanged(selector, html) {
+  const host = document.querySelector(selector);
+  if (host && host.innerHTML !== html) host.innerHTML = html;
+}
+
+function mountSparklinesOnce() {
+  // 动态 import 避免 Node 渲染 harness 加载 echarts；浏览器中 setOption 复用实例
+  import("/ui/monitor/sparklines.js").then(({ mountSparklines }) => mountSparklines(lastTimeline))
+    .catch(() => {});
+}
+
+function bindReconcile() {
+  const button = document.getElementById("monitor-reconcile");
+  if (!button || button.dataset.bound) return;
+  button.dataset.bound = "1";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    let outcome = await invoke("runtime.request_reconciliation", { surface: "monitor" });
+    if (outcome.status === "CONFIRMATION_REQUIRED") {
+      outcome = await invoke("runtime.request_reconciliation",
+        { surface: "monitor", confirmation: outcome.confirmation_id });
+    }
+    button.textContent = String(outcome.status);
+    button.disabled = false;
   });
 }
 
-/** P0001.17：LOCAL_TRIAL 必须显式标注（不得描述为真实模型预测）。 */
-function predictionSourceLabel(prediction) {
-  if (!prediction || !prediction.provider || !prediction.provider.known) {
-    return '<span class="unknown">UNKNOWN</span>';
-  }
-  const provider = escapeHtml(String(prediction.provider.value));
-  if (prediction.is_local_trial && prediction.is_local_trial.known && prediction.is_local_trial.value) {
-    return `<span class="warn">LOCAL_TRIAL</span> <span class="muted">${provider} · 本地试验规则，非真实模型</span>`;
-  }
-  return provider;
-}
-
-export function mount() {
-  mountSparklines(lastTimeline);
-  void mountActions();
+export async function mount() {
+  mountSparklinesOnce();
+  bindReconcile();
 }

@@ -6,6 +6,12 @@ import { invoke, loadSuggestions, renderActions } from "/ui/assistant/actions.js
 import { answerQuestion } from "/ui/assistant/chat.js";
 
 export const DRAWER_ID = "assistant-drawer";
+/** P0018：drawer 默认收起；展开状态跨 surface/Monitor 刷新保留（会话内容仍仅内存）。 */
+const DRAWER_STATE_KEY = "probex.assistant.open";
+
+function drawerShouldBeOpen() {
+  try { return sessionStorage.getItem(DRAWER_STATE_KEY) === "open"; } catch { return false; }
+}
 
 /** 会话记录（仅内存、仅本会话；刷新即清空——不伪装成持久化历史）。 */
 const transcript = [];
@@ -14,6 +20,8 @@ const ANSWER_TIMEOUT_MS = 20000;
 export function mountAssistant(container) {
   const drawer = document.createElement("aside");
   drawer.id = DRAWER_ID;
+  // P0018：默认 collapsed；只有显式持久化的 open 才展开。
+  drawer.classList.toggle("collapsed", !drawerShouldBeOpen());
   drawer.innerHTML = `
     <header><strong>Probex Assistant</strong>
       <button id="assistant-toggle" title="collapse">–</button></header>
@@ -32,6 +40,10 @@ export function mountAssistant(container) {
   container.appendChild(drawer);
   drawer.querySelector("#assistant-toggle").addEventListener("click", () => {
     drawer.classList.toggle("collapsed");
+    try {
+      sessionStorage.setItem(DRAWER_STATE_KEY,
+        drawer.classList.contains("collapsed") ? "closed" : "open");
+    } catch { /* sessionStorage 不可用时退化为内存态，不影响主流程 */ }
   });
   drawer.querySelector("#assistant-form").addEventListener("submit", (event) => {
     event.preventDefault();

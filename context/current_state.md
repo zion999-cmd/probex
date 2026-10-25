@@ -502,6 +502,12 @@ immutable `MarketState`（schema `market-state-v1`）、price / depth / flow / t
 - `stop` 安全边界：只停已知 probex 入口；端口被别的程序占用时拒绝执行（rc=3）；SIGINT→TERM→KILL 逐级降级并如实标注。
 - 无需再手动 `kill`；端口冲突时 `start` 会直接给出可执行的下一步命令。
 
+### P0018 Phase 1（2026-10-25，人类定稿 Proposal）
+
+- 全局 raw blocker 条 → 聚合摘要 `#global-status`（点击进 Evidence）；Assistant 默认收起且展开态持久。
+- Monitor 三层 IA（primary 四问 / trends+短列表 / 折叠诊断）+ data-bind targeted refresh（0 whole-surface replacement，CDP 15/15）。
+- 验收：`artifacts/p0018/`（4 截图 + result + 验收报告）；全量 2698 passed。Phase 1 未重构其余 4 个 workspace。
+
 ### 研究闭环四批次（2026-10-24，人类多选授权；无新 Proposal，D-056）
 
 - durable PredictionArchive（`prediction.archive_path`，跨进程 RECORDED）；run facts 增 account/fill（历史 Performance 曲线 durable）；

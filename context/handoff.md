@@ -2886,3 +2886,13 @@ P0001.15（状态 **已完成**）；`context/status.json.currentProposal = null
   runner `backtest.bar_mode` 路由；报告 execution_granularity 标注 bar(<mode>)。
 - 测试：11 单测（bar_adapter）+ 6 集成（两种模式/混合拒绝/runner 路由）。
 - 全量结果见完成时报告（上一稳定基线 2672）。
+
+## 2026-10-25 P0018 Phase 1：Shell 聚合 + Monitor IA + 稳定渲染（人类定稿 Proposal）
+
+- 改动：ui/app/index.html、client/console.js（summarizeBlockers）、assistant/drawer.js（默认收起+持久态）、
+  pages/monitor/page.js（三层 IA + data-bind targeted refresh，render 首帧填值）、monitor/sparklines.js（实例复用）、
+  pages/evidence/page.js（focus=blockers）、app/console.css；测试：tests/unit/test_p0018_ui_shell.py（9，随 discover）、
+  tests/ui/p0018_shell_stability.mjs（CDP 15 断言，产物 artifacts/p0018/）。
+- 验收：15/15 CDP；全量 2698 passed / 0 failed / 24 skipped；4 张 1728×960 截图 + p0018_result.json。
+- 边界遵守：未重构 Market/Activity/Performance/System；未改任何交易/风险/会计/数据集/execution；无框架/无前后端分离/无设计系统；UNKNOWN 语义保留。
+- 复测：python3 tests/ui/local_paper_demo.py 8892 /tmp/p0018demo/demo.json 1；node tests/ui/p0018_shell_stability.mjs http://127.0.0.1:8892 artifacts/p0018

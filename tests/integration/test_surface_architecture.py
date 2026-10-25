@@ -49,11 +49,17 @@ class SurfaceArchitectureTest(unittest.TestCase):
         self.assertLessEqual(len(entries), 5)
 
     def test_2_monitor_answers_current_system_state(self) -> None:
+        # P0018：Monitor IA 分层——Primary 回答四问，诊断折叠，原始 blocker 行移到 Evidence。
         monitor = read(UI_ROOT / "pages" / "monitor" / "page.js")
-        for required in ("equity", "realized pnl", "unrealized pnl", "position", "open order exposure",
-                         "uncertain exposure", "active orders", "readiness", "Blockers", "Recent activity"):
+        for required in ("equity", "realized PnL", "unrealized PnL", "position",
+                         "open order exposure", "Active orders", "Recent activity",
+                         "monitor-primary", "data-bind=\"attention\"", "readiness"):
             with self.subTest(field=required):
                 self.assertIn(required, monitor)
+        # 工程诊断仍可到达（事实不删除），但默认折叠
+        self.assertIn('class="diagnostics"', monitor)
+        # 原始 blocker 行不再平铺
+        self.assertNotIn("Blockers / warnings", monitor)
 
     def test_3_market_answers_what_the_market_is_doing(self) -> None:
         market = read(UI_ROOT / "pages" / "market" / "page.js")
@@ -146,10 +152,13 @@ class SurfaceArchitectureTest(unittest.TestCase):
                     self.assertNotIn(forbidden, source)
 
     def test_header_and_blocker_strip_are_global(self) -> None:
+        # P0018：全局 blocker 日志条 → 单行聚合摘要（#global-status）
         shell = read(UI_ROOT / "app" / "index.html")
         console = read(UI_ROOT / "client" / "console.js")
         self.assertIn('id="banner"', shell)
-        self.assertIn('id="blockers"', shell)
+        self.assertIn('id="global-status"', shell)
+        self.assertNotIn('id="blockers"', shell)
+        self.assertIn("summarizeBlockers", console)
         for field in ("mode", "environment", "venue", "symbol", "runtime_id", "health", "data_timestamp"):
             with self.subTest(field=field):
                 self.assertIn(field, console)
